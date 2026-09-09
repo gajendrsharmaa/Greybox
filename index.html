@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Greybox — Legal Movie & TV Browser for Cloudflare Pages</title>
+<meta name="description" content="Browse movies & TV legally. TMDB metadata + trailers + watch providers. Cloudflare Pages ready." />
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a12' } } } }
+</script>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<link rel="stylesheet" href="/css/style.css" />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+</head>
+<body class="bg-[#0a0a12] text-zinc-100 min-h-screen">
+<!-- NAV -->
+<header class="sticky top-0 z-40 backdrop-blur bg-[#0a0a12]/85 border-b border-white/10">
+  <div class="max-w-7xl mx-auto px-4 py-3 flex items-center gap-4">
+    <a href="#" id="logo" class="text-2xl font-black tracking-tight flex items-center gap-2"><img src="/favicon.svg" alt="Greybox" class="w-8 h-8" />Grey<span class="text-red-500">box</span></a>
+    <nav class="hidden md:flex gap-5 text-sm text-zinc-300">
+      <button data-nav="home" class="nav-btn hover:text-white">Home</button>
+      <button data-nav="movie" class="nav-btn hover:text-white">Movies</button>
+      <button data-nav="tv" class="nav-btn hover:text-white">TV Shows</button>
+      <button data-nav="anime" class="nav-btn hover:text-white">Anime</button>
+      <button data-nav="mylist" class="nav-btn hover:text-white">🔖 My List <span id="mylist-count" class="ml-1 text-xs bg-red-600 text-white rounded-full px-1.5 py-0.5 hidden"></span></button>
+    </nav>
+    <div class="flex-1"></div>
+    <div class="relative w-full max-w-xs">
+      <input id="search" placeholder="Search movies, TV..." class="w-full bg-white/10 rounded-lg px-4 py-2 text-sm outline-none focus:ring-2 ring-red-600 placeholder:text-zinc-500" />
+      <div id="search-results" class="absolute top-11 left-0 right-0 bg-[#14141f] border border-white/10 rounded-xl overflow-hidden hidden max-h-[60vh] overflow-y-auto shadow-2xl"></div>
+    </div>
+    <!-- Settings hidden by default (modal + JS kept for future use — remove "hidden" to re-enable) -->
+    <button id="settings-btn" class="text-xl px-2 hidden" title="Settings">⚙️</button>
+  </div>
+  <div class="md:hidden flex gap-4 px-4 pb-3 text-sm text-zinc-300 overflow-x-auto">
+    <button data-nav="home" class="nav-btn">Home</button>
+    <button data-nav="movie" class="nav-btn">Movies</button>
+    <button data-nav="tv" class="nav-btn">TV</button>
+    <button data-nav="anime" class="nav-btn">Anime</button>
+    <button data-nav="mylist" class="nav-btn">My List</button>
+  </div>
+</header>
+
+<!-- HERO -->
+<section id="hero" class="relative h-[78vh] min-h-[520px] overflow-hidden hero-loading">
+  <img id="hero-img" class="absolute inset-0 w-full h-full object-cover object-top opacity-60" alt="" />
+  <div class="absolute inset-0 bg-gradient-to-t from-[#0a0a12] via-[#0a0a12]/40 to-transparent"></div>
+  <div class="relative max-w-7xl mx-auto px-4 h-full flex flex-col justify-end pb-10">
+    <div id="hero-badge" class="text-xs uppercase tracking-widest text-red-400 font-bold mb-2">Loading…</div>
+    <h1 id="hero-title" class="text-4xl md:text-6xl font-black max-w-3xl"><span class="hero-spinner"></span> Fetching trending…</h1>
+    <p id="hero-overview" class="mt-3 max-w-2xl text-zinc-300 line-clamp-3"><span class="skeleton skeleton-line"></span><span class="skeleton skeleton-line short"></span></p>
+    <div class="mt-5 flex gap-3">
+      <button id="hero-play" class="bg-red-600 hover:bg-red-500 px-6 py-3 rounded-lg font-bold">▶ Details & Trailer</button>
+      <button id="hero-list" class="bg-white/15 hover:bg-white/25 px-6 py-3 rounded-lg font-bold">+ My List</button>
+    </div>
+  </div>
+</section>
+
+<main class="max-w-7xl mx-auto px-4 pb-24">
+  <div id="notice" class="mt-6 text-sm bg-amber-500/10 border border-amber-500/30 text-amber-200 rounded-xl p-4 hidden"></div>
+
+  <section class="mt-8">
+    <div class="flex items-end justify-between mb-3">
+      <h2 id="section-title" class="text-xl font-bold">Trending Now</h2>
+      <div id="tabs" class="flex gap-2 text-sm"></div>
+    </div>
+    <div id="grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+      <div class="rounded-xl overflow-hidden border border-white/10 bg-white/5"><div class="skeleton aspect-[2/3]"></div><div class="p-2.5"><div class="skeleton h-3 rounded w-3/4"></div><div class="skeleton h-2.5 rounded w-1/3 mt-2"></div></div></div>
+      <div class="rounded-xl overflow-hidden border border-white/10 bg-white/5"><div class="skeleton aspect-[2/3]"></div><div class="p-2.5"><div class="skeleton h-3 rounded w-3/4"></div><div class="skeleton h-2.5 rounded w-1/3 mt-2"></div></div></div>
+      <div class="rounded-xl overflow-hidden border border-white/10 bg-white/5"><div class="skeleton aspect-[2/3]"></div><div class="p-2.5"><div class="skeleton h-3 rounded w-3/4"></div><div class="skeleton h-2.5 rounded w-1/3 mt-2"></div></div></div>
+      <div class="rounded-xl overflow-hidden border border-white/10 bg-white/5"><div class="skeleton aspect-[2/3]"></div><div class="p-2.5"><div class="skeleton h-3 rounded w-3/4"></div><div class="skeleton h-2.5 rounded w-1/3 mt-2"></div></div></div>
+      <div class="rounded-xl overflow-hidden border border-white/10 bg-white/5"><div class="skeleton aspect-[2/3]"></div><div class="p-2.5"><div class="skeleton h-3 rounded w-3/4"></div><div class="skeleton h-2.5 rounded w-1/3 mt-2"></div></div></div>
+      <div class="rounded-xl overflow-hidden border border-white/10 bg-white/5"><div class="skeleton aspect-[2/3]"></div><div class="p-2.5"><div class="skeleton h-3 rounded w-3/4"></div><div class="skeleton h-2.5 rounded w-1/3 mt-2"></div></div></div>
+      <div class="rounded-xl overflow-hidden border border-white/10 bg-white/5"><div class="skeleton aspect-[2/3]"></div><div class="p-2.5"><div class="skeleton h-3 rounded w-3/4"></div><div class="skeleton h-2.5 rounded w-1/3 mt-2"></div></div></div>
+      <div class="rounded-xl overflow-hidden border border-white/10 bg-white/5"><div class="skeleton aspect-[2/3]"></div><div class="p-2.5"><div class="skeleton h-3 rounded w-3/4"></div><div class="skeleton h-2.5 rounded w-1/3 mt-2"></div></div></div>
+      <div class="rounded-xl overflow-hidden border border-white/10 bg-white/5"><div class="skeleton aspect-[2/3]"></div><div class="p-2.5"><div class="skeleton h-3 rounded w-3/4"></div><div class="skeleton h-2.5 rounded w-1/3 mt-2"></div></div></div>
+      <div class="rounded-xl overflow-hidden border border-white/10 bg-white/5"><div class="skeleton aspect-[2/3]"></div><div class="p-2.5"><div class="skeleton h-3 rounded w-3/4"></div><div class="skeleton h-2.5 rounded w-1/3 mt-2"></div></div></div>
+      <div class="rounded-xl overflow-hidden border border-white/10 bg-white/5"><div class="skeleton aspect-[2/3]"></div><div class="p-2.5"><div class="skeleton h-3 rounded w-3/4"></div><div class="skeleton h-2.5 rounded w-1/3 mt-2"></div></div></div>
+      <div class="rounded-xl overflow-hidden border border-white/10 bg-white/5"><div class="skeleton aspect-[2/3]"></div><div class="p-2.5"><div class="skeleton h-3 rounded w-3/4"></div><div class="skeleton h-2.5 rounded w-1/3 mt-2"></div></div></div>
+    </div>
+    <div class="flex justify-center mt-8 gap-3">
+      <button id="prev" class="px-4 py-2 bg-white/10 rounded-lg">← Prev</button>
+      <span id="page" class="px-4 py-2 text-sm text-zinc-400">Page 1</span>
+      <button id="next" class="px-4 py-2 bg-white/10 rounded-lg">Next →</button>
+    </div>
+</section>
+</main>
+
+<!-- DETAIL MODAL -->
+<div id="modal" class="fixed inset-0 z-50 hidden">
+  <div id="modal-bg" class="absolute inset-0 bg-black/80"></div>
+  <div class="absolute inset-x-0 top-[4vh] mx-auto max-w-4xl bg-[#14141f] rounded-2xl overflow-hidden border border-white/10 max-h-[92vh] overflow-y-auto">
+    <div class="relative">
+      <img id="m-backdrop" class="w-full h-64 md:h-96 object-cover" alt="" />
+      <button id="modal-close" type="button" aria-label="Close" class="absolute top-3 right-3 z-10 bg-black/70 hover:bg-red-600 cursor-pointer rounded-full w-10 h-10 flex items-center justify-center font-bold">✕</button>
+      <div class="absolute inset-0 bg-gradient-to-t from-[#14141f] to-transparent"></div>
+      <div class="absolute bottom-4 left-6 right-6">
+        <h2 id="m-title" class="text-3xl font-black"></h2>
+        <div id="m-meta" class="text-sm text-zinc-300 mt-1"></div>
+      </div>
+    </div>
+    <div class="p-6">
+      <p id="m-overview" class="text-zinc-300"></p>
+      <div class="mt-4 flex flex-wrap gap-2">
+        <button id="m-watch" class="bg-red-600 hover:bg-red-500 px-5 py-2.5 rounded-lg font-bold">▶ Watch Now</button>
+        <button id="m-trailer" class="bg-white/10 hover:bg-white/20 px-5 py-2.5 rounded-lg font-bold">Trailer</button>
+        <button id="m-list" class="bg-white/10 px-5 py-2.5 rounded-lg font-bold">+ My List</button>
+      </div>
+      <div id="m-stream-msg" class="mt-3 text-sm rounded-xl p-3 hidden"></div>
+      <div id="m-tv-wrap" class="mt-6 hidden">
+        <div class="flex items-center gap-3">
+          <h3 class="font-bold">Episodes</h3>
+          <select id="m-season" class="bg-[#23232f] text-white border border-white/20 rounded-lg px-3 py-1.5 text-sm outline-none cursor-pointer"></select>
+        </div>
+        <div id="m-episodes" class="mt-3 grid gap-3"></div>
+      </div>
+      <div id="m-video-wrap" class="mt-4 hidden aspect-video rounded-xl overflow-hidden bg-black">
+        <iframe id="m-video" class="w-full h-full" allow="autoplay; encrypted-media" allowfullscreen></iframe>
+      </div>
+      <h3 class="mt-6 font-bold">Where to watch legally</h3>
+      <div id="m-providers" class="mt-2 text-sm text-zinc-300">Loading...</div>
+      <h3 class="mt-6 font-bold">Cast</h3>
+      <div id="m-cast" class="mt-2 flex gap-3 overflow-x-auto text-xs text-zinc-300"></div>
+      <h3 class="mt-6 font-bold">Your stream source (HLS / MP4)</h3>
+      <p class="text-xs text-zinc-400 mt-1">Put your official API streaming link here — a direct <code>.m3u8</code> or <code>.mp4</code> from a source you own or license (your API, Cloudflare Stream, R2, S3, Mux).</p>
+      <div class="mt-2 flex gap-2">
+        <input id="custom-url" placeholder="Put your official API streaming link here — https://.../video.m3u8" class="flex-1 bg-white/10 rounded-lg px-3 py-2 text-sm outline-none" />
+        <button id="custom-play" class="bg-white/15 px-4 py-2 rounded-lg text-sm font-bold">Play</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- PLAYER MODAL -->
+<div id="player" class="fixed inset-0 z-50 hidden bg-black">
+  <div class="flex items-center gap-3 px-4 py-3 border-b border-white/10">
+    <div class="min-w-0">
+      <div id="player-title" class="font-bold truncate">Now Playing</div>
+      <div id="player-sub" class="text-xs text-zinc-400 truncate"></div>
+    </div>
+    <div class="flex-1"></div>
+    <button id="player-close" class="bg-white/10 rounded-full w-10 h-10 shrink-0">✕</button>
+  </div>
+  <div class="relative">
+    <video id="video" class="w-full h-[calc(100vh-121px)] bg-black" controls playsinline></video>
+    <iframe id="embed-frame" title="Stream player" class="hidden w-full h-[calc(100vh-121px)] bg-black" allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowfullscreen></iframe>
+    <div id="player-loading" class="hidden absolute inset-0 flex items-center justify-center bg-black/60 text-sm text-zinc-300">Loading…</div>
+    <div id="player-error" class="hidden absolute inset-x-0 top-0 mx-auto mt-6 max-w-lg bg-red-950/95 border border-red-500/40 rounded-xl p-4 text-sm">
+      <div class="font-bold text-red-200">Playback failed</div>
+      <div id="player-error-msg" class="text-red-100/90 mt-1"></div>
+      <div class="mt-3 flex gap-2">
+        <button id="player-retry" class="bg-red-600 px-4 py-1.5 rounded-lg font-bold text-sm">Retry</button>
+      </div>
+    </div>
+  </div>
+  <div id="player-epbar" class="hidden flex items-center justify-between px-4 py-2 border-t border-white/10 text-sm">
+    <button id="ep-prev" class="px-4 py-1.5 bg-white/10 rounded-lg">◀ Prev EP</button>
+    <span class="text-zinc-500 text-xs">Auto-plays next episode when a source is configured</span>
+    <button id="ep-next" class="px-4 py-1.5 bg-white/10 rounded-lg">Next EP ▶</button>
+  </div>
+</div>
+
+<!-- SETTINGS MODAL -->
+<div id="settings" class="fixed inset-0 z-50 hidden">
+  <div class="absolute inset-0 bg-black/70" data-close-settings></div>
+  <div class="absolute inset-x-0 top-[10vh] mx-auto max-w-lg bg-[#14141f] rounded-2xl p-6 border border-white/10">
+    <h2 class="text-xl font-bold">Settings</h2>
+    <p class="text-sm text-zinc-400 mt-2">The site calls <code>/api/tmdb/*</code>, proxied by a Cloudflare Pages Function — the API key lives only in the server env var, never in this code. Visitors need nothing. The field below is a <b>local-dev override only</b> (stored in your browser, never committed).</p>
+    <label class="text-xs text-zinc-400">Dev override — TMDB Read Access Token (leave empty in production)</label>
+    <input id="tmdb-token" placeholder="eyJ..." class="mt-1 w-full bg-white/10 rounded-lg px-3 py-2 text-sm outline-none" />
+    <label class="text-xs text-zinc-400 mt-3 block">Region for “Where to watch” (e.g. US, GB, IN)</label>
+    <input id="region" value="US" class="mt-1 w-full bg-white/10 rounded-lg px-3 py-2 text-sm outline-none" />
+    <div class="mt-4 flex gap-2">
+      <button id="save-settings" class="bg-red-600 px-5 py-2 rounded-lg font-bold text-sm">Save</button>
+      <button data-close-settings class="bg-white/10 px-5 py-2 rounded-lg text-sm">Close</button>
+    </div>
+    <p class="text-xs text-zinc-500 mt-4">Get a free key: <span class="text-zinc-300">themoviedb.org → Settings → API → v4 Read Access Token</span>. See README for Cloudflare env var setup.</p>
+  </div>
+</div>
+
+<footer class="border-t border-white/10 text-center text-xs text-zinc-500 py-8 px-4">
+  Metadata & images by TMDB. Trailers via YouTube. This demo does not host or link pirated streams.<br/>
+  Deploy: Cloudflare Pages → static root <code>/</code> + Functions in <code>/functions</code>.
+</footer>
+
+<script src="/js/api.js?v=3"></script>
+<script src="/js/stream.js?v=3"></script>
+<script src="/js/app.js?v=3"></script>
+</body>
+</html>

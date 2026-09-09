@@ -1,0 +1,3 @@
+# Local dev secrets — NEVER commit the real file. Copy to `.dev.vars` (gitignored).
+# `wrangler pages dev` loads this automatically.
+TMDB_READ_TOKEN="paste-your-tmdb-v4-read-token-here"

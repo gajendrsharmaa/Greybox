@@ -1,0 +1,85 @@
+# Greybox — legal streaming-style site for Cloudflare Pages
+
+A Netflix-style frontend where the "backend" is **other providers' legal APIs**:
+
+| Need | Provider | How |
+|---|---|---|
+| Movie/TV metadata, posters, trending, search, cast, trailers list | **TMDB API** (free) | via `/api/tmdb/*` Pages Function proxy (key stays secret) |
+| Trailers | **YouTube embeds** (from TMDB `/videos`) | iframe, no hosting |
+| Where-to-watch legally (Netflix, Prime, Hotstar...) | **TMDB watch/providers + JustWatch link** | external deep links |
+| Full-film playback demo (actually playable) | **Internet Archive public-domain films** | direct MP4 |
+| Your own films | **Cloudflare Stream / R2 / S3 HLS/MP4** | paste URL in details → plays with hls.js |
+
+> **Why not MovieBox API?** MovieBox / FlixHQ / VidSrc-style APIs serve pirated streams. Hosting or embedding those on Cloudflare Pages violates copyright law and Cloudflare's ToS (account + domain takedown risk). This project deliberately does **not** integrate them. You get the same UI/UX, but every play button is legal.
+
+## Project structure
+
+```
+index.html                  # SPA: home, movies, tv, free films, my list, search, details, player
+css/style.css
+js/api.js                   # proxy-first TMDB client + archive.org client
+js/app.js                   # UI
+functions/api/tmdb/[[path]].js  # Cloudflare Pages Function — secret-key TMDB proxy + edge cache
+public/_headers
+package.json (wrangler)
+```
+
+No build step — deploy the folder as-is.
+
+## 1) Get a free TMDB key (2 min)
+
+1. Sign up at https://www.themoviedb.org → Settings → API → create app → copy **Read Access Token (v4, starts with `eyJ...`)**.
+2. **Never paste it into `js/`, `index.html`, or any committed file.** The key lives only in:
+   - Cloudflare Pages env var `TMDB_READ_TOKEN` (production — secret, not in git), and
+   - local `.dev.vars` file (gitignored) for `wrangler pages dev`.
+3. Verify it's hidden: `git grep -i eyJ` should return nothing.
+
+## 2) Run locally
+
+Option A — full Pages Functions emulation (recommended, secret stays server-side):
+```powershell
+# from this folder
+Copy-Item .dev.vars.example .dev.vars   # then edit .dev.vars, paste real token
+npm install
+npm run dev
+# open the URL wrangler prints
+```
+
+Option B — plain static (no backend; uses per-browser dev override only):
+```powershell
+python -m http.server 8080
+# open http://localhost:8080 → ⚙️ Settings → paste token → Save (browser only, never committed)
+```
+
+## 3) Deploy to Cloudflare Pages
+
+1. Push this folder to GitHub.
+2. Cloudflare Dashboard → **Workers & Pages → Create → Pages → Connect to Git** → select repo.
+3. Build settings: **Framework preset: None**, Build command: *(empty)*, Output directory: `/` (root).
+4. Environment variables (both Production + Preview):
+   - `TMDB_READ_TOKEN` = your v4 token *(preferred)* — or `TMDB_API_KEY` = v3 key.
+5. Deploy. Your site calls same-origin `/api/tmdb/...`, so no CORS or key leak.
+
+Custom domain: Pages → Custom domains → add. HTTPS automatic.
+
+## 4) How playback works (full logic, source slot left blank)
+
+- **Browse/search**: `GET /api/tmdb/trending/all/week`, `/movie/popular`, `/tv/popular`, `/search/multi?query=...` — see `js/app.js:load()`.
+- **Details**: `/movie/{id}`, `/credits`, `/videos` (YouTube trailer key), `/watch/providers`. TV also loads `/tv/{id}` seasons → `/tv/{id}/season/{n}` episode list with stills.
+- **Player engine** (`js/stream.js`): embed pages in `<iframe>`, direct files in `<video>` (HLS via hls.js with native fallback), loading spinner, error overlay + retry, resume-from-position (localStorage), auto-next episode, prev/next episode bar.
+- **Source slot — change ONE line** (`Stream.EMBED.base` in `js/stream.js`, marked PUT YOUR OFFICIAL API STREAMING LINK HERE): everything derives from it — `{base}/embed/movie/{tmdb_id}` and `{base}/embed/tv/{tmdb_id}/{season}/{episode}`. While it points at `example.com`, Watch buttons show "No stream source configured". Point it only at a host you own or license.
+- **Free films**: `https://archive.org/metadata/{id}` → smallest MP4 → plays through the same engine with resume support.
+
+## 5) Going further (all legal, all Pages-compatible)
+
+- Add Cloudflare **D1 + Pages Functions** `/api/mylist` for cross-device watchlists (currently localStorage).
+- Add **Cloudflare Stream** for your uploads; add **Access** if you want logins/paywall.
+- Add genre/discover filters via `/discover/movie?with_genres=28`.
+- Never add VidSrc/MovieBox/Consumet-scraped endpoints — same UI, but piracy liability.
+
+## License / attribution
+
+- Posters/metadata: TMDB Terms — attribute "This product uses the TMDB API but is not endorsed by TMDB".
+- Films in Free section: public domain via Internet Archive; check each item's license.
+- All the content shown in this website is neither hosted nor related to this site. we do not responsible for any content here. we just provide a pathway to that, we don't own any resposiblities
+- The whole project is semi open-source, available for stream, but commertial use are strictly forbidden
