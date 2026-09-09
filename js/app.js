@@ -455,5 +455,39 @@
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeDetail(); closePlayer(); $('settings').classList.add('hidden'); } });
   $('logo').onclick = (e) => { e.preventDefault(); mode = 'home'; subTab = 'trending'; pageNum = 1; load(); };
 
+  // ---- interaction protection (lightweight): no right-click menu, text
+  // selection, copy, cut, paste, drag-out, or long-press menus on the page
+  // and player container. Exceptions: paste/cut stay allowed in the search
+  // box (#search). Scrolling, video playback, and player controls are left
+  // alone (no key, touch-action, or pointer-events interference). The player
+  // iframe may be cross-origin, so this only guards our own page/container —
+  // it never touches the iframe's internal document. ----
+  (function protect() {
+    const inSearch = (el) => !!(el && el.closest && el.closest('#search'));
+    const inField = (el) => !!(el && el.closest && el.closest('input,textarea,select,[contenteditable="true"]'));
+    // right-click / long-press menu: blocked everywhere except search (so mouse-paste works there)
+    document.addEventListener('contextmenu', (e) => {
+      if (!inSearch(e.target)) e.preventDefault();
+    });
+    // text selection: blocked page-wide except inside editable fields
+    document.addEventListener('selectstart', (e) => {
+      if (!inField(e.target)) e.preventDefault();
+    });
+    // copy: blocked everywhere (covers Ctrl+C / Cmd+C / long-press copy)
+    document.addEventListener('copy', (e) => e.preventDefault());
+    // cut: blocked everywhere except search (keeps search editable)
+    document.addEventListener('cut', (e) => {
+      if (!inSearch(e.target)) e.preventDefault();
+    });
+    // paste: allowed ONLY in search, blocked in all other inputs
+    document.addEventListener('paste', (e) => {
+      if (!inSearch(e.target)) e.preventDefault();
+    });
+    // drag-out (images/text): blocked except from search
+    document.addEventListener('dragstart', (e) => {
+      if (!inSearch(e.target)) e.preventDefault();
+    });
+  })();
+
   updateCount(); load();
 })();

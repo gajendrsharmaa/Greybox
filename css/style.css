@@ -30,3 +30,12 @@ code{background:rgba(255,255,255,.1);padding:1px 5px;border-radius:5px}
 #hero.hero-loading #hero-img{opacity:.15;filter:blur(2px)}
 #hero.hero-loading #hero-title{color:#d4d4d8}
 #grid:empty{min-height:40vh}
+
+/* ---- interaction protection: no text selection / long-press menus,
+   except inside editable fields. Scrolling, video, and controls unaffected
+   (no touch-action / pointer-events changes). ---- */
+body{-webkit-touch-callout:none;user-select:none;-webkit-user-select:none}
+#player,#player *,#modal,#modal *{-webkit-touch-callout:none}
+#player{user-select:none;-webkit-user-select:none}
+input,textarea,select,[contenteditable="true"]{-webkit-touch-callout:default;user-select:text;-webkit-user-select:text}
+#search{-webkit-user-select:text;user-select:text}
