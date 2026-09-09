@@ -1,10 +1,10 @@
-# Greybox — legal streaming-style site for Cloudflare Pages
+# Greybox — legal streaming-style site (Cloudflare Pages or Vercel)
 
 A Netflix-style frontend where the "backend" is **other providers' legal APIs**:
 
 | Need | Provider | How |
 |---|---|---|
-| Movie/TV metadata, posters, trending, search, cast, trailers list | **TMDB API** (free) | via `/api/tmdb/*` Pages Function proxy (key stays secret) |
+| Movie/TV metadata, posters, trending, search, cast, trailers list | **TMDB API** (free) | via `/api/tmdb/*` serverless proxy (key stays secret) |
 | Trailers | **YouTube embeds** (from TMDB `/videos`) | iframe, no hosting |
 | Where-to-watch legally (Netflix, Prime, Hotstar...) | **TMDB watch/providers + JustWatch link** | external deep links |
 | Full-film playback demo (actually playable) | **Internet Archive public-domain films** | direct MP4 |
@@ -17,9 +17,10 @@ A Netflix-style frontend where the "backend" is **other providers' legal APIs**:
 ```
 index.html                  # SPA: home, movies, tv, free films, my list, search, details, player
 css/style.css
-js/api.js                   # proxy-first TMDB client + archive.org client
+js/api.js                   # proxy-first TMDB client (NO secret in client code — calls /api/tmdb/*)
 js/app.js                   # UI
 functions/api/tmdb/[[path]].js  # Cloudflare Pages Function — secret-key TMDB proxy + edge cache
+api/tmdb/[...path].js           # Vercel Serverless Function — same /api/tmdb/* contract
 public/_headers
 package.json (wrangler)
 ```
@@ -30,9 +31,9 @@ No build step — deploy the folder as-is.
 
 1. Sign up at https://www.themoviedb.org → Settings → API → create app → copy **Read Access Token (v4, starts with `eyJ...`)**.
 2. **Never paste it into `js/`, `index.html`, or any committed file.** The key lives only in:
-   - Cloudflare Pages env var `TMDB_READ_TOKEN` (production — secret, not in git), and
-   - local `.dev.vars` file (gitignored) for `wrangler pages dev`.
-3. Verify it's hidden: `git grep -i eyJ` should return nothing.
+   - hosting env vars: `TMDB_READ_TOKEN` on Cloudflare Pages **or** Vercel (production — secret, not in git), and
+   - local env files (gitignored): `.dev.vars` for `wrangler pages dev`, or `.env` for `vercel dev` (copy from `.env.example`).
+3. Verify it's hidden: `git grep -i eyJ` should return nothing (and `git check-ignore .env .dev.vars` should list both).
 
 ## 2) Run locally
 
@@ -51,16 +52,30 @@ python -m http.server 8080
 # open http://localhost:8080 → ⚙️ Settings → paste token → Save (browser only, never committed)
 ```
 
-## 3) Deploy to Cloudflare Pages
+## 3) Deploy
+
+### Cloudflare Pages
 
 1. Push this folder to GitHub.
 2. Cloudflare Dashboard → **Workers & Pages → Create → Pages → Connect to Git** → select repo.
 3. Build settings: **Framework preset: None**, Build command: *(empty)*, Output directory: `/` (root).
 4. Environment variables (both Production + Preview):
    - `TMDB_READ_TOKEN` = your v4 token *(preferred)* — or `TMDB_API_KEY` = v3 key.
-5. Deploy. Your site calls same-origin `/api/tmdb/...`, so no CORS or key leak.
+5. Deploy. Your site calls same-origin `/api/tmdb/...` (via `functions/api/tmdb/[[path]].js`), so no CORS or key leak.
 
 Custom domain: Pages → Custom domains → add. HTTPS automatic.
+
+### Vercel (alternative)
+
+1. Push this folder to GitHub.
+2. Vercel Dashboard → **Add New → Project → Import** → select repo. Framework preset: **Other**, Output directory: `./` (root). No build command.
+3. **Settings → Environment Variables** (Production + Preview + Development):
+   - `TMDB_READ_TOKEN` = your v4 token *(preferred)* — or `TMDB_API_KEY` = v3 key.
+4. Deploy. The same-origin `/api/tmdb/...` route is served by `api/tmdb/[...path].js` — the key is read from `process.env` server-side and never appears in client code or API responses.
+
+Local Vercel dev: `Copy-Item .env.example .env` (paste real token) → `vercel dev`.
+
+> Only enable **one** platform's serverless proxy per deployment. If you deploy to Vercel, the `functions/` folder ships as inert static files (it contains no secrets); if you deploy to Cloudflare Pages, the `api/` folder ships as inert static files.
 
 ## 4) How playback works (full logic, source slot left blank)
 
