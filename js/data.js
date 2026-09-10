@@ -170,6 +170,189 @@
     }));
   }
 
+  /* ---------------- genre collections (via existing /api/tmdb proxy) ---------------- */
+
+  // No dedicated Greybox /api/discover endpoint exists, so genre shelves use
+  // the same allowlisted proxy transport as getPerson() above
+  // (/api/tmdb/discover/*, secret stays server-side). Shaping mirrors the
+  // gbItem fields in js/api.js so cards render identically.
+  function shapeRawItem(r, fallbackType) {
+    const mt = r.media_type === 'tv' || r.media_type === 'movie' ? r.media_type : (fallbackType || (r.title ? 'movie' : 'tv'));
+    const title = r.title || r.name || 'Untitled';
+    return {
+      id: r.id, media_type: mt, title, name: title,
+      overview: r.overview || '',
+      poster_path: r.poster_path || null,
+      backdrop_path: r.backdrop_path || null,
+      vote_average: typeof r.vote_average === 'number' ? r.vote_average : Number(r.vote_average || 0),
+      release_date: r.release_date || '',
+      first_air_date: r.first_air_date || '',
+    };
+  }
+
+  function getByGenre(media, genreId, page, sort) {
+    const type = media === 'tv' ? 'tv' : 'movie';
+    const gid = parseId(genreId);
+    if (!gid) return Promise.reject(new Error('Invalid genre id'));
+    const mt = type === 'tv' ? 'tv' : 'movie';
+    return api().tmdb('discover/' + type, {
+      language: 'en-US',
+      page: parsePage(page),
+      with_genres: String(gid),
+      sort_by: String(sort || 'popularity.desc'),
+    }).then((d) => {
+      const results = Array.isArray(d && d.results) ? d.results : [];
+      return {
+        page: d.page || 1,
+        total_pages: d.total_pages || 1,
+        total_results: d.total_results || 0,
+        results: results
+          .filter((x) => x.poster_path || x.backdrop_path)
+          .map((x) => shapeRawItem(x, mt)),
+      };
+    });
+  }
+
+  /* ---------------- homepage configuration (local file, no database) ---------------- */
+
+  const HOME_MOVIE_CATS = ['popular', 'top-rated', 'upcoming', 'now-playing'];
+  const HOME_TV_CATS = ['popular', 'top-rated', 'on-the-air', 'airing-today'];
+
+  // Fallback when js/homepage.config.js is missing/blocked: today's homepage.
+  function defaultHomeConfig() {
+    return { hero: { mode: 'follow-grid' }, sections: [] };
+  }
+
+  function normalizeLimit(v) {
+    const n = parseInt(String(v == null ? '12' : v), 10);
+    if (!isFinite(n) || n < 1) return 12;
+    return Math.min(n, 24);
+  }
+
+  // Returns a clean section or null (malformed → console.warn, homepage survives).
+  function normalizeHomeSection(raw) {
+    if (!raw || typeof raw !== 'object') { console.warn('[home] dropping malformed section:', raw); return null; }
+    const id = String(raw.id || '').trim();
+    const title = String(raw.title || '').trim();
+    if (!id || !title) { console.warn('[home] section needs id + title:', raw); return null; }
+    const src = raw.source && typeof raw.source === 'object' ? raw.source : null;
+    if (!src || typeof src.type !== 'string') { console.warn('[home] section needs source.type:', id); return null; }
+    const type = src.type;
+    const clean = {
+      id, title,
+      description: typeof raw.description === 'string' ? raw.description : '',
+      visible: raw.visible !== false,
+      limit: normalizeLimit(raw.limit),
+      source: { type },
+    };
+    if (type === 'movies') {
+      const cat = String(src.category || 'popular').toLowerCase();
+      if (HOME_MOVIE_CATS.indexOf(cat) < 0) { console.warn('[home] unknown movies category:', cat); return null; }
+      clean.source.category = cat;
+    } else if (type === 'tv') {
+      const cat = String(src.category || 'popular').toLowerCase();
+      if (HOME_TV_CATS.indexOf(cat) < 0) { console.warn('[home] unknown tv category:', cat); return null; }
+      clean.source.category = cat;
+    } else if (type === 'anime') {
+      clean.source.kind = src.kind === 'movies' ? 'movies' : 'series';
+    } else if (type === 'trending') {
+      // nothing more needed
+    } else if (type === 'search') {
+      const q = String(src.query || '').trim();
+      if (!q) { console.warn('[home] search source needs query:', id); return null; }
+      clean.source.query = q;
+    } else if (type === 'ids') {
+      const items = (Array.isArray(src.items) ? src.items : [])
+        .map((it) => {
+          if (!it || typeof it !== 'object') return null;
+          const mid = parseId(it.id);
+          const media = it.media === 'tv' ? 'tv' : (it.media === 'movie' ? 'movie' : null);
+          return (mid && media) ? { media, id: mid } : null;
+        })
+        .filter(Boolean);
+      if (!items.length) { console.warn('[home] ids source needs at least one valid { media, id }:', id); return null; }
+      clean.source.items = items;
+    } else if (type === 'genre') {
+      const gid = parseId(src.genreId);
+      if (!gid) { console.warn('[home] genre source needs genreId:', id); return null; }
+      clean.source.media = src.media === 'tv' ? 'tv' : 'movie';
+      clean.source.genreId = gid;
+      clean.source.sort = String(src.sort || 'popularity.desc');
+    } else {
+      console.warn('[home] unknown source type:', type);
+      return null;
+    }
+    return clean;
+  }
+
+  function getHomeConfig() {
+    const raw = (typeof window.GreyboxHome === 'object' && window.GreyboxHome) || null;
+    const hero = (raw && raw.hero && typeof raw.hero === 'object') ? raw.hero : { mode: 'follow-grid' };
+    const sections = raw && Array.isArray(raw.sections)
+      ? raw.sections.map(normalizeHomeSection).filter(Boolean)
+      : [];
+    return {
+      hero: {
+        mode: hero.mode === 'custom' ? 'custom' : 'follow-grid',
+        badge: typeof hero.badge === 'string' ? hero.badge : '',
+        pick: Math.max(0, parseInt(hero.pick, 10) || 0),
+        source: hero.source,
+      },
+      sections,
+    };
+  }
+
+  // Resolve ONE normalized section through the Greybox API.
+  // Returns Promise<{ section, items }> with limit applied; rejects on
+  // unknown source or fetch failure (caller isolates failures per section).
+  function resolveHomeSection(section) {
+    if (!section || !section.source) return Promise.reject(new Error('Invalid home section'));
+    const src = section.source;
+    const limit = normalizeLimit(section.limit);
+    let p;
+    if (src.type === 'trending') p = getTrending(1);
+    else if (src.type === 'movies') p = getMovies(src.category, 1);
+    else if (src.type === 'tv') p = getTVList(src.category, 1);
+    else if (src.type === 'anime') p = getAnime(src.kind, 1);
+    else if (src.type === 'search') p = getSearchResults(src.query, 1);
+    else if (src.type === 'genre') p = getByGenre(src.media, src.genreId, 1, src.sort);
+    else if (src.type === 'ids') {
+      p = Promise.allSettled(src.items.map((it) =>
+        (it.media === 'tv' ? getTVDetails(it.id) : getMovie(it.id)).then((d) => ({ ...d, media_type: it.media }))
+      )).then((settled) => ({
+        results: settled.filter((s) => s.status === 'fulfilled').map((s) => s.value)
+          .filter((x) => x.poster_path || x.backdrop_path),
+      }));
+    } else {
+      return Promise.reject(new Error('Unknown home source type: ' + src.type));
+    }
+    return p.then((d) => ({ section, items: (d.results || []).slice(0, limit) }));
+  }
+
+  // Resolve every visible section independently: one bad shelf (bad id,
+  // backend hiccup) is skipped with a warning and never breaks the page.
+  function getHomeSections(sections) {
+    const list = (Array.isArray(sections) ? sections : []).filter((s) => s && s.visible !== false);
+    return Promise.all(list.map((s) =>
+      resolveHomeSection(s).then(
+        (r) => (r.items.length ? r : null),
+        (err) => { console.warn('[home] skipping section "' + (s.id || '?') + '":', (err && err.message) || err); return null; }
+      )
+    )).then((resolved) => resolved.filter(Boolean));
+  }
+
+  // Custom hero item, or null to keep the grid hero. Never rejects.
+  function getHeroItem(heroCfg) {
+    if (!heroCfg || heroCfg.mode !== 'custom' || !heroCfg.source) return Promise.resolve(null);
+    const pick = Math.max(0, parseInt(heroCfg.pick, 10) || 0);
+    const probe = normalizeHomeSection({ id: '__hero__', title: '__hero__', limit: pick + 1, source: heroCfg.source });
+    if (!probe) return Promise.resolve(null);
+    return resolveHomeSection(probe).then(
+      (r) => r.items[pick] || r.items[0] || null,
+      () => null
+    );
+  }
+
   /* ---------------- My List (localStorage, no database) ---------------- */
 
   const LS_KEY = 'sb_mylist';
@@ -221,6 +404,13 @@
     getPerson,
     getSearchResults,
     getSuggestions,
+    getByGenre,
+    defaultHomeConfig,
+    normalizeHomeSection,
+    getHomeConfig,
+    resolveHomeSection,
+    getHomeSections,
+    getHeroItem,
     getMyList,
     saveMyList,
     toggleMyListItem,

@@ -36,6 +36,7 @@
   let currentSeasonNum = 1;
   let hasLoadedList = false;
   let lastRouteName = '';
+  let homeGen = 0; // guards async shelf/hero fills against fast navigation
 
   /* ---------------- route helpers (state <-> URL, no fetching) ---------------- */
   const kebabToSnake = (s) => String(s || '').split('-').join('_');
@@ -141,6 +142,36 @@
     if (mode === 'mylist') return loadMyList();
     if (mode === 'search') return loadSearchPage();
     return loadList();
+  }
+
+  /* ---------------- homepage extras: config -> Greybox API -> shelves + hero ---------------- */
+
+  // Runs after the main home grid. Shelves/hero come from js/homepage.config.js
+  // (structure) with items from the Greybox API (data); TMDB never decides
+  // what the homepage contains. Any failure leaves the main grid intact.
+  async function loadHomeExtras() {
+    const gen = homeGen;
+    let cfg;
+    try { cfg = Data.getHomeConfig(); }
+    catch { Pages.clearHomeSections(); return; }
+    // Custom hero (optional spotlight); failure keeps the grid hero.
+    if (cfg.hero && cfg.hero.mode === 'custom') {
+      try {
+        const item = await Data.getHeroItem(cfg.hero);
+        if (gen !== homeGen) return;
+        if (item) {
+          heroItem = item;
+          C.setHero(item);
+          if (cfg.hero.badge) $('hero-badge').textContent = cfg.hero.badge;
+        }
+      } catch { /* keep grid hero */ }
+    }
+    if (gen !== homeGen) return;
+    try {
+      const resolved = await Data.getHomeSections(cfg.sections);
+      if (gen !== homeGen) return;
+      Pages.renderHomeSections(resolved, (id, mt) => Data.isInMyList(id, mt));
+    } catch { /* shelves stay empty, main grid already rendered */ }
   }
 
   /* ---------------- detail pages: fetch (data.js) -> render (pages.js) ---------------- */
@@ -341,14 +372,20 @@
     if (route.name === 'home') {
       hideModal(); currentDetail = null;
       mode = 'home'; subTab = route.tab || 'trending'; pageNum = route.page || 1;
+      homeGen++;
       window.scrollTo({ top: 0 });
+      Pages.clearHomeSections();
       await loadList();
+      // Config shelves + custom hero live on page 1 only; deeper pages keep
+      // the classic single-grid browser.
+      if (pageNum === 1) await loadHomeExtras();
       return;
     }
     if (route.name === 'movies') {
       hideModal(); currentDetail = null;
       mode = 'movie'; subTab = kebabToSnake(route.cat || 'popular'); pageNum = route.page || 1;
       window.scrollTo({ top: 0 });
+      Pages.clearHomeSections();
       await loadList();
       return;
     }
@@ -356,6 +393,7 @@
       hideModal(); currentDetail = null;
       mode = 'tv'; subTab = kebabToSnake(route.cat || 'popular'); pageNum = route.page || 1;
       window.scrollTo({ top: 0 });
+      Pages.clearHomeSections();
       await loadList();
       return;
     }
@@ -363,6 +401,7 @@
       hideModal(); currentDetail = null;
       mode = 'anime'; subTab = animeKindToSub(route.kind || 'series'); pageNum = route.page || 1;
       window.scrollTo({ top: 0 });
+      Pages.clearHomeSections();
       await loadList();
       return;
     }
@@ -370,6 +409,7 @@
       hideModal(); currentDetail = null;
       mode = 'mylist'; pageNum = 1;
       window.scrollTo({ top: 0 });
+      Pages.clearHomeSections();
       loadMyList();
       return;
     }
@@ -377,6 +417,7 @@
       hideModal(); currentDetail = null;
       mode = 'search'; searchQuery = route.q || ''; pageNum = route.page || 1;
       window.scrollTo({ top: 0 });
+      Pages.clearHomeSections();
       await loadSearchPage();
       return;
     }
@@ -401,6 +442,7 @@
       return;
     }
     hideModal(); currentDetail = null;
+    Pages.clearHomeSections();
     Pages.renderNotFound(route.path);
     document.querySelectorAll('.nav-btn').forEach((b) => b.classList.remove('active'));
   }
