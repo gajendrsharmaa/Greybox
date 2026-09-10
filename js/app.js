@@ -1,17 +1,41 @@
-/* Main UI */
+/* Main UI — router-driven (Vanilla JS + History API, no framework).
+ *
+ * URL is the source of truth for *what* is shown; in-memory mode/subTab/pageNum
+ * are derived from the route on every navigation (including back/forward,
+ * refresh, and direct-URL loads). Data layer (js/api.js) and player
+ * (js/stream.js) are untouched.
+ *
+ * Route -> state mapping (see js/router.js for parsing):
+ *   /                              home/trending
+ *   /?tab=popular-movie            home sub-tabs (preserved, deep-linkable)
+ *   /movies[?page=N]               movie/popular
+ *   /movies/<kebab>[?page=N]       movie/<snake>
+ *   /tv[?page=N]                   tv/popular
+ *   /tv/<kebab>[?page=N]           tv/<snake>
+ *   /movie/:id                     detail modal over current/background list
+ *   /tv/:id                        detail modal over current/background list
+ *   /search?q=...[&page=N]         search grid page
+ *   /person/:id                    person overlay in the same modal shell
+ *   /anime[/series|/movies]        anime (series <-> tv-anime, movies <-> movie-anime)
+ *   /mylist                        localStorage list
+ */
 (function () {
   const $ = (id) => document.getElementById(id);
   const IMG = 'https://image.tmdb.org/t/p/w500';
   const IMG_BIG = 'https://image.tmdb.org/t/p/original';
+  const R = window.Router || null;
 
   let mode = 'home';       // home | movie | tv | anime | mylist | search
   let subTab = 'trending'; // per-mode tab
   let pageNum = 1;
+  let searchQuery = '';
   let heroItem = null;
-  let currentDetail = null;
+  let currentDetail = null; // {...} + media_type, or {kind:'person', id}
   let currentSeasons = [];
   let currentEpisodes = [];
   let currentSeasonNum = 1;
+  let hasLoadedList = false;
+  let lastRouteName = '';
 
   const myList = {
     load() { try { return JSON.parse(localStorage.getItem('sb_mylist') || '[]'); } catch { return []; } },
@@ -70,12 +94,49 @@
     }
   }
 
+  /* ---------------- routing helpers (state <-> URL, no fetching) ---------------- */
+  const kebabToSnake = (s) => String(s || '').split('-').join('_');
+  const snakeToKebab = (s) => String(s || '').split('_').join('-');
+  const animeKindToSub = (k) => (k === 'movies' ? 'movie-anime' : 'tv-anime');
+  const animeSubToKind = (s) => (s === 'movie-anime' ? 'movies' : 'series');
+
+  function navTo(to) {
+    if (R) R.navigate(to);
+    else { try { window.location.href = to; } catch { /* noop */ } }
+  }
+
+  // Canonical list URL for the current in-memory list state (tabs + pager use this).
+  function currentListURL(page) {
+    const p = page || pageNum;
+    if (!R) return '/';
+    if (mode === 'home') return R.url.home(subTab, p);
+    if (mode === 'movie') return R.url.movies(snakeToKebab(subTab), p);
+    if (mode === 'tv') return R.url.tv(snakeToKebab(subTab), p);
+    if (mode === 'anime') return R.url.anime(animeSubToKind(subTab), p);
+    if (mode === 'mylist') return R.url.mylist();
+    if (mode === 'search') return R.url.search(searchQuery, p);
+    return '/';
+  }
+
+  function detailURL(id, mt) {
+    if (!R) return '/';
+    return mt === 'tv' ? R.url.show(id) : R.url.movie(id);
+  }
+
+  function highlightNav() {
+    // Detail routes highlight their parent section so the nav never looks dead.
+    let key = mode;
+    if (currentDetail && (lastRouteName === 'movie-detail')) key = 'movie';
+    if (currentDetail && (lastRouteName === 'tv-detail')) key = 'tv';
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.nav === key));
+  }
+
   async function load() {
     notice(''); $('page').textContent = 'Page ' + pageNum;
-    document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.nav === mode));
+    highlightNav();
     renderTabs();
     if (mode === 'mylist') return renderMyList();
-    if (mode === 'search') return; // handled by search box
+    if (mode === 'search') return loadSearchPage();
     $('section-title').textContent =
       mode === 'home' ? (subTab === 'trending' ? 'Trending Now' : subTab === 'popular-movie' ? 'Popular Movies' : subTab === 'popular-tv' ? 'Popular TV' : 'Top Rated Movies') :
       mode === 'movie' ? ({ popular: 'Popular Movies', top_rated: 'Top Rated Movies', upcoming: 'Upcoming Movies', now_playing: 'Now Playing' }[subTab]) :
@@ -105,12 +166,51 @@
       $('grid').innerHTML = items.map(cardHTML).join('') || '<div class="text-zinc-500">No results.</div>';
       if (pageNum === 1 && items[0]) setHero(items[0]);
       else { const hero = $('hero'); if (hero) hero.classList.remove('hero-loading'); }
+      hasLoadedList = true;
     } catch (e) {
       $('grid').innerHTML = '';
       const hero = $('hero'); if (hero) hero.classList.remove('hero-loading');
       if (pageNum === 1) { $('hero-badge').textContent = 'Offline'; $('hero-title').textContent = 'Could not load'; $('hero-overview').textContent = e.message; }
       notice('⚠️ ' + e.message);
     }
+  }
+
+  async function loadSearchPage() {
+    $('section-title').textContent = searchQuery ? `Results for “${searchQuery}”` : 'Search';
+    $('tabs').innerHTML = '';
+    highlightNav();
+    if (!searchQuery) {
+      $('grid').innerHTML = '<div class="text-zinc-500 col-span-full">Type in the search box above, or open a URL like <code>/search?q=dune</code>.</div>';
+      const hero = $('hero'); if (hero) hero.classList.remove('hero-loading');
+      $('page').textContent = 'Page ' + pageNum;
+      return;
+    }
+    $('grid').innerHTML = gridSkeleton(12);
+    setHeroLoading(false);
+    const hero = $('hero'); if (hero) hero.classList.remove('hero-loading');
+    try {
+      const d = await API.gb.search(searchQuery, pageNum);
+      const items = (d.results || []).filter(x => (x.media_type === 'movie' || x.media_type === 'tv'));
+      $('grid').innerHTML = items.map(cardHTML).join('') || '<div class="text-zinc-500">No matches.</div>';
+      $('page').textContent = 'Page ' + pageNum;
+      hasLoadedList = true;
+    } catch (e) {
+      $('grid').innerHTML = '';
+      notice('⚠️ ' + e.message);
+    }
+  }
+
+  function renderNotFound(path) {
+    hideModal();
+    $('section-title').textContent = 'Not found';
+    $('tabs').innerHTML = '';
+    $('grid').innerHTML = `<div class="text-zinc-400 col-span-full">No page at <code>${escapeHtml(path || '')}</code>. <a class="text-red-400 underline" href="/" data-route>Back to home</a></div>`;
+    const hero = $('hero'); if (hero) hero.classList.remove('hero-loading');
+    $('hero-badge').textContent = '404';
+    $('hero-title').textContent = 'That URL does not exist';
+    $('hero-overview').textContent = 'Check /movies, /tv, /movie/:id, /tv/:id, /search?q=..., or /person/:id.';
+    $('page').textContent = 'Page 1';
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
   }
 
   function renderTabs() {
@@ -123,7 +223,14 @@
     for (const [k, label] of tabs) {
       const b = document.createElement('button');
       b.className = 'px-3 py-1.5 rounded-lg ' + (subTab === k ? 'bg-red-600 font-bold' : 'bg-white/10');
-      b.textContent = label; b.onclick = () => { subTab = k; pageNum = 1; load(); };
+      b.textContent = label;
+      // Tabs are navigation: the URL updates so refresh/back/deep-links keep working.
+      b.onclick = () => {
+        if (mode === 'home') navTo(R ? R.url.home(k, 1) : '/');
+        else if (mode === 'movie') navTo(R ? R.url.movies(snakeToKebab(k), 1) : '/movies');
+        else if (mode === 'tv') navTo(R ? R.url.tv(snakeToKebab(k), 1) : '/tv');
+        else if (mode === 'anime') navTo(R ? R.url.anime(animeSubToKind(k), 1) : '/anime');
+      };
       t.appendChild(b);
     }
   }
@@ -145,6 +252,8 @@
     $('tabs').innerHTML = ''; $('grid').innerHTML = '';
     const l = myList.load();
     $('grid').innerHTML = l.length ? l.map(cardHTML).join('') : '<div class="text-zinc-500 col-span-full">Empty. Hover a poster and hit ☆, or open details → + My List. Stored locally in your browser.</div>';
+    const hero = $('hero'); if (hero) hero.classList.remove('hero-loading');
+    hasLoadedList = true;
   }
 
   function streamMsg(msg, ok) {
@@ -157,10 +266,24 @@
       : 'bg-amber-500/10 border border-amber-500/30 text-amber-200');
   }
 
+  function setModalActionsVisible(visible) {
+    // Person view reuses the modal shell but has no Watch/Trailer/List/custom-source.
+    for (const id of ['m-watch', 'm-trailer', 'm-list']) {
+      const el = $(id);
+      if (el) el.style.display = visible ? '' : 'none';
+    }
+    const custom = $('custom-url');
+    if (custom && custom.parentElement) custom.parentElement.style.display = visible ? '' : 'none';
+    const tvWrap = $('m-tv-wrap');
+    if (!visible && tvWrap) tvWrap.classList.add('hidden');
+  }
+
   // ---- detail (single Greybox bundle: detail + cast + trailer + providers) ----
+  // NOTE: never pushes history itself — callers navigate first, the router calls this.
   async function openDetail(id, mt) {
     // Normalize media type — the Greybox detail routes only serve movie|tv.
     mt = mt === 'tv' ? 'tv' : 'movie';
+    setModalActionsVisible(true);
     $('modal').classList.remove('hidden'); document.body.style.overflow = 'hidden';
     $('m-video-wrap').classList.add('hidden'); $('m-video').src = '';
     streamMsg('');
@@ -178,7 +301,9 @@
       if (!d || !d.id) {
         throw new Error('Greybox API returned an error for ' + mt + '/' + id);
       }
-      currentDetail = { ...d, id, media_type: mt };
+      currentDetail = { ...d, id, media_type: mt, kind: 'title' };
+      highlightNav();
+      if (R) document.title = `${d.title || d.name || (mt === 'tv' ? 'TV Show' : 'Movie')} (${id}) — Greybox`;
       const title = d.title || d.name || 'Untitled';
       $('m-title').textContent = title;
       $('m-meta').textContent = `${(d.release_date || d.first_air_date || '').slice(0, 4)} · ⭐ ${Number(d.vote_average || 0).toFixed(1)} · ${(d.genres || []).join(', ')}`;
@@ -227,7 +352,87 @@
         : `No legal offer found for region ${region}. Change region in Settings ⚙️.`;
     } catch (err) { console.warn('[detail] providers failed', err); $('m-providers').textContent = 'Provider lookup failed.'; }
   }
-  function closeDetail() { $('modal').classList.add('hidden'); $('m-video').src = ''; document.body.style.overflow = ''; }
+
+  // ---- person (/person/:id) — read-only via the EXISTING /api/tmdb proxy transport.
+  // No new backend, no new Greybox endpoint, no arch change: same tmdb() the
+  // static-preview fallback already uses (allowlisted for person/* server-side).
+  async function openPerson(id) {
+    setModalActionsVisible(false);
+    $('modal').classList.remove('hidden'); document.body.style.overflow = 'hidden';
+    $('m-video-wrap').classList.add('hidden'); $('m-video').src = '';
+    streamMsg('');
+    $('m-tv-wrap').classList.add('hidden'); $('m-episodes').innerHTML = ''; $('m-season').innerHTML = '';
+    currentSeasons = []; currentEpisodes = [];
+    $('m-title').textContent = 'Loading person…'; $('m-overview').textContent = '';
+    $('m-meta').textContent = '';
+    $('m-cast').innerHTML = '<div class="inline-loader"><span class="spinner"></span> Loading…</div>';
+    $('m-providers').innerHTML = '<div class="inline-loader"><span class="spinner"></span> Loading…</div>';
+    $('m-backdrop').src = '';
+    try {
+      const [person, credits] = await Promise.all([
+        API.tmdb('person/' + id, { language: 'en-US' }),
+        API.tmdb('person/' + id + '/combined_credits', { language: 'en-US' }).catch(() => ({ cast: [] })),
+      ]);
+      if (!person || !person.id) throw new Error('Greybox API returned an error for person/' + id);
+      currentDetail = { kind: 'person', id, media_type: 'person' };
+      highlightNav();
+      if (R) document.title = `${person.name || 'Person'} (${id}) — Greybox`;
+      $('m-title').textContent = person.name || 'Untitled';
+      const facts = [
+        person.known_for_department || '',
+        person.birthday || '',
+        person.place_of_birth || '',
+      ].filter(Boolean).join(' · ');
+      $('m-meta').textContent = facts || 'Person';
+      $('m-overview').textContent = person.biography || 'No biography on TMDB.';
+      $('m-backdrop').src = person.profile_path ? IMG_BIG + person.profile_path : '';
+      $('m-providers').innerHTML =
+        `${person.birthday ? '<b>Born:</b> ' + escapeHtml(person.birthday) + (person.place_of_birth ? ' in ' + escapeHtml(person.place_of_birth) : '') + '<br/>' : ''}` +
+        `${person.known_for_department ? '<b>Known for:</b> ' + escapeHtml(person.known_for_department) + '<br/>' : ''}` +
+        `<a class="text-red-400 underline" target="_blank" href="https://www.themoviedb.org/person/${id}">Open on TMDB ↗</a>`;
+      const known = ((credits && credits.cast) || [])
+        .filter(x => x && (x.media_type === 'movie' || x.media_type === 'tv'))
+        .sort((a, b) => (b.popularity || 0) - (a.popularity || 0))
+        .slice(0, 12);
+      $('m-cast').innerHTML = known.map(x => {
+        const mt = x.media_type;
+        const title = x.title || x.name || 'Untitled';
+        return `<div class="min-w-[90px] text-center cursor-pointer known-for" data-id="${x.id}" data-type="${mt}"><img class="w-[90px] h-[120px] object-cover rounded-lg" loading="lazy" src="${x.poster_path ? IMG + x.poster_path : 'https://via.placeholder.com/90x120?text=?'}"/><div class="mt-1 font-semibold truncate">${escapeHtml(title)}</div><div class="text-zinc-500 truncate">${mt === 'movie' ? 'Movie' : 'TV'}</div></div>`;
+      }).join('') || '—';
+      $('m-cast').querySelectorAll('.known-for').forEach(el => {
+        el.onclick = () => navTo(detailURL(+el.dataset.id, el.dataset.type));
+      });
+    } catch (e) {
+      console.error('[person] failed for person/' + id, e);
+      $('m-title').textContent = 'Error';
+      $('m-overview').textContent = (e && e.message ? e.message : String(e));
+      $('m-providers').textContent = '—';
+      $('m-cast').textContent = '—';
+    }
+  }
+
+  function hideModal() {
+    // Silent hide — used when the ROUTER renders a non-detail route (back/forward,
+    // direct list URL). Never touches history itself.
+    if ($('modal').classList.contains('hidden')) return;
+    $('modal').classList.add('hidden'); $('m-video').src = ''; document.body.style.overflow = '';
+  }
+
+  function userCloseDetail() {
+    // User pressed X / backdrop / Escape on a detail/person URL:
+    // go back when this detail was reached in-app, else replace with a list URL
+    // so a direct-URL load still has somewhere sensible to land.
+    const route = R ? R.current() : null;
+    const isDetail = route && (route.name === 'movie-detail' || route.name === 'tv-detail' || route.name === 'person');
+    if (!isDetail) { hideModal(); return; }
+    const fallback = route.name === 'movie-detail' ? '/movies'
+      : route.name === 'tv-detail' ? '/tv' : '/';
+    if (R && R.hasInAppHistory()) { try { window.history.back(); return; } catch { /* fall through */ } }
+    hideModal();
+    navTo(fallback);
+  }
+
+  function closeDetail() { hideModal(); }
 
   // ---- Watch resolution (source slot blank by default) ----
   function wireWatchButton() {
@@ -365,6 +570,81 @@
   }
   function closePlayer() { Stream.Player.close(); }
 
+  /* ---------------- route renderer (single entry for ALL navigation) ---------------- */
+  async function renderRoute(route) {
+    if (!route) route = R ? R.current() : { name: 'home', tab: 'trending', page: 1, path: '/' };
+    lastRouteName = route.name;
+    if (R) document.title = R.titleFor(route);
+    // Keep the header search box in sync with /search?q=... (but never clobber typing elsewhere).
+    try {
+      if (route.name === 'search' && document.activeElement !== $('search')) $('search').value = route.q || '';
+    } catch { /* noop */ }
+
+    if (route.name === 'home') {
+      hideModal(); currentDetail = null;
+      mode = 'home'; subTab = route.tab || 'trending'; pageNum = route.page || 1;
+      window.scrollTo({ top: 0 });
+      await load();
+      return;
+    }
+    if (route.name === 'movies') {
+      hideModal(); currentDetail = null;
+      mode = 'movie'; subTab = kebabToSnake(route.cat || 'popular'); pageNum = route.page || 1;
+      window.scrollTo({ top: 0 });
+      await load();
+      return;
+    }
+    if (route.name === 'tv') {
+      hideModal(); currentDetail = null;
+      mode = 'tv'; subTab = kebabToSnake(route.cat || 'popular'); pageNum = route.page || 1;
+      window.scrollTo({ top: 0 });
+      await load();
+      return;
+    }
+    if (route.name === 'anime') {
+      hideModal(); currentDetail = null;
+      mode = 'anime'; subTab = animeKindToSub(route.kind || 'series'); pageNum = route.page || 1;
+      window.scrollTo({ top: 0 });
+      await load();
+      return;
+    }
+    if (route.name === 'mylist') {
+      hideModal(); currentDetail = null;
+      mode = 'mylist'; pageNum = 1;
+      window.scrollTo({ top: 0 });
+      await load();
+      return;
+    }
+    if (route.name === 'search') {
+      hideModal(); currentDetail = null;
+      mode = 'search'; searchQuery = route.q || ''; pageNum = route.page || 1;
+      window.scrollTo({ top: 0 });
+      await load();
+      return;
+    }
+    if (route.name === 'movie-detail' || route.name === 'tv-detail') {
+      const mt = route.name === 'tv-detail' ? 'tv' : 'movie';
+      // Background list: keep the current grid for in-app navigation so Back
+      // returns to exactly where the user was. On direct load / refresh (no
+      // list yet), boot a sensible background first without touching the URL.
+      if (!hasLoadedList) {
+        mode = 'home'; subTab = 'trending'; pageNum = 1;
+        await load();
+      }
+      await openDetail(route.id, mt);
+      return;
+    }
+    if (route.name === 'person') {
+      if (!hasLoadedList) {
+        mode = 'home'; subTab = 'trending'; pageNum = 1;
+        await load();
+      }
+      await openPerson(route.id);
+      return;
+    }
+    renderNotFound(route.path);
+  }
+
   // ---- events ----
   document.addEventListener('click', (e) => {
     const lb = e.target.closest('.list-btn');
@@ -380,19 +660,30 @@
       updateCount(); return;
     }
     const card = e.target.closest('.card[data-id]');
-    if (card) openDetail(+card.dataset.id, card.dataset.type);
+    // Cards are navigation — the URL becomes /movie/:id or /tv/:id.
+    if (card) { navTo(detailURL(+card.dataset.id, card.dataset.type)); return; }
     const nav = e.target.closest('[data-nav]');
-    if (nav) { mode = nav.dataset.nav; pageNum = 1; if (mode === 'movie') subTab = 'popular'; if (mode === 'tv') subTab = 'popular'; if (mode === 'anime') subTab = 'tv-anime'; if (mode === 'home') subTab = 'trending'; window.scrollTo({ top: 0 }); load(); }
+    if (nav) {
+      const key = nav.dataset.nav;
+      if (key === 'home') navTo(R ? R.url.home('trending', 1) : '/');
+      else if (key === 'movie') navTo(R ? R.url.movies('popular', 1) : '/movies');
+      else if (key === 'tv') navTo(R ? R.url.tv('popular', 1) : '/tv');
+      else if (key === 'anime') navTo(R ? R.url.anime('series', 1) : '/anime');
+      else if (key === 'mylist') navTo(R ? R.url.mylist() : '/mylist');
+      else navTo('/');
+      return;
+    }
   });
 
-  $('modal-close').addEventListener('click', (e) => { e.stopPropagation(); closeDetail(); });
-  $('modal-bg').addEventListener('click', closeDetail);
+  $('modal-close').addEventListener('click', (e) => { e.stopPropagation(); userCloseDetail(); });
+  $('modal-bg').addEventListener('click', userCloseDetail);
   $('player-close').onclick = closePlayer;
   $('ep-prev').onclick = () => stepEpisode(-1);
   $('ep-next').onclick = () => stepEpisode(1);
-  $('prev').onclick = () => { if (pageNum > 1) { pageNum--; load(); } };
-  $('next').onclick = () => { pageNum++; load(); };
-  $('hero-play').onclick = () => heroItem && openDetail(heroItem.id, heroItem.media_type || (heroItem.title ? 'movie' : 'tv'));
+  // Pager is navigation: ?page=N stays in the URL so refresh/deep-links keep it.
+  $('prev').onclick = () => { if (pageNum > 1) navTo(currentListURL(pageNum - 1)); };
+  $('next').onclick = () => { navTo(currentListURL(pageNum + 1)); };
+  $('hero-play').onclick = () => heroItem && navTo(detailURL(heroItem.id, heroItem.media_type || (heroItem.title ? 'movie' : 'tv')));
   $('hero-list').onclick = () => {
     if (!heroItem) return;
     const mt = heroItem.media_type || (heroItem.title ? 'movie' : 'tv');
@@ -405,7 +696,7 @@
     playFile(u, ($('m-title').textContent || 'Custom') + ' (custom file)');
   };
 
-  // search
+  // search: dropdown suggestions stay as-is, but every destination is a route.
   let deb = null;
   $('search').addEventListener('input', (e) => {
     clearTimeout(deb);
@@ -420,9 +711,18 @@
           <img class="w-10 h-14 object-cover rounded" src="${x.poster_path ? IMG + x.poster_path : 'https://via.placeholder.com/40x56?text=?'}"/>
           <div><div class="text-sm font-semibold">${escapeHtml(x.title || x.name)}</div><div class="text-xs text-zinc-500">${x.media_type} · ${(x.release_date || x.first_air_date || '').slice(0, 4)}</div></div></div>`).join('') || '<div class="p-3 text-sm text-zinc-500">No matches.</div>';
         box.classList.remove('hidden');
-        box.querySelectorAll('.sr').forEach(el => el.onclick = () => { box.classList.add('hidden'); $('search').value = ''; openDetail(+el.dataset.id, el.dataset.type); });
+        box.querySelectorAll('.sr').forEach(el => el.onclick = () => { box.classList.add('hidden'); $('search').value = ''; navTo(detailURL(+el.dataset.id, el.dataset.type)); });
       } catch (err) { box.innerHTML = `<div class="p-3 text-sm text-red-300">${escapeHtml(err.message)}</div>`; box.classList.remove('hidden'); }
     }, 350);
+  });
+  // Enter commits the query as a real URL: /search?q=... (refreshable, shareable).
+  $('search').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const q = e.target.value.trim();
+      if (!q) return;
+      $('search-results').classList.add('hidden');
+      navTo(R ? R.url.search(q, 1) : ('/search?q=' + encodeURIComponent(q)));
+    }
   });
   document.addEventListener('click', (e) => { if (!e.target.closest('#search') && !e.target.closest('#search-results')) $('search-results').classList.add('hidden'); });
 
@@ -435,8 +735,7 @@
     $('settings').classList.add('hidden'); load();
   };
 
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeDetail(); closePlayer(); $('settings').classList.add('hidden'); } });
-  $('logo').onclick = (e) => { e.preventDefault(); mode = 'home'; subTab = 'trending'; pageNum = 1; load(); };
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { userCloseDetail(); closePlayer(); $('settings').classList.add('hidden'); } });
 
   // ---- interaction protection (lightweight): no right-click menu, text
   // selection, copy, cut, paste, drag-out, or long-press menus on the page
@@ -472,5 +771,18 @@
     });
   })();
 
-  updateCount(); load();
+  /* ---- boot: router owns the initial render so refresh/direct-URL work ---- */
+  updateCount();
+  try { if ('scrollRestoration' in window.history) window.history.scrollRestoration = 'manual'; } catch { /* noop */ }
+  if (R) {
+    R.init();
+    R.onChange((route) => { renderRoute(route); });
+    renderRoute(R.current());
+  } else {
+    load();
+  }
+
+  // Headless/test hook (no UI effect): lets node-based checks drive the
+  // route->state mapping without a browser.
+  try { window.GreyboxApp = window.GreyboxApp || {}; window.GreyboxApp.renderRoute = renderRoute; } catch { /* noop */ }
 })();

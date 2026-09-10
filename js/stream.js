@@ -28,7 +28,7 @@
    * ========================================================== */
   const EMBED = {
     // PUT YOUR OFFICIAL API STREAMING LINK HERE (change this one line):
-    base: 'https://vidsrc.sbs',
+    base: 'https://pstream.cfd',
     moviePath: '/embed/movie/{tmdb_id}',
     episodePath: '/embed/tv/{tmdb_id}/{season}/{episode}',
   };

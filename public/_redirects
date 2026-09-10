@@ -1,0 +1,15 @@
+# Greybox SPA fallback (Cloudflare Pages).
+# App routes rewrite to /index.html (200) so refresh, direct-URL, and new-tab
+# loads boot the History-API router, which then renders the route.
+# /api/* is deliberately NOT listed — Pages Functions serve it (never rewritten).
+# Static assets (*.html, /css/*, /js/*, /favicon.svg) also pass through natively.
+/movies /index.html 200
+/movies/* /index.html 200
+/tv /index.html 200
+/tv/* /index.html 200
+/movie/* /index.html 200
+/search /index.html 200
+/person/* /index.html 200
+/anime /index.html 200
+/anime/* /index.html 200
+/mylist /index.html 200
