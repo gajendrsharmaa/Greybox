@@ -7,3 +7,4 @@ node_modules/
 !.env.example
 !.dev.vars.example
 *.local
+saved-responses-of-opencode.md

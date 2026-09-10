@@ -1,1 +1,5 @@
-{"name":"streambox-pages","private":true,"version":"1.0.0","description":"Legal movie/TV browser for Cloudflare Pages + TMDB proxy","scripts":{"dev":"wrangler pages dev . --compatibility-date=2024-01-01","deploy":"wrangler pages deploy . --project-name=streambox"},"devDependencies":{"wrangler":"^4.129.1"}}
+{
+  "name": "greybox",
+  "private": true,
+  "version": "1.0.0"
+}
