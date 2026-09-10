@@ -87,26 +87,19 @@
     try {
       let data;
       if (mode === 'home') {
-        if (subTab === 'trending') data = await API.tmdb('trending/all/week', { language: 'en-US', page: pageNum });
-        else if (subTab === 'popular-movie') data = await API.tmdb('movie/popular', { language: 'en-US', page: pageNum });
-        else if (subTab === 'popular-tv') data = await API.tmdb('tv/popular', { language: 'en-US', page: pageNum });
-        else data = await API.tmdb('movie/top_rated', { language: 'en-US', page: pageNum });
+        if (subTab === 'trending') data = await API.gb.trending(pageNum);
+        else if (subTab === 'popular-movie') data = await API.gb.movies('popular', pageNum);
+        else if (subTab === 'popular-tv') data = await API.gb.tvList('popular', pageNum);
+        else data = await API.gb.movies('top-rated', pageNum);
       } else if (mode === 'anime') {
-        // Animation (genre 16) + Japanese original language = anime via TMDB discover
-        const base = { language: 'en-US', page: pageNum, with_genres: '16', with_original_language: 'ja', sort_by: 'popularity.desc' };
-        if (subTab === 'movie-anime') {
-          data = await API.tmdb('discover/movie', base);
-          data.results = data.results.map(r => ({ ...r, media_type: 'movie' }));
-        } else {
-          data = await API.tmdb('discover/tv', base);
-          data.results = data.results.map(r => ({ ...r, media_type: 'tv' }));
-        }
+        // Animation (genre 16) + Japanese original language = anime via Greybox
+        if (subTab === 'movie-anime') data = await API.gb.anime('movies', pageNum);
+        else data = await API.gb.anime('series', pageNum);
       } else if (mode === 'movie') {
-        data = await API.tmdb(`movie/${subTab}`, { language: 'en-US', page: pageNum });
-        data.results = data.results.map(r => ({ ...r, media_type: 'movie' }));
+        // app tabs keep TMDB snake_case internally; Greybox uses kebab-case.
+        data = await API.gb.movies(subTab.split('_').join('-'), pageNum);
       } else {
-        data = await API.tmdb(`tv/${subTab}`, { language: 'en-US', page: pageNum });
-        data.results = data.results.map(r => ({ ...r, media_type: 'tv' }));
+        data = await API.gb.tvList(subTab.split('_').join('-'), pageNum);
       }
       const items = (data.results || []).filter(x => x.poster_path || x.backdrop_path);
       $('grid').innerHTML = items.map(cardHTML).join('') || '<div class="text-zinc-500">No results.</div>';
@@ -164,10 +157,9 @@
       : 'bg-amber-500/10 border border-amber-500/30 text-amber-200');
   }
 
-  // ---- detail ----
+  // ---- detail (single Greybox bundle: detail + cast + trailer + providers) ----
   async function openDetail(id, mt) {
-    // Normalize media type — a bad mt produces proxy 403 "Blocked path: undefined/..."
-    // which used to surface as a generic "Error" title.
+    // Normalize media type — the Greybox detail routes only serve movie|tv.
     mt = mt === 'tv' ? 'tv' : 'movie';
     $('modal').classList.remove('hidden'); document.body.style.overflow = 'hidden';
     $('m-video-wrap').classList.add('hidden'); $('m-video').src = '';
@@ -180,25 +172,16 @@
     $('m-backdrop').src = '';
     $('m-watch').textContent = '▶ Watch Now';
     let d = null;
-    let credits = { cast: [] };
-    let videos = { results: [] };
     try {
-      const res = await Promise.all([
-        API.tmdb(`${mt}/${id}`, { language: 'en-US' }),
-        API.tmdb(`${mt}/${id}/credits`, { language: 'en-US' }).catch(() => ({ cast: [] })),
-        API.tmdb(`${mt}/${id}/videos`, { language: 'en-US' }).catch(() => ({ results: [] }))
-      ]);
-      const detail = res[0]; credits = res[1] || { cast: [] }; videos = res[2] || { results: [] };
-      // TMDB error payloads come back as 200-JSON with success:false when called
-      // direct — catch them here instead of rendering a broken page.
-      if (!detail || detail.success === false) {
-        throw new Error(detail && detail.status_message ? 'TMDB: ' + detail.status_message : 'TMDB returned an error for ' + mt + '/' + id);
+      const region = API.getRegion();
+      d = mt === 'tv' ? await API.gb.show(id, region) : await API.gb.movie(id, region);
+      if (!d || !d.id) {
+        throw new Error('Greybox API returned an error for ' + mt + '/' + id);
       }
-      d = detail;
       currentDetail = { ...d, id, media_type: mt };
       const title = d.title || d.name || 'Untitled';
       $('m-title').textContent = title;
-      $('m-meta').textContent = `${(d.release_date || d.first_air_date || '').slice(0, 4)} · ⭐ ${Number(d.vote_average || 0).toFixed(1)} · ${(d.genres || []).map(g => g.name).join(', ')}`;
+      $('m-meta').textContent = `${(d.release_date || d.first_air_date || '').slice(0, 4)} · ⭐ ${Number(d.vote_average || 0).toFixed(1)} · ${(d.genres || []).join(', ')}`;
       $('m-overview').textContent = d.overview || 'No overview.';
       $('m-backdrop').src = d.backdrop_path ? IMG_BIG + d.backdrop_path : (d.poster_path ? IMG + d.poster_path : '');
       // NOTE: removed dead m-tmdb href lookup — that element id does not exist in
@@ -206,11 +189,11 @@
       // "Cannot set properties of null (setting 'href')" here, which blanked
       // the title to "Error" and left providers stuck on "Loading...".
       $('m-list').textContent = myList.has(id, mt) ? '★ In My List' : '+ My List';
-      const yt = (videos.results || []).find(v => v.site === 'YouTube' && v.type === 'Trailer') || (videos.results || []).find(v => v.site === 'YouTube');
+      const trailerKey = d.trailer_key;
       $('m-trailer').onclick = () => {
-        if (!yt) return alert('No trailer on TMDB for this title.');
+        if (!trailerKey) return alert('No trailer on TMDB for this title.');
         $('m-video-wrap').classList.remove('hidden');
-        $('m-video').src = `https://www.youtube.com/embed/${yt.key}?autoplay=1`;
+        $('m-video').src = `https://www.youtube.com/embed/${trailerKey}?autoplay=1`;
         $('m-video-wrap').scrollIntoView({ behavior: 'smooth', block: 'center' });
       };
       // ---- Watch Now: resolves a direct-file URL from the (blank-by-default) source slot ----
@@ -228,19 +211,19 @@
       $('m-providers').textContent = '—';
       return;
     }
-    // Cast renders from the already-fetched credits so it never blanks the title.
+    // Cast renders from the already-fetched bundle so it never blanks the title.
     try {
-      const castList = (credits.cast || []);
+      const castList = (d.cast || []);
       $('m-cast').innerHTML = castList.slice(0, 12).map(c =>
         `<div class="min-w-[90px] text-center"><img class="w-[90px] h-[120px] object-cover rounded-lg" loading="lazy" src="${c.profile_path ? IMG + c.profile_path : 'https://via.placeholder.com/90x120?text=?'}"/><div class="mt-1 font-semibold truncate">${escapeHtml(c.name)}</div><div class="text-zinc-500 truncate">${escapeHtml(c.character || '')}</div></div>`).join('') || '—';
     } catch (err) { console.warn('[detail] cast failed', err); $('m-cast').textContent = '—'; }
-    // providers
+    // providers (already region-filtered by the Greybox bundle)
     try {
-      const region = API.getRegion();
-      const p = await API.tmdb(`${mt}/${id}/watch/providers`, {});
-      const r = (p.results || {})[region];
-      $('m-providers').innerHTML = r
-        ? `${r.flatrate?.length ? '<b>Stream:</b> ' + r.flatrate.map(x => x.provider_name).join(', ') + '<br/>' : ''}${r.rent?.length ? '<b>Rent:</b> ' + r.rent.map(x => x.provider_name).join(', ') + '<br/>' : ''}${r.buy?.length ? '<b>Buy:</b> ' + r.buy.map(x => x.provider_name).join(', ') : ''}${r.link ? `<br/><a class="text-red-400 underline" target="_blank" href="${r.link}">Open JustWatch/TMDB guide ↗</a>` : ''}`
+      const p = d.providers;
+      const region = (p && p.region) || API.getRegion();
+      const hasOffer = p && (p.flatrate.length || p.rent.length || p.buy.length || p.link);
+      $('m-providers').innerHTML = hasOffer
+        ? `${p.flatrate?.length ? '<b>Stream:</b> ' + p.flatrate.map(escapeHtml).join(', ') + '<br/>' : ''}${p.rent?.length ? '<b>Rent:</b> ' + p.rent.map(escapeHtml).join(', ') + '<br/>' : ''}${p.buy?.length ? '<b>Buy:</b> ' + p.buy.map(escapeHtml).join(', ') : ''}${p.link ? `<br/><a class="text-red-400 underline" target="_blank" href="${p.link}">Open JustWatch/TMDB guide ↗</a>` : ''}`
         : `No legal offer found for region ${region}. Change region in Settings ⚙️.`;
     } catch (err) { console.warn('[detail] providers failed', err); $('m-providers').textContent = 'Provider lookup failed.'; }
   }
@@ -291,7 +274,7 @@
   async function loadEpisodes(tmdbId, seasonNum) {
     $('m-episodes').innerHTML = '<div class="inline-loader"><span class="spinner"></span> Loading episodes…</div>';
     try {
-      const s = await API.tmdb(`tv/${tmdbId}/season/${seasonNum}`, { language: 'en-US' });
+      const s = await API.gb.season(tmdbId, seasonNum);
       currentEpisodes = s.episodes || [];
       renderEpisodes(tmdbId, seasonNum);
     } catch { $('m-episodes').innerHTML = '<div class="text-sm text-red-300">Could not load episodes.</div>'; }
@@ -431,7 +414,7 @@
     if (!q) { box.classList.add('hidden'); return; }
     deb = setTimeout(async () => {
       try {
-        const d = await API.tmdb('search/multi', { language: 'en-US', query: q, page: 1, include_adult: 'false' });
+        const d = await API.gb.search(q);
         const items = (d.results || []).filter(x => (x.media_type === 'movie' || x.media_type === 'tv') && (x.poster_path || x.profile_path));
         box.innerHTML = items.slice(0, 8).map(x => `<div class="flex gap-3 p-2.5 hover:bg-white/10 cursor-pointer sr" data-id="${x.id}" data-type="${x.media_type}">
           <img class="w-10 h-14 object-cover rounded" src="${x.poster_path ? IMG + x.poster_path : 'https://via.placeholder.com/40x56?text=?'}"/>

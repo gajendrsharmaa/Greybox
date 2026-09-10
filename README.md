@@ -17,12 +17,35 @@ A Netflix-style frontend where the "backend" is **other providers' legal APIs**:
 ```
 index.html                  # SPA: home, movies, tv, free films, my list, search, details, player
 css/style.css
-js/api.js                   # proxy-first TMDB client (NO secret in client code — calls /api/tmdb/*)
+js/api.js                   # Greybox API client (NO secret in client code — calls /api/*)
 js/app.js                   # UI
-functions/api/tmdb/[[path]].js  # Cloudflare Pages Function — secret-key TMDB proxy + edge cache
-api/tmdb/[...path].js           # Vercel Serverless Function — same /api/tmdb/* contract
+functions/lib/greybox.js     # shared Greybox shaping logic (single source of truth, no secrets;
+                           # kept INSIDE functions/ — Cloudflare Pages only bundles in-functions imports)
+functions/api/trending.js       # Cloudflare: GET /api/trending
+functions/api/search.js         # Cloudflare: GET /api/search?q=
+functions/api/movies/[category].js  # Cloudflare: GET /api/movies/:category
+functions/api/movie/[id].js         # Cloudflare: GET /api/movie/:id (detail bundle)
+functions/api/anime/[kind].js       # Cloudflare: GET /api/anime/:kind
+functions/api/tv/[[rest]].js        # Cloudflare: GET /api/tv/:category | :id | :id/season/:n
+api/trending.js, api/search.js, api/movies/[category].js, api/movie/[id].js, api/anime/[kind].js, api/tv/[...rest].js
+                        # Vercel equivalents of the same Greybox contract
+functions/api/tmdb/[[path]].js  # Cloudflare Pages Function — legacy raw TMDB proxy (kept for static-preview fallback)
+api/tmdb/[...path].js           # Vercel Serverless Function — same legacy /api/tmdb/* contract
 public/_headers
 package.json (wrangler)
+```
+
+Greybox API contract (backend calls TMDB internally, returns only needed fields):
+
+```
+GET /api/trending?page=1
+GET /api/movies/popular|top-rated|upcoming|now-playing?page=1
+GET /api/tv/popular|top-rated|on-the-air|airing-today?page=1
+GET /api/anime/series|movies?page=1
+GET /api/movie/:id?region=US            # detail + cast + trailer_key + providers
+GET /api/tv/:id?region=US               # detail + cast + trailer_key + providers + seasons
+GET /api/tv/:id/season/:n               # episodes
+GET /api/search?q=...&page=1
 ```
 
 No build step — deploy the folder as-is.
@@ -79,8 +102,8 @@ Local Vercel dev: `Copy-Item .env.example .env` (paste real token) → `vercel d
 
 ## 4) How playback works (full logic, source slot left blank)
 
-- **Browse/search**: `GET /api/tmdb/trending/all/week`, `/movie/popular`, `/tv/popular`, `/search/multi?query=...` — see `js/app.js:load()`.
-- **Details**: `/movie/{id}`, `/credits`, `/videos` (YouTube trailer key), `/watch/providers`. TV also loads `/tv/{id}` seasons → `/tv/{id}/season/{n}` episode list with stills.
+- **Browse/search**: `GET /api/trending`, `/api/movies/popular`, `/api/tv/popular`, `/api/search?q=...` — see `js/app.js:load()`. The Greybox backend (`functions/lib/greybox.js` + `functions/api/*`) calls TMDB internally and returns only the fields the UI needs.
+- **Details**: `GET /api/movie/{id}?region=US` or `/api/tv/{id}?region=US` — one bundle with detail + cast + `trailer_key` (YouTube) + region-filtered `providers` (+ `seasons` for TV). Episodes via `GET /api/tv/{id}/season/{n}` with stills.
 - **Player engine** (`js/stream.js`): embed pages in `<iframe>`, direct files in `<video>` (HLS via hls.js with native fallback), loading spinner, error overlay + retry, resume-from-position (localStorage), auto-next episode, prev/next episode bar.
 - **Source slot — change ONE line** (`Stream.EMBED.base` in `js/stream.js`, marked PUT YOUR OFFICIAL API STREAMING LINK HERE): everything derives from it — `{base}/embed/movie/{tmdb_id}` and `{base}/embed/tv/{tmdb_id}/{season}/{episode}`. While it points at `example.com`, Watch buttons show "No stream source configured". Point it only at a host you own or license.
 - **Free films**: `https://archive.org/metadata/{id}` → smallest MP4 → plays through the same engine with resume support.
