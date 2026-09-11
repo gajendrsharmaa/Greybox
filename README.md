@@ -208,7 +208,7 @@ and is never written to source, git, D1, cookies, `localStorage`,
 `sessionStorage`, or the URL. Reload/Disconnect forgets it. No accounts, no
 server-side sessions (deliberately — nothing to hijack or expire).
 
-## 6) How playback works (full logic, source slot left blank)
+## 6) How playback works (full logic, source slot left blank).
 
 - **Browse/search**: `GET /api/trending`, `/api/movies/popular`, `/api/tv/popular`, `/api/search?q=...` — see `js/app.js:load()`. The Greybox backend (`functions/lib/greybox.js` + `functions/api/*`) calls TMDB internally and returns only the fields the UI needs.
 - **Details**: `GET /api/movie/{id}?region=US` or `/api/tv/{id}?region=US` — one bundle with detail + cast + `trailer_key` (YouTube) + region-filtered `providers` (+ `seasons` for TV). Episodes via `GET /api/tv/{id}/season/{n}` with stills.
