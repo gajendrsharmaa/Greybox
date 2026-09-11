@@ -265,6 +265,7 @@
     const title = d.title || d.name || 'Untitled';
     $('m-title').textContent = title;
     $('m-meta').textContent = detailMeta(d);
+    if (d.custom_badge) $('m-meta').textContent += ' · ' + d.custom_badge;
     $('m-overview').textContent = d.overview || 'No overview.';
     $('m-backdrop').src = d.backdrop_path ? c.IMG_BIG + d.backdrop_path : (d.poster_path ? c.IMG + d.poster_path : '');
     $('m-list').textContent = ctx.inList ? '★ In My List' : '+ My List';

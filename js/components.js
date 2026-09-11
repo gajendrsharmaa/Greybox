@@ -29,7 +29,7 @@
     return `<div class="card bg-white/5 rounded-xl overflow-hidden border border-white/10" data-id="${item.id}" data-type="${mt}">
       <div class="relative"><img loading="lazy" src="${poster}" alt="${escapeHtml(title)}"/>
       <button class="absolute top-2 right-2 bg-black/70 rounded-full w-8 h-8 list-btn" data-id="${item.id}" data-type="${mt}" title="My List">${star}</button>
-      ${item.vote_average ? `<span class="absolute bottom-2 left-2 text-xs bg-black/75 px-2 py-0.5 rounded">⭐ ${Number(item.vote_average).toFixed(1)}</span>` : ''}</div>
+      ${item.vote_average ? `<span class="absolute bottom-2 left-2 text-xs bg-black/75 px-2 py-0.5 rounded">⭐ ${Number(item.vote_average).toFixed(1)}</span>` : ''}${item.custom_badge ? `<span class="absolute top-2 left-2 text-xs bg-red-600 px-2 py-0.5 rounded font-bold">${escapeHtml(item.custom_badge)}</span>` : ''}</div>
       <div class="p-2.5"><div class="text-sm font-semibold truncate">${escapeHtml(title)}</div>
       <div class="text-xs text-zinc-500">${date ? date.slice(0, 4) : ''} · ${mt === 'movie' ? 'Movie' : 'TV'}</div></div></div>`;
   }

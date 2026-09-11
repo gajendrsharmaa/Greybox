@@ -40,7 +40,10 @@
   // (previously tripled across home/movie/tv + search + suggestions).
   function withImages(list, fallbackType) {
     const results = Array.isArray(list && list.results) ? list.results : [];
-    const items = results.filter((x) => x.poster_path || x.backdrop_path);
+    // Overrides first so a Greybox poster_path can rescue an imageless item.
+    const items = results
+      .map((x) => applyOverrides(x, fallbackType))
+      .filter((x) => x && (x.poster_path || x.backdrop_path));
     return { page: (list && list.page) || 1, total_pages: (list && list.total_pages) || 1, total_results: (list && list.total_results) || 0, results: items, _fallbackType: fallbackType };
   }
 
@@ -107,13 +110,13 @@
   function getMovie(id, region) {
     const clean = parseId(id);
     if (!clean) return Promise.reject(new Error('Invalid movie id'));
-    return api().gb.movie(clean, region || getRegion()).then((d) => assertDetail(d, 'movie', clean));
+    return api().gb.movie(clean, region || getRegion()).then((d) => applyOverrides(assertDetail(d, 'movie', clean), 'movie'));
   }
 
   function getTVDetails(id, region) {
     const clean = parseId(id);
     if (!clean) return Promise.reject(new Error('Invalid tv id'));
-    return api().gb.show(clean, region || getRegion()).then((d) => assertDetail(d, 'tv', clean));
+    return api().gb.show(clean, region || getRegion()).then((d) => applyOverrides(assertDetail(d, 'tv', clean), 'tv'));
   }
 
   // Alias — some callers think "show", some think "tv details".
@@ -155,7 +158,9 @@
       page: d.page || 1,
       total_pages: d.total_pages || 1,
       total_results: d.total_results || 0,
-      results: ((d.results || []).filter((x) => x.media_type === 'movie' || x.media_type === 'tv')),
+      results: ((d.results || [])
+        .filter((x) => x.media_type === 'movie' || x.media_type === 'tv')
+        .map((x) => applyOverrides(x))),
     }));
   }
 
@@ -217,8 +222,8 @@
         total_pages: d.total_pages || 1,
         total_results: d.total_results || 0,
         results: results
-          .filter((x) => x.poster_path || x.backdrop_path)
-          .map((x) => shapeRawItem(x, mt)),
+          .map((x) => applyOverrides(shapeRawItem(x, mt), mt))
+          .filter((x) => x && (x.poster_path || x.backdrop_path)),
       };
     });
   }
@@ -636,6 +641,96 @@
     });
   }
 
+  /* ---------------- Greybox metadata overrides (local config, no database) ---------------- */
+
+  // Only these keys are ever read from js/overrides.config.js — a complete
+  // TMDB response pasted there would be ignored except for these fields.
+  // `description` is Greybox's name for TMDB `overview`.
+  const OVERRIDABLE_FIELDS = ['title', 'name', 'overview', 'description', 'poster_path', 'backdrop_path', 'vote_average', 'release_date', 'first_air_date', 'featured', 'custom_badge'];
+
+  // Normalized override map, memoized on the config array identity so list
+  // rendering (dozens of lookups) doesn't re-normalize or re-warn per item.
+  let _overrideCacheRef = null;
+  let _overrideCacheMap = null;
+
+  function getOverrideConfig() {
+    const raw = window.GreyboxOverrides;
+    return Array.isArray(raw) ? raw : [];
+  }
+
+  function normalizeMetadataOverride(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const id = parseId(raw.tmdb_id != null ? raw.tmdb_id : raw.id);
+    const media = raw.media === 'tv' ? 'tv' : (raw.media === 'movie' ? 'movie' : null);
+    if (!id || !media) { console.warn('[overrides] dropping entry without valid tmdb_id + media:', raw); return null; }
+    const fields = {};
+    for (const k of OVERRIDABLE_FIELDS) {
+      let v = raw[k];
+      if (v === undefined || v === null) continue;
+      if (typeof v === 'string') {
+        v = v.trim();
+        if (!v) continue;
+      }
+      if (k === 'vote_average') {
+        v = Number(v);
+        if (!isFinite(v)) continue;
+      }
+      fields[k] = v;
+    }
+    if (Object.keys(fields).length === 0) { console.warn('[overrides] entry has no overridable fields:', media + ':' + id); return null; }
+    return { media, id, fields };
+  }
+
+  function overrideMap() {
+    const raw = getOverrideConfig();
+    if (raw !== _overrideCacheRef) {
+      const map = new Map();
+      for (const entry of raw) {
+        const o = normalizeMetadataOverride(entry);
+        if (!o) continue;
+        const key = o.media + ':' + o.id;
+        if (map.has(key)) { console.warn('[overrides] duplicate entry ignored:', key); continue; }
+        map.set(key, o);
+      }
+      _overrideCacheRef = raw;
+      _overrideCacheMap = map;
+    }
+    return _overrideCacheMap;
+  }
+
+  // Normalized override list (for tests/inspection).
+  function getOverrides() { return [...overrideMap().values()]; }
+
+  // Single override by media + id, or null.
+  function getOverride(media, id) {
+    const mt = media === 'tv' ? 'tv' : (media === 'movie' ? 'movie' : null);
+    const clean = parseId(id);
+    if (!mt || !clean) return null;
+    return overrideMap().get(mt + ':' + clean) || null;
+  }
+
+  // TMDB data in, final resolved object out. Only explicitly overridden fields
+  // are replaced; everything else passes through untouched. Returns the
+  // ORIGINAL object when nothing matches (no copy, no mutation), so renderers
+  // receive the final object without knowing any value's source.
+  function applyOverrides(item, fallbackMedia) {
+    if (!item || typeof item !== 'object') return item;
+    const media = item.media_type === 'tv' || item.media_type === 'movie' ? item.media_type
+      : (fallbackMedia === 'tv' || fallbackMedia === 'movie' ? fallbackMedia
+      : (item.title ? 'movie' : 'tv'));
+    const o = getOverride(media, item.id);
+    if (!o) return item;
+    const out = { ...item, media_type: media };
+    for (const k of Object.keys(o.fields)) {
+      if (k === 'description') out.overview = o.fields[k];
+      else out[k] = o.fields[k];
+    }
+    // The codebase treats title/name as aliases (gbItem sets both) — keep them in sync.
+    if (out.title != null) out.name = out.title;
+    else if (out.name != null) out.title = out.name;
+    return out;
+  }
+
   /* ---------------- My List (localStorage, no database) ---------------- */
 
   const LS_KEY = 'sb_mylist';
@@ -701,6 +796,10 @@
     getCollections,
     getCollection,
     resolveCollection,
+    OVERRIDABLE_FIELDS,
+    getOverrides,
+    getOverride,
+    applyOverrides,
     getMyList,
     saveMyList,
     toggleMyListItem,
