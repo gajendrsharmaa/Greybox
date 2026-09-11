@@ -12,6 +12,7 @@
     { "source": "/collection/:path*", "destination": "/index.html" },
     { "source": "/anime", "destination": "/index.html" },
     { "source": "/anime/:path*", "destination": "/index.html" },
-    { "source": "/mylist", "destination": "/index.html" }
+    { "source": "/mylist", "destination": "/index.html" },
+    { "source": "/admin", "destination": "/admin.html" }
   ]
 }

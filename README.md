@@ -16,6 +16,8 @@ A Netflix-style frontend where the "backend" is **other providers' legal APIs**:
 
 ```
 index.html                  # SPA: home, movies, tv, free films, my list, search, details, player
+admin.html                  # Admin Control Panel (/admin): sections, collections, overrides, hero — vanilla JS
+js/admin.js                 # Admin app (memory-only token session, talks only to /api/admin/*)
 css/style.css
 js/api.js                   # Greybox API client (NO secret in client code — calls /api/*)
 js/app.js                   # UI
@@ -191,6 +193,20 @@ Invoke-RestMethod http://127.0.0.1:8788/api/admin/collections -Headers $H
 Production: add the `GREYBOX_ADMIN_TOKEN` **secret** (Pages → Settings →
 Environment variables, Production + Preview, "Encrypt"), redeploy. Until
 then, all `/api/admin/*` calls safely return `401`.
+
+### Admin Control Panel (`/admin`, no build step)
+
+`admin.html` + `js/admin.js` (vanilla JS, isolated from the public SPA) manage
+homepage sections, collections, metadata overrides, and the hero setting
+through the management API above — full CRUD plus reorder, visibility
+toggles, and delete confirmations, with per-field validation mirroring the
+backend and a refresh-from-API after every mutation.
+
+Authentication is a **memory-only session**: paste the token once per tab; it
+lives in a single JS variable, is sent as an `Authorization: Bearer` header,
+and is never written to source, git, D1, cookies, `localStorage`,
+`sessionStorage`, or the URL. Reload/Disconnect forgets it. No accounts, no
+server-side sessions (deliberately — nothing to hijack or expire).
 
 ## 6) How playback works (full logic, source slot left blank)
 

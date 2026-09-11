@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Greybox Admin — Control Panel</title>
+<meta name="description" content="Greybox admin control panel. Manage homepage sections, collections, metadata overrides and settings." />
+<meta name="robots" content="noindex, nofollow" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a12' } } } }
+</script>
+<link rel="stylesheet" href="/css/style.css" />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+</head>
+<body class="bg-[#0a0a12] text-zinc-100 min-h-screen">
+<!-- ADMIN NAV (isolated from the public site: no shared JS, no router) -->
+<header class="sticky top-0 z-40 backdrop-blur bg-[#0a0a12]/85 border-b border-amber-500/30">
+  <div class="max-w-5xl mx-auto px-4 py-3 flex items-center gap-3">
+    <img src="/favicon.svg" alt="Greybox" class="w-8 h-8" />
+    <span class="text-xl font-black tracking-tight">Greybox</span>
+    <span class="text-xs font-bold uppercase tracking-widest bg-amber-500/15 text-amber-300 border border-amber-500/40 rounded px-2 py-0.5">Admin</span>
+    <div class="flex-1"></div>
+    <a href="/" class="text-sm text-zinc-300 hover:text-white">← Public site</a>
+    <button id="admin-disconnect" class="hidden text-sm bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg">Disconnect</button>
+  </div>
+  <nav id="admin-tabs" class="hidden max-w-5xl mx-auto px-4 pb-3 flex gap-2 text-sm overflow-x-auto">
+    <button data-atab="sections" class="atab px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 whitespace-nowrap">Home sections</button>
+    <button data-atab="collections" class="atab px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 whitespace-nowrap">Collections</button>
+    <button data-atab="overrides" class="atab px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 whitespace-nowrap">Overrides</button>
+    <button data-atab="settings" class="atab px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 whitespace-nowrap">Settings</button>
+  </nav>
+</header>
+
+<main class="max-w-5xl mx-auto px-4 pb-24">
+  <div id="admin-notice" class="mt-6 text-sm rounded-xl p-4 hidden"></div>
+
+  <!-- CONNECT: token lives in page memory only (a JS variable). It is never
+       written to source, localStorage, sessionStorage, cookies, D1, or the URL. -->
+  <section id="admin-connect" class="mt-8 max-w-lg">
+    <h1 class="text-2xl font-black">Admin sign-in</h1>
+    <p class="mt-2 text-sm text-zinc-400">Paste the <code>GREYBOX_ADMIN_TOKEN</code> server secret to manage Greybox-owned data. It stays in this page's memory only — reload or Disconnect forgets it. Nothing is stored in your browser.</p>
+    <label class="block mt-4 text-xs text-zinc-400" for="admin-token">Admin token</label>
+    <input id="admin-token" type="password" autocomplete="off" placeholder="Paste token…" class="mt-1 w-full bg-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 ring-amber-500" />
+    <div class="mt-3 flex gap-2">
+      <button id="admin-connect-btn" class="bg-amber-500 hover:bg-amber-400 text-black px-5 py-2 rounded-lg font-bold text-sm">Connect</button>
+    </div>
+    <div id="admin-connect-error" class="mt-3 text-sm text-red-300 hidden"></div>
+    <p class="mt-4 text-xs text-zinc-500">No token configured on the server? Ask the site operator to set the <code>GREYBOX_ADMIN_TOKEN</code> Pages secret (see README §5). Until then every request fails closed with 401.</p>
+  </section>
+
+  <!-- DASHBOARD -->
+  <div id="admin-dash" class="hidden">
+    <section id="apanel-sections" class="apanel mt-8">
+      <div class="flex items-end justify-between mb-3">
+        <h2 class="text-xl font-bold">Home sections</h2>
+        <button id="sec-refresh" class="text-sm bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg">Refresh</button>
+      </div>
+      <div id="sec-list" class="grid gap-3"></div>
+      <h3 class="mt-6 font-bold" id="sec-form-title">New section</h3>
+      <form id="sec-form" class="mt-2 grid gap-3 bg-white/5 border border-white/10 rounded-2xl p-4" autocomplete="off"></form>
+    </section>
+
+    <section id="apanel-collections" class="apanel mt-8 hidden">
+      <div class="flex items-end justify-between mb-3">
+        <h2 class="text-xl font-bold">Collections</h2>
+        <button id="col-refresh" class="text-sm bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg">Refresh</button>
+      </div>
+      <div id="col-list" class="grid gap-3"></div>
+      <h3 class="mt-6 font-bold" id="col-form-title">New collection</h3>
+      <form id="col-form" class="mt-2 grid gap-3 bg-white/5 border border-white/10 rounded-2xl p-4" autocomplete="off"></form>
+    </section>
+
+    <section id="apanel-overrides" class="apanel mt-8 hidden">
+      <div class="flex items-end justify-between mb-3">
+        <h2 class="text-xl font-bold">Metadata overrides</h2>
+        <button id="ov-refresh" class="text-sm bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg">Refresh</button>
+      </div>
+      <div id="ov-list" class="grid gap-3"></div>
+      <h3 class="mt-6 font-bold" id="ov-form-title">New override</h3>
+      <form id="ov-form" class="mt-2 grid gap-3 bg-white/5 border border-white/10 rounded-2xl p-4" autocomplete="off"></form>
+    </section>
+
+    <section id="apanel-settings" class="apanel mt-8 hidden">
+      <h2 class="text-xl font-bold mb-3">Settings — homepage hero</h2>
+      <form id="hero-form" class="grid gap-3 bg-white/5 border border-white/10 rounded-2xl p-4" autocomplete="off"></form>
+    </section>
+  </div>
+</main>
+
+<footer class="border-t border-white/10 text-center text-xs text-zinc-500 py-8 px-4">
+  Greybox Admin — changes apply to the live site on save.<br/>
+  <a href="/" class="hover:text-white underline">Back to public site</a>
+</footer>
+
+<script src="/js/admin.js?v=1"></script>
+</body>
+</html>
