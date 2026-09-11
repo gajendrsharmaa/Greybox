@@ -131,12 +131,12 @@ Local D1 development (secret stays server-side via `.dev.vars`):
 
 ```powershell
 npx wrangler d1 create greybox          # once: paste the id into wrangler.toml
-npx wrangler d1 execute greybox --local --file=migrations/0001_schema.sql
-npx wrangler d1 execute greybox --local --file=migrations/0002_seed.sql
+npx wrangler d1 execute greybox-db --local --file=migrations/0001_schema.sql
+npx wrangler d1 execute greybox-db --local --file=migrations/0002_seed.sql
 npx wrangler pages dev .
 # verify: curl /api/config/home, /api/config/collections,
 #         /api/config/collections/science-fiction, /api/config/overrides
-# edit check: wrangler d1 execute greybox --local --command="UPDATE home_sections SET title='X' WHERE id='popular-movies'"
+# edit check: wrangler d1 execute greybox-db --local --command="UPDATE home_sections SET title='X' WHERE id='popular-movies'"
 #             → hard-refresh shows the new title (config cache is ~60s)
 ```
 
@@ -151,7 +151,48 @@ Production (Cloudflare dashboard):
 > Vercel has no D1: the `api/` equivalents are untouched and `/api/config/*`
 > 404s there, so Vercel deploys keep working off the local config files.
 
-## 5) How playback works (full logic, source slot left blank)
+## 5) Management API for Greybox-owned D1 data (no admin UI yet)
+
+Read/write layer for the same D1 tables, behind a server-side bearer-token
+boundary. There is deliberately **no admin dashboard, no accounts, no login
+flow** in this step — just the protected routes a future admin UI will call:
+
+| Routes | Ops |
+|---|---|
+| `/api/admin/collections`, `/api/admin/collections/:slug` | list · read · create (201) · full update · delete (204) |
+| `/api/admin/home-sections`, `/api/admin/home-sections/:id` | list · read · create (201) · full update · delete (204) |
+| `/api/admin/overrides`, `/api/admin/overrides/:media/:id` | list · read · create (201) · replace fields · delete (204) |
+| `/api/admin/settings/home-hero` | read · replace hero setting |
+
+Security model:
+
+- Every `/api/admin/*` route (reads included) calls `requireAdmin()` in
+  `functions/lib/admin.js` **before** touching D1. Missing credentials or an
+  unconfigured server → `401`; wrong token → `403`. Fail-closed by design.
+- The credential is the `GREYBOX_ADMIN_TOKEN` Pages secret (local: uncomment
+  it in `.dev.vars`; it never appears in frontend JS, responses, or git).
+- All bodies are validated by `functions/lib/validate.js` (slugs, media,
+  TMDB ids, string lengths, sort/limit ranges, source-rule shapes mirroring
+  `js/data.js`, override-field allowlist) → `400` on bad input.
+- All SQL is parameterized inside `functions/lib/db.js` — route handlers
+  contain no raw SQL. Errors never leak stacks, SQL, or secrets (`500
+  { error: 'Internal error.' }`).
+- The public site is untouched: `/api/config/*` stays public read-only and
+  the frontend keeps reading D1 exactly as in Step 8.
+
+Local trial (uses a scratch slug/override, then deletes it):
+
+```powershell
+# in .dev.vars, uncomment GREYBOX_ADMIN_TOKEN with a random local value
+$H = @{ Authorization = 'Bearer <your-local-token>' }
+Invoke-RestMethod http://127.0.0.1:8788/api/admin/collections -Headers $H
+```
+
+Production: add the `GREYBOX_ADMIN_TOKEN` **secret** (Pages → Settings →
+Environment variables, Production + Preview, "Encrypt"), redeploy. Until
+then, all `/api/admin/*` calls safely return `401`.
+
+## 6) How playback works (full logic, source slot left blank)
 
 - **Browse/search**: `GET /api/trending`, `/api/movies/popular`, `/api/tv/popular`, `/api/search?q=...` — see `js/app.js:load()`. The Greybox backend (`functions/lib/greybox.js` + `functions/api/*`) calls TMDB internally and returns only the fields the UI needs.
 - **Details**: `GET /api/movie/{id}?region=US` or `/api/tv/{id}?region=US` — one bundle with detail + cast + `trailer_key` (YouTube) + region-filtered `providers` (+ `seasons` for TV). Episodes via `GET /api/tv/{id}/season/{n}` with stills.
@@ -159,7 +200,7 @@ Production (Cloudflare dashboard):
 - **Source slot — change ONE line** (`Stream.EMBED.base` in `js/stream.js`, marked PUT YOUR OFFICIAL API STREAMING LINK HERE): everything derives from it — `{base}/embed/movie/{tmdb_id}` and `{base}/embed/tv/{tmdb_id}/{season}/{episode}`. While it points at `example.com`, Watch buttons show "No stream source configured". Point it only at a host you own or license.
 - **Free films**: `https://archive.org/metadata/{id}` → smallest MP4 → plays through the same engine with resume support.
 
-## 6) Going further (all legal, all Pages-compatible)
+## 7) Going further (all legal, all Pages-compatible)
 
 - Add Cloudflare **D1 + Pages Functions** `/api/mylist` for cross-device watchlists (currently localStorage).
 - Add **Cloudflare Stream** for your uploads; add **Access** if you want logins/paywall.

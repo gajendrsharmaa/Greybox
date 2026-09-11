@@ -127,3 +127,185 @@ export async function readOverrides(db) {
   }
   return out;
 }
+
+/* ---------------- management writes (admin API only — always parameterized) ---------------- */
+
+async function nextSortOrder(db, table) {
+  // Table name is never user input: callers pass a fixed literal.
+  const row = await db
+    .prepare(`SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM ${table}`)
+    .first();
+  return (row && Number.isFinite(row.n)) ? row.n : 0;
+}
+
+function toJson(v) {
+  return JSON.stringify(v == null ? {} : v);
+}
+
+/** Insert a validated collection row ({ slug, title, description, cover, visible, limit, source, pin, exclude, meta, sort_order? }). Throws { status: 409 } on duplicate slug. */
+export async function createCollection(db, c) {
+  const existing = await readCollection(db, c.slug);
+  if (existing) throw { status: 409, message: 'Collection already exists: ' + c.slug };
+  const order = c.sort_order != null ? c.sort_order : await nextSortOrder(db, 'collections');
+  await db
+    .prepare(
+      'INSERT INTO collections (slug, title, description, cover, visible, limit_count, source_json, pin_json, exclude_json, meta_json, sort_order) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    )
+    .bind(
+      c.slug, c.title, c.description || '', c.cover || '', c.visible ? 1 : 0, c.limit,
+      toJson(c.source), JSON.stringify(c.pin || []), JSON.stringify(c.exclude || []),
+      c.meta ? JSON.stringify(c.meta) : null, order,
+    )
+    .run();
+  return readCollection(db, c.slug);
+}
+
+/** Full-update a collection by slug. Returns the stored row, or null if missing. */
+export async function updateCollection(db, slug, c) {
+  const existing = await readCollection(db, slug);
+  if (!existing) return null;
+  let order = c.sort_order;
+  if (order == null) {
+    const cur = await db.prepare('SELECT sort_order AS n FROM collections WHERE slug = ?').bind(slug).first();
+    order = (cur && Number.isFinite(cur.n)) ? cur.n : 0;
+  }
+  await db
+    .prepare(
+      'UPDATE collections SET title = ?, description = ?, cover = ?, visible = ?, ' +
+        'limit_count = ?, source_json = ?, pin_json = ?, exclude_json = ?, meta_json = ?, ' +
+        'sort_order = ?, updated_at = CURRENT_TIMESTAMP WHERE slug = ?',
+    )
+    .bind(
+      c.title, c.description || '', c.cover || '', c.visible ? 1 : 0, c.limit,
+      toJson(c.source), JSON.stringify(c.pin || []), JSON.stringify(c.exclude || []),
+      c.meta ? JSON.stringify(c.meta) : null,
+      order,
+      slug,
+    )
+    .run();
+  return readCollection(db, slug);
+}
+
+function changesOf(out) {
+  // Real D1 reports { success, meta: { changes } }; node:sqlite-style
+  // shims report { changes }. Accept both so tests mirror production.
+  if (out && out.meta && typeof out.meta.changes === 'number') return out.meta.changes;
+  if (out && typeof out.changes === 'number') return out.changes;
+  return 0;
+}
+
+/** Delete a collection by slug. Returns true when a row was removed. */
+export async function deleteCollection(db, slug) {
+  const out = await db.prepare('DELETE FROM collections WHERE slug = ?').bind(slug).run();
+  return changesOf(out) > 0;
+}
+
+/** Single home section by id, or null. */
+export async function readHomeSection(db, id) {
+  const key = String(id || '').trim();
+  if (!key) return null;
+  const row = await db
+    .prepare('SELECT id, title, description, visible, limit_count, source_json FROM home_sections WHERE id = ?')
+    .bind(key)
+    .first();
+  return row ? rowToHomeSection(row) : null;
+}
+
+/** Insert a validated home-section row. Throws { status: 409 } on duplicate id. */
+export async function createHomeSection(db, s) {
+  if (await readHomeSection(db, s.id)) throw { status: 409, message: 'Home section already exists: ' + s.id };
+  const order = s.sort_order != null ? s.sort_order : await nextSortOrder(db, 'home_sections');
+  await db
+    .prepare(
+      'INSERT INTO home_sections (id, title, description, visible, limit_count, source_json, sort_order) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?)',
+    )
+    .bind(s.id, s.title, s.description || '', s.visible ? 1 : 0, s.limit, toJson(s.source), order)
+    .run();
+  return readHomeSection(db, s.id);
+}
+
+/** Full-update a home section by id. Returns the stored row, or null if missing. */
+export async function updateHomeSection(db, id, s) {
+  if (!(await readHomeSection(db, id))) return null;
+  let order = s.sort_order;
+  if (order == null) {
+    const cur = await db.prepare('SELECT sort_order AS n FROM home_sections WHERE id = ?').bind(id).first();
+    order = (cur && Number.isFinite(cur.n)) ? cur.n : 0;
+  }
+  await db
+    .prepare(
+      'UPDATE home_sections SET title = ?, description = ?, visible = ?, ' +
+        'limit_count = ?, source_json = ?, sort_order = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+    )
+    .bind(s.title, s.description || '', s.visible ? 1 : 0, s.limit, toJson(s.source), order, id)
+    .run();
+  return readHomeSection(db, id);
+}
+
+/** Delete a home section by id. Returns true when a row was removed. */
+export async function deleteHomeSection(db, id) {
+  const out = await db.prepare('DELETE FROM home_sections WHERE id = ?').bind(id).run();
+  return changesOf(out) > 0;
+}
+
+/** Single override by (media, tmdb_id): `{ tmdb_id, media, ...fields }`, or null. */
+export async function readOverride(db, media, tmdbId) {
+  if ((media !== 'movie' && media !== 'tv') || !(tmdbId > 0)) return null;
+  const row = await db
+    .prepare('SELECT media, tmdb_id, fields_json FROM overrides WHERE media = ? AND tmdb_id = ?')
+    .bind(media, tmdbId)
+    .first();
+  if (!row) return null;
+  const fields = parseJson(row.fields_json, null);
+  if (!fields || typeof fields !== 'object' || Array.isArray(fields)) return null;
+  return { tmdb_id: row.tmdb_id, media: row.media, ...fields };
+}
+
+/** Insert an override ({ media, tmdb_id, fields }). Throws { status: 409 } on duplicate. */
+export async function createOverride(db, o) {
+  if (await readOverride(db, o.media, o.tmdb_id)) {
+    throw { status: 409, message: 'Override already exists: ' + o.media + ':' + o.tmdb_id };
+  }
+  await db
+    .prepare('INSERT INTO overrides (media, tmdb_id, fields_json) VALUES (?, ?, ?)')
+    .bind(o.media, o.tmdb_id, JSON.stringify(o.fields))
+    .run();
+  return readOverride(db, o.media, o.tmdb_id);
+}
+
+/** Replace an override's fields. Returns the stored row, or null if missing. */
+export async function updateOverride(db, media, tmdbId, fields) {
+  if (!(await readOverride(db, media, tmdbId))) return null;
+  await db
+    .prepare('UPDATE overrides SET fields_json = ?, updated_at = CURRENT_TIMESTAMP WHERE media = ? AND tmdb_id = ?')
+    .bind(JSON.stringify(fields), media, tmdbId)
+    .run();
+  return readOverride(db, media, tmdbId);
+}
+
+/** Delete an override. Returns true when a row was removed. */
+export async function deleteOverride(db, media, tmdbId) {
+  const out = await db
+    .prepare('DELETE FROM overrides WHERE media = ? AND tmdb_id = ?')
+    .bind(media, tmdbId)
+    .run();
+  return changesOf(out) > 0;
+}
+
+/** Raw setting value (parsed JSON) by key, or null when absent/unparseable. */
+export async function readSetting(db, key) {
+  const row = await db.prepare('SELECT value_json FROM settings WHERE key = ?').bind(key).first();
+  if (!row) return null;
+  return parseJson(row.value_json, null);
+}
+
+/** Upsert a setting value (plain JSON object). Returns the stored value. */
+export async function writeSetting(db, key, value) {
+  await db
+    .prepare('INSERT INTO settings (key, value_json) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = CURRENT_TIMESTAMP')
+    .bind(key, JSON.stringify(value == null ? {} : value))
+    .run();
+  return readSetting(db, key);
+}

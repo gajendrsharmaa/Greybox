@@ -1,3 +1,7 @@
 # Local dev secrets — NEVER commit the real file. Copy to `.dev.vars` (gitignored).
 # `wrangler pages dev` loads this automatically.
 TMDB_READ_TOKEN="paste-your-tmdb-v4-read-token-here"
+# Local-only admin token for the /api/admin/* management routes (Step 9).
+# Any random value works locally, e.g. output of: openssl rand -hex 32
+# Production equivalent: Pages project → Settings → Environment variables → GREYBOX_ADMIN_TOKEN (secret).
+# GREYBOX_ADMIN_TOKEN="paste-a-local-only-random-token-here"
