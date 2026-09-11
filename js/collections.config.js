@@ -32,6 +32,10 @@
  *       // every filter is optional — { type: 'discover', media: 'tv' } lists popular TV
  *   { type: 'genre', media: 'movie'|'tv', genreId: 878, sort: 'popularity.desc' }
  *       // shorthand for discover with a genre
+ *   { type: 'genre', media: 'both',
+ *     genre: { name: 'Horror', movie_id: 27, tv_id: 9648 }, sort: 'popularity.desc' }
+ *       // Movies + TV shelf: one genre ID per TMDB list (movie and TV genre
+ *       // IDs differ, so each side carries its own — never reuse one ID)
  *   { type: 'year', media: 'movie'|'tv', year: 1999, sort: 'popularity.desc' }
  *       // shorthand for discover with a release year
  *   { type: 'search', query: 'dune' }                            // TMDB text search

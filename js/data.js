@@ -475,10 +475,27 @@
       }
       clean.sort = (typeof src.sort === 'string' && src.sort.trim()) ? src.sort.trim() : 'popularity.desc';
     } else if (type === 'genre') {
-      if (!parseId(src.genreId)) { console.warn('[collections] genre source needs genreId:', slug); return null; }
-      clean.media = mediaOr('movie');
-      clean.genreId = parseId(src.genreId);
-      clean.sort = (typeof src.sort === 'string' && src.sort.trim()) ? src.sort.trim() : 'popularity.desc';
+      // Genre shelves: single-media (movie/tv + genreId) or combined
+      // Movies + TV (media 'both' + genre { name, movie_id, tv_id }).
+      // TMDB keeps separate movie and TV genre lists with different IDs,
+      // so each side carries its own ID — never reuse one ID for both.
+      // Single-media shape stays exactly as before for backwards compat.
+      if (src.media === 'both') {
+        const g = (src.genre && typeof src.genre === 'object' && !Array.isArray(src.genre)) ? src.genre : null;
+        if (!g) { console.warn('[collections] genre both needs genre { name, movie_id, tv_id }:', slug); return null; }
+        const mid = parseId(g.movie_id);
+        const tid = parseId(g.tv_id);
+        if (!mid || !tid) { console.warn('[collections] genre both needs valid movie_id + tv_id:', slug); return null; }
+        const gname = (typeof g.name === 'string' && g.name.trim()) ? g.name.trim().slice(0, 64) : '';
+        clean.media = 'both';
+        clean.genre = { name: gname || 'Genre', movie_id: mid, tv_id: tid };
+        clean.sort = (typeof src.sort === 'string' && src.sort.trim()) ? src.sort.trim() : 'popularity.desc';
+      } else {
+        if (!parseId(src.genreId)) { console.warn('[collections] genre source needs genreId:', slug); return null; }
+        clean.media = mediaOr('movie');
+        clean.genreId = parseId(src.genreId);
+        clean.sort = (typeof src.sort === 'string' && src.sort.trim()) ? src.sort.trim() : 'popularity.desc';
+      }
     } else if (type === 'year') {
       if (!/^\d{4}$/.test(String(src.year == null ? '' : src.year).trim())) { console.warn('[collections] year source needs year:', slug); return null; }
       const y = parseInt(String(src.year).trim(), 10);
@@ -632,6 +649,31 @@
       return fetchPaged((p) => getDiscover({ ...o, page: p }), cap).then((results) => ({ results }));
     }
     if (src.type === 'genre') {
+      // Movies + TV: fetch /discover/movie (movie genre) and /discover/tv
+      // (TV genre) separately through the same Greybox fetchers, then
+      // interleave round-robin while preserving each item's media_type so
+      // movie cards still link to /movie/:id and TV cards to /tv/:id.
+      if (src.media === 'both' && src.genre && typeof src.genre === 'object') {
+        const mid = parseId(src.genre.movie_id);
+        const tid = parseId(src.genre.tv_id);
+        if (!mid || !tid) return Promise.reject(new Error('Invalid genre both source'));
+        const sort = src.sort || 'popularity.desc';
+        return Promise.all([
+          fetchPaged((p) => getByGenre('movie', mid, p, sort), cap),
+          fetchPaged((p) => getByGenre('tv', tid, p, sort), cap),
+        ]).then(([movies, shows]) => {
+          const a = Array.isArray(movies) ? movies : [];
+          const b = Array.isArray(shows) ? shows : [];
+          const out = [];
+          const n = Math.max(a.length, b.length);
+          for (let i = 0; i < n; i++) {
+            if (a[i]) out.push({ ...a[i], media_type: 'movie' });
+            if (b[i]) out.push({ ...b[i], media_type: 'tv' });
+            if (out.length >= cap) break;
+          }
+          return { results: out.slice(0, cap) };
+        });
+      }
       return fetchPaged((p) => getByGenre(src.media, src.genreId, p, src.sort), cap)
         .then((results) => ({ results }));
     }

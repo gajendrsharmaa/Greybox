@@ -28,6 +28,7 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
     <button data-atab="sections" class="atab px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 whitespace-nowrap">Home sections</button>
     <button data-atab="collections" class="atab px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 whitespace-nowrap">Collections</button>
     <button data-atab="overrides" class="atab px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 whitespace-nowrap">Overrides</button>
+    <button data-atab="search" class="atab px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 whitespace-nowrap">TMDB Search</button>
     <button data-atab="settings" class="atab px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 whitespace-nowrap">Settings</button>
   </nav>
 </header>
@@ -81,6 +82,14 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
       <form id="ov-form" class="mt-2 grid gap-3 bg-white/5 border border-white/10 rounded-2xl p-4" autocomplete="off"></form>
     </section>
 
+    <section id="apanel-search" class="apanel mt-8 hidden">
+      <div class="flex items-end justify-between mb-3">
+        <h2 class="text-xl font-bold">TMDB Search</h2>
+      </div>
+      <form id="tmdb-search-form" class="grid gap-3 bg-white/5 border border-white/10 rounded-2xl p-4" autocomplete="off"></form>
+      <div id="tmdb-search-list" class="grid gap-3 mt-3"></div>
+    </section>
+
     <section id="apanel-settings" class="apanel mt-8 hidden">
       <h2 class="text-xl font-bold mb-3">Settings — homepage hero</h2>
       <form id="hero-form" class="grid gap-3 bg-white/5 border border-white/10 rounded-2xl p-4" autocomplete="off"></form>
@@ -93,6 +102,6 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
   <a href="/" class="hover:text-white underline">Back to public site</a>
 </footer>
 
-<script src="/js/admin.js?v=1"></script>
+<script src="/js/admin.js?v=2"></script>
 </body>
 </html>

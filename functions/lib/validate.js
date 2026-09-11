@@ -201,9 +201,24 @@ export function validateCollectionSource(src) {
     }
     clean.sort = validateSort(src.sort, 'source');
   } else if (type === 'genre') {
-    clean.media = mediaOr('movie');
-    clean.genreId = validateGenreId(src.genreId, 'source');
-    clean.sort = validateSort(src.sort, 'source');
+    // Single-media stays exactly as before. Combined Movies + TV uses
+    // media 'both' + genre { name, movie_id, tv_id } because TMDB keeps
+    // separate movie and TV genre lists with different IDs.
+    if (src.media === 'both') {
+      if (!isObj(src.genre)) fail('source.genre must be { name, movie_id, tv_id } for media both');
+      const name = typeof src.genre.name === 'string' ? src.genre.name.trim() : '';
+      if (!name) fail('source.genre.name is required for media both');
+      if (name.length > 64) fail('source.genre.name must be at most 64 characters');
+      const movieId = validateGenreId(src.genre.movie_id, 'source.genre.movie_id');
+      const tvId = validateGenreId(src.genre.tv_id, 'source.genre.tv_id');
+      clean.media = 'both';
+      clean.genre = { name, movie_id: movieId, tv_id: tvId };
+      clean.sort = validateSort(src.sort, 'source');
+    } else {
+      clean.media = mediaOr('movie');
+      clean.genreId = validateGenreId(src.genreId, 'source');
+      clean.sort = validateSort(src.sort, 'source');
+    }
   } else if (type === 'year') {
     clean.media = mediaOr('movie');
     clean.year = validateYear(src.year, 'source');

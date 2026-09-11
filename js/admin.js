@@ -147,7 +147,20 @@
     if (allowed.indexOf(src.type) < 0) return 'unknown source type: ' + src.type;
     const t = src.type;
     if (t === 'search' && !String(src.query || '').trim()) return 'search needs a query';
-    if ((t === 'genre') && !(parseInt(src.genreId, 10) > 0)) return 'genre needs a genreId';
+    if (t === 'genre') {
+      // Collections allow combined Movies + TV (media 'both' + genre object
+      // because TMDB movie and TV genre IDs differ). Home/hero stay
+      // single-media only (server validateHomeSource rejects 'both').
+      const isCollection = allowed.indexOf('discover') >= 0;
+      if (isCollection && src.media === 'both') {
+        if (!src.genre || typeof src.genre !== 'object') return 'genre needs a movie + TV genre selection';
+        if (!(parseInt(src.genre.movie_id, 10) > 0) || !(parseInt(src.genre.tv_id, 10) > 0)) return 'genre needs both a movie genre and a TV genre';
+        if (!String(src.genre.name || '').trim()) return 'genre needs a name';
+        return null;
+      }
+      if (src.media != null && src.media !== 'movie' && src.media !== 'tv') return "media must be 'movie' or 'tv'";
+      if (!(parseInt(src.genreId, 10) > 0)) return 'genre needs a genreId';
+    }
     if (t === 'year' && !/^\d{4}$/.test(String(src.year || '').trim())) return 'year must be YYYY';
     if ((t === 'ids' || t === 'custom') && (!Array.isArray(src.items) || !src.items.length)) return 'source needs at least one item';
     if (t === 'movies' && HOME_MOVIE_CATS.indexOf(String(src.category || 'popular').toLowerCase()) < 0 && allowed === HOME_SOURCE_TYPES) return 'unknown movies category';
@@ -191,7 +204,14 @@
     if (src.media) bits.push(src.media);
     if (src.query) bits.push('“' + src.query + '”');
     if (src.genreId != null) bits.push('genre ' + src.genreId);
-    if (src.genre != null) bits.push('genre ' + src.genre);
+    if (src.genre != null) {
+      if (typeof src.genre === 'object' && src.genre !== null) {
+        const nm = src.genre.name ? src.genre.name + ' ' : '';
+        bits.push('genre ' + nm + '(' + src.genre.movie_id + '/' + src.genre.tv_id + ')');
+      } else {
+        bits.push('genre ' + src.genre);
+      }
+    }
     if (src.year != null) bits.push(String(src.year));
     if (Array.isArray(src.items)) bits.push(src.items.length + ' ids');
     if (src.sort && src.sort !== 'popularity.desc') bits.push(src.sort);
@@ -275,6 +295,51 @@
   const BTN_GO = 'bg-amber-500 hover:bg-amber-400 text-black font-bold';
   const BTN_DANGER = 'bg-red-600/80 hover:bg-red-600';
 
+  /* ---------------- TMDB genre lists (via existing server-side proxy) ---------------- */
+  // Genre names/IDs always come from TMDB through the same /api/tmdb/*
+  // proxy the public site uses (secret stays server-side). Nothing is
+  // hardcoded here: movie and TV lists are fetched separately because
+  // TMDB IDs differ between the two lists.
+  const GENRE_CACHE = { movie: null, tv: null };
+  const GENRE_PENDING = { movie: null, tv: null };
+
+  function fetchGenres(media) {
+    const mt = media === 'tv' ? 'tv' : 'movie';
+    if (GENRE_CACHE[mt]) return Promise.resolve(GENRE_CACHE[mt]);
+    if (GENRE_PENDING[mt]) return GENRE_PENDING[mt];
+    const p = fetch('/api/tmdb/genre/' + mt + '/list?language=en-US', { headers: { accept: 'application/json' } })
+      .then((r) => {
+        if (!r.ok) throw new Error('Genre list failed (' + r.status + ')');
+        return r.json();
+      })
+      .then((d) => {
+        const list = Array.isArray(d && d.genres) ? d.genres : [];
+        const clean = list
+          .filter((g) => g && Number.isInteger(g.id) && g.id > 0 && typeof g.name === 'string' && g.name.trim())
+          .map((g) => ({ id: g.id, name: g.name.trim() }))
+          .sort((a, b) => a.name.localeCompare(b.name));
+        if (!clean.length) throw new Error('Genre list empty');
+        GENRE_CACHE[mt] = clean;
+        GENRE_PENDING[mt] = null;
+        return clean;
+      })
+      .catch((e) => {
+        GENRE_PENDING[mt] = null;
+        throw e;
+      });
+    GENRE_PENDING[mt] = p;
+    return p;
+  }
+
+  function genreName(media, id) {
+    const mt = media === 'tv' ? 'tv' : 'movie';
+    const list = GENRE_CACHE[mt];
+    if (!list) return '';
+    const n = parseInt(id, 10);
+    const found = list.find((g) => g.id === n);
+    return found ? found.name : '';
+  }
+
   /* ---------------- source sub-form (shared by sections, collections, hero) ---------------- */
 
   // Renders type-specific inputs for a rule source into `host`. `prefix`
@@ -306,9 +371,92 @@
         const lines = Array.isArray(s.items) ? s.items.map((it) => (it && typeof it === 'object' ? it.media + ':' + it.id : it)).join('\n') : '';
         sub.appendChild(fieldRow(t === 'custom' ? 'Items (one per line: media:id or bare movie id)' : 'Items (one per line: media:id)', areaInput(prefix + '-items', lines, 'movie:550\ntv:1399', 4)));
       } else if (t === 'genre') {
-        sub.appendChild(fieldRow('Media', selectInput(prefix + '-media', [['movie', 'movie'], ['tv', 'tv']], val('media', 'movie'))));
-        sub.appendChild(fieldRow('Genre ID', numInput(prefix + '-genreId', val('genreId', ''), '878')));
+        // Genre collections: Media (Movies / TV Shows / Movies + TV Shows for
+        // collections) + Genre dropdown(s) populated live from TMDB through
+        // the existing /api/tmdb proxy (no hardcoded IDs, no token in the
+        // browser). TMDB movie and TV genre lists differ, so Movies + TV
+        // keeps one ID per list. Single-media keeps the historic genreId
+        // shape so existing collections reload unchanged.
+        const isCollection = allowed.indexOf('discover') >= 0;
+        const mediaOpts = isCollection
+          ? [['movie', 'Movies'], ['tv', 'TV Shows'], ['both', 'Movies + TV Shows']]
+          : [['movie', 'Movies'], ['tv', 'TV Shows']];
+        let curMedia = val('media', 'movie');
+        if (curMedia !== 'movie' && curMedia !== 'tv' && curMedia !== 'both') curMedia = 'movie';
+        if (!isCollection && curMedia === 'both') curMedia = 'movie';
+        const mediaSel = selectInput(prefix + '-media', mediaOpts, curMedia);
+        sub.appendChild(fieldRow('Media', mediaSel));
+        const genreHost = el('div', 'grid gap-3');
+        sub.appendChild(genreHost);
         sub.appendChild(fieldRow('Sort', textInput(prefix + '-sort', val('sort', 'popularity.desc'), 'popularity.desc')));
+        let genreGen = 0;
+        const paintGenres = () => {
+          const myGen = ++genreGen;
+          const m = mediaSel.value;
+          genreHost.innerHTML = '';
+          if (m === 'both' && isCollection) {
+            let bothMovieId = (s.genre && typeof s.genre === 'object' && s.genre.movie_id) ? String(s.genre.movie_id) : '';
+            let bothTvId = (s.genre && typeof s.genre === 'object' && s.genre.tv_id) ? String(s.genre.tv_id) : '';
+            // Preserve a single-media edit when flipping to Movies + TV.
+            if (!bothMovieId && s.genreId) bothMovieId = String(s.genreId);
+            if (!bothTvId && s.genreId && s.media === 'tv') bothTvId = String(s.genreId);
+            const movieWrap = el('div', '');
+            const tvWrap = el('div', '');
+            movieWrap.appendChild(el('span', 'block text-xs text-zinc-400 mb-1', 'Movie genre (TMDB movie list)'));
+            tvWrap.appendChild(el('span', 'block text-xs text-zinc-400 mb-1', 'TV genre (TMDB TV list — IDs differ)'));
+            const mLoad = el('p', 'text-xs text-zinc-500', 'Loading movie genres…');
+            const tLoad = el('p', 'text-xs text-zinc-500', 'Loading TV genres…');
+            movieWrap.appendChild(mLoad);
+            tvWrap.appendChild(tLoad);
+            genreHost.appendChild(movieWrap);
+            genreHost.appendChild(tvWrap);
+            genreHost.appendChild(el('p', 'text-xs text-zinc-500', 'Movies fetch /discover/movie, TV fetch /discover/tv, then combine. Movies link to /movie/:id, TV to /tv/:id.'));
+            Promise.all([fetchGenres('movie'), fetchGenres('tv')]).then(
+              ([movieList, tvList]) => {
+                if (myGen !== genreGen) return;
+                movieWrap.innerHTML = '';
+                tvWrap.innerHTML = '';
+                movieWrap.appendChild(el('span', 'block text-xs text-zinc-400 mb-1', 'Movie genre (TMDB movie list)'));
+                tvWrap.appendChild(el('span', 'block text-xs text-zinc-400 mb-1', 'TV genre (TMDB TV list — IDs differ)'));
+                const mSel = selectInput(prefix + '-genreMovie', movieList.map((g) => [String(g.id), g.name]), bothMovieId || String((movieList[0] && movieList[0].id) || ''));
+                const tSel = selectInput(prefix + '-genreTv', tvList.map((g) => [String(g.id), g.name]), bothTvId || String((tvList[0] && tvList[0].id) || ''));
+                movieWrap.appendChild(mSel);
+                tvWrap.appendChild(tSel);
+              },
+              () => {
+                if (myGen !== genreGen) return;
+                movieWrap.innerHTML = '';
+                tvWrap.innerHTML = '';
+                movieWrap.appendChild(el('span', 'block text-xs text-zinc-400 mb-1', 'Movie genre ID (list unavailable — check backend TMDB setup)'));
+                tvWrap.appendChild(el('span', 'block text-xs text-zinc-400 mb-1', 'TV genre ID'));
+                movieWrap.appendChild(numInput(prefix + '-genreMovie', bothMovieId, '27'));
+                tvWrap.appendChild(numInput(prefix + '-genreTv', bothTvId, '9648'));
+              }
+            );
+          } else {
+            const mt = m === 'tv' ? 'tv' : 'movie';
+            let existingId = val('genreId', '');
+            if ((existingId === '' || existingId == null) && s.media === 'both' && s.genre && typeof s.genre === 'object') {
+              existingId = mt === 'tv' ? s.genre.tv_id : s.genre.movie_id;
+            }
+            genreHost.appendChild(el('p', 'text-xs text-zinc-500', 'Loading genres from TMDB…'));
+            fetchGenres(mt).then(
+              (list) => {
+                if (myGen !== genreGen) return;
+                genreHost.innerHTML = '';
+                const sel = selectInput(prefix + '-genreId', list.map((g) => [String(g.id), g.name]), String(existingId || (list[0] && list[0].id) || ''));
+                genreHost.appendChild(fieldRow('Genre (TMDB ' + mt + ' list)', sel));
+              },
+              () => {
+                if (myGen !== genreGen) return;
+                genreHost.innerHTML = '';
+                genreHost.appendChild(fieldRow('Genre ID (list unavailable — check backend TMDB setup)', numInput(prefix + '-genreId', existingId, '27')));
+              }
+            );
+          }
+        };
+        mediaSel.onchange = paintGenres;
+        paintGenres();
       } else if (t === 'discover') {
         sub.appendChild(fieldRow('Media', selectInput(prefix + '-media', [['movie', 'movie'], ['tv', 'tv']], val('media', 'movie'))));
         sub.appendChild(fieldRow('Genre ID (optional)', numInput(prefix + '-genre', val('genre', ''), '878')));
@@ -327,6 +475,8 @@
   // Reads the inputs rendered by renderSourceFields back into a source object.
   // Numbers stay empty-string when blank (server applies defaults); the
   // items textarea is parsed strictly — throws { message } on bad lines.
+  // Genre Movies + TV (media 'both') reads the two dropdowns into
+  // genre { name, movie_id, tv_id }; single-media keeps genreId.
   function readSource(prefix) {
     const v = (id) => { const n = document.getElementById(id); return n ? n.value : ''; };
     const type = v(prefix + '-type');
@@ -340,8 +490,13 @@
     if (document.getElementById(prefix + '-kind')) src.kind = v(prefix + '-kind');
     if (document.getElementById(prefix + '-query')) src.query = v(prefix + '-query');
     if (document.getElementById(prefix + '-sort')) { const s = v(prefix + '-sort'); if (s.trim()) src.sort = s.trim(); }
-    if (document.getElementById(prefix + '-genreId')) { const n = numOrEmpty(v(prefix + '-genreId')); if (n !== '') src.genreId = n; }
-    if (document.getElementById(prefix + '-genre')) { const n = numOrEmpty(v(prefix + '-genre')); if (n !== '') src.genre = n; }
+    if (document.getElementById(prefix + '-genreMovie') && document.getElementById(prefix + '-genreTv')) {
+      const mid = parseInt(String(v(prefix + '-genreMovie') || '').trim(), 10);
+      const tid = parseInt(String(v(prefix + '-genreTv') || '').trim(), 10);
+      const mName = genreName('movie', mid) || genreName('tv', tid) || '';
+      src.genre = { name: (mName || 'Genre').slice(0, 64), movie_id: mid, tv_id: tid };
+    } else if (document.getElementById(prefix + '-genreId')) { const n = numOrEmpty(v(prefix + '-genreId')); if (n !== '') src.genreId = n; }
+    if (document.getElementById(prefix + '-genre') && !src.genre) { const n = numOrEmpty(v(prefix + '-genre')); if (n !== '') src.genre = n; }
     if (document.getElementById(prefix + '-year')) { const n = numOrEmpty(v(prefix + '-year')); if (n !== '') src.year = n; }
     if (document.getElementById(prefix + '-items')) {
       const parsed = parseEntryLines(v(prefix + '-items'));
@@ -515,6 +670,92 @@
     }
   }
 
+  /* ---------------- Greybox Picks (override-based, no new database) ---------------- */
+  // A "Greybox Pick" is just an override with featured=true + custom_badge.
+  // Collection membership (custom items) and Pick status (overrides) stay
+  // separate: toggling a Pick only calls /api/admin/overrides, never the
+  // collections API — so unmarking never removes the title from Editor's
+  // Picks, and editing a collection never deletes its overrides.
+  const PICK_BADGE = 'Greybox Pick';
+  let ovCache = null; // last GET /api/admin/overrides list (shared by both tabs)
+
+  function isGreyboxPick(entry) {
+    return !!entry && entry.custom_badge === PICK_BADGE;
+  }
+
+  function findCachedOverride(media, id) {
+    if (!Array.isArray(ovCache)) return null;
+    const n = parseInt(id, 10);
+    return ovCache.find((o) => o && o.media === media && o.tmdb_id === n) || null;
+  }
+
+  function validPickTarget(media, id) {
+    if (media !== 'movie' && media !== 'tv') throw { message: "Media must be 'movie' or 'tv'." };
+    const n = typeof id === 'number' ? id : parseInt(String(id), 10);
+    if (!Number.isInteger(n) || n < 1 || n > 2147483647) throw { message: 'TMDB ID must be a positive integer.' };
+    return { media, id: n };
+  }
+
+  async function readOverrideRow(media, id) {
+    try {
+      return await api(API.overrides + '/' + encodeURIComponent(media) + '/' + encodeURIComponent(id));
+    } catch (e) {
+      if (e && (e.status === 404)) return null;
+      throw e;
+    }
+  }
+
+  // Mark via existing endpoints only: POST when no row, PUT (preserving all
+  // other override fields) when one exists. Never touches collections.
+  async function markGreyboxPick(media, id) {
+    const t = validPickTarget(media, id);
+    const existing = await readOverrideRow(t.media, t.id);
+    if (existing) {
+      const { media: _m, tmdb_id: _i, ...rest } = existing;
+      const updated = await api(API.overrides + '/' + t.media + '/' + t.id, {
+        method: 'PUT',
+        body: { media: t.media, tmdb_id: t.id, ...rest, featured: true, custom_badge: PICK_BADGE },
+      });
+      ovCache = null;
+      return updated;
+    }
+    const created = await api(API.overrides, {
+      method: 'POST',
+      body: { media: t.media, tmdb_id: t.id, featured: true, custom_badge: PICK_BADGE },
+    });
+    ovCache = null;
+    return created;
+  }
+
+  // Unmark via existing endpoints only: PUT remaining fields when others
+  // exist, DELETE when Pick fields were the only ones. Never touches
+  // collections, so the title stays in Editor's Picks.
+  async function unmarkGreyboxPick(media, id, known) {
+    const t = validPickTarget(media, id);
+    const existing = (known && typeof known === 'object') ? known : await readOverrideRow(t.media, t.id);
+    if (!existing) throw { message: 'Not marked as Greybox Pick.' };
+    const { media: _m, tmdb_id: _i, featured: _f, custom_badge: _b, ...remaining } = existing;
+    let done;
+    if (Object.keys(remaining).length === 0) {
+      await api(API.overrides + '/' + t.media + '/' + t.id, { method: 'DELETE' });
+      done = null;
+    } else {
+      done = await api(API.overrides + '/' + t.media + '/' + t.id, {
+        method: 'PUT',
+        body: { media: t.media, tmdb_id: t.id, ...remaining },
+      });
+    }
+    ovCache = null;
+    return done;
+  }
+
+  async function toggleGreyboxPick(media, id, known) {
+    const t = validPickTarget(media, id);
+    const existing = (known && typeof known === 'object') ? known : (findCachedOverride(t.media, t.id) || await readOverrideRow(t.media, t.id));
+    if (isGreyboxPick(existing)) return unmarkGreyboxPick(t.media, t.id, existing);
+    return markGreyboxPick(t.media, t.id);
+  }
+
   /* ================= COLLECTIONS ================= */
   let colEditing = null;
 
@@ -616,6 +857,14 @@
     host.innerHTML = '<div class="inline-loader"><span class="spinner"></span> Loading collections…</div>';
     try {
       const list = await api(API.collections);
+      // Pick states come from the existing overrides endpoint (shared cache).
+      // A failure here must not break the collections list itself.
+      try {
+        ovCache = await api(API.overrides);
+      } catch (ovErr) {
+        if (ovErr && (ovErr.status === 401 || ovErr.status === 403)) throw ovErr;
+        ovCache = null;
+      }
       host.innerHTML = '';
       if (!list.length) host.appendChild(el('p', 'text-sm text-zinc-500', 'No collections yet. Create one below.'));
       list.forEach((c, i) => {
@@ -633,6 +882,41 @@
         a.rel = 'noopener';
         links.appendChild(a);
         card.appendChild(links);
+        // Custom collections (e.g. Editor's Picks) list exact titles, so each
+        // item gets a one-click Pick toggle using its existing media:id —
+        // no manual TMDB ID entry. This only calls the overrides API.
+        if (c.source && c.source.type === 'custom' && Array.isArray(c.source.items) && c.source.items.length) {
+          const pickWrap = el('div', 'mt-2 flex items-start gap-2 flex-wrap');
+          pickWrap.appendChild(el('span', 'text-xs text-zinc-500', 'Greybox Picks:'));
+          c.source.items.forEach((it) => {
+            const media = it && it.media === 'tv' ? 'tv' : 'movie';
+            const id = it && parseInt(it.id, 10);
+            if (!Number.isInteger(id) || id < 1) return;
+            const known = findCachedOverride(media, id);
+            const marked = isGreyboxPick(known);
+            const b = el('button', 'text-xs px-2 py-1 rounded-lg ' + (marked ? 'bg-amber-500 text-black font-bold' : BTN),
+              (marked ? '★ ' : '☆ ') + media + ':' + id);
+            b.type = 'button';
+            b.title = marked ? 'Unmark Greybox Pick (keeps it in this collection)' : 'Mark as Greybox Pick';
+            b.onclick = async () => {
+              b.disabled = true;
+              try {
+                await toggleGreyboxPick(media, id, findCachedOverride(media, id));
+                ovCache = await api(API.overrides);
+                notice('ok', marked ? ('Unmarked ' + media + ':' + id + ' (still in collection).') : ('Marked ' + media + ':' + id + ' as Greybox Pick.'));
+                await loadCollections();
+              } catch (e) {
+                b.disabled = false;
+                notice('err', (e && e.message) || e);
+              }
+            };
+            pickWrap.appendChild(b);
+          });
+          if (ovCache === null) {
+            pickWrap.appendChild(el('span', 'text-xs text-zinc-500', '(pick states unavailable — overrides failed to load)'));
+          }
+          card.appendChild(pickWrap);
+        }
         card.appendChild(rowButtons([
           ['Edit', BTN, () => fillCollectionForm(c)],
           [c.visible === false ? 'Show' : 'Hide', BTN, () => toggleCollection(c)],
@@ -725,11 +1009,21 @@
         f.appendChild(fieldRow(k + ' (optional)', textInput('o-' + k, '', '')));
       }
     }
-    const hint = el('p', 'text-xs text-zinc-500', 'Only filled fields are stored — clearing a field removes that override. Editing replaces all fields.');
+    const hint = el('p', 'text-xs text-zinc-500', 'Only filled fields are stored — clearing a field removes that override. Editing replaces all fields. Tip: use “Fill Greybox Pick” for featured + badge without typing them.');
     f.appendChild(hint);
-    const row = el('div', 'flex gap-2');
+    const row = el('div', 'flex gap-2 flex-wrap');
     const save = el('button', BTN_GO + ' px-5 py-2 rounded-lg text-sm', 'Save override');
     save.type = 'submit';
+    const pickFill = el('button', BTN + ' px-4 py-2 rounded-lg text-sm', '★ Fill Greybox Pick');
+    pickFill.type = 'button';
+    pickFill.title = 'Set featured + custom_badge without typing them';
+    pickFill.onclick = () => {
+      const feat = document.getElementById('o-featured');
+      const badge = document.getElementById('o-custom_badge');
+      if (feat) feat.checked = true;
+      if (badge) badge.value = PICK_BADGE;
+    };
+    row.appendChild(pickFill);
     const cancel = el('button', BTN + ' px-4 py-2 rounded-lg text-sm hidden', 'Cancel');
     cancel.type = 'button';
     cancel.id = 'o-cancel';
@@ -788,6 +1082,7 @@
     host.innerHTML = '<div class="inline-loader"><span class="spinner"></span> Loading overrides…</div>';
     try {
       const list = await api(API.overrides);
+      ovCache = list;
       host.innerHTML = '';
       if (!list.length) host.appendChild(el('p', 'text-sm text-zinc-500', 'No overrides yet. Create one below — TMDB stays the fallback for everything else.'));
       for (const o of list) {
@@ -795,10 +1090,13 @@
         const card = el('div', 'bg-white/5 border border-white/10 rounded-2xl p-4');
         const head = el('div', 'flex items-center gap-2 flex-wrap');
         head.appendChild(el('span', 'font-bold font-mono', o.media + ':' + o.tmdb_id));
+        if (isGreyboxPick(o)) head.appendChild(el('span', 'text-xs bg-amber-500 text-black font-bold px-2 py-0.5 rounded', '★ Greybox Pick'));
         head.appendChild(el('span', 'text-xs text-zinc-500', keys.join(', ') || '(no fields)'));
         card.appendChild(head);
+        const marked = isGreyboxPick(o);
         card.appendChild(rowButtons([
           ['Edit', BTN, () => fillOverrideForm(o)],
+          [marked ? '☆ Unmark Pick' : '★ Mark Pick', BTN, () => togglePickFromOverrides(o)],
           ['Delete', BTN_DANGER, () => deleteOverride(o)],
         ]));
         host.appendChild(card);
@@ -806,6 +1104,18 @@
     } catch (e) {
       host.innerHTML = '';
       notice('err', 'Overrides failed to load: ' + (e.message || e));
+    }
+  }
+
+  async function togglePickFromOverrides(o) {
+    try {
+      await toggleGreyboxPick(o.media, o.tmdb_id, o);
+      notice('ok', isGreyboxPick(o)
+        ? ('Unmarked ' + o.media + ':' + o.tmdb_id + ' (other override fields kept).')
+        : ('Marked ' + o.media + ':' + o.tmdb_id + ' as Greybox Pick.'));
+      await loadOverrides();
+    } catch (e) {
+      notice('err', (e && e.message) || e);
     }
   }
 
@@ -834,7 +1144,253 @@
       notice('ok', 'Override deleted.');
       await loadOverrides();
     } catch (e) {
-      notice('err', e.message || e);
+      notice('err', (e.message || e));
+    }
+  }
+
+  /* ================= TMDB SEARCH (admin helper, existing systems only) ================= */
+  // Title search for the operator: queries TMDB through the existing public
+  // /api/tmdb proxy (no token in the browser — plain fetch, no Authorization
+  // header). Every action reuses an existing system: public detail routing,
+  // the collections API (Editor's Picks membership), the overrides API and
+  // the Greybox Pick helpers above. No new database, API, or auth.
+  const EDITOR_PICKS_SLUG = 'editor-picks';
+  const TMDB_IMG = 'https://image.tmdb.org/t/p/w500';
+  let searchState = { query: '', results: [], epItems: null }; // epItems null = unknown
+
+  function detailUrlFor(media, id) {
+    const n = parseInt(id, 10);
+    if (!Number.isInteger(n) || n < 1) return '/';
+    return media === 'tv' ? '/tv/' + n : '/movie/' + n;
+  }
+
+  function tmdbPosterUrl(posterPath) {
+    if (typeof posterPath !== 'string' || posterPath.indexOf('..') >= 0 || !/^\/[A-Za-z0-9/_\-.]+$/.test(posterPath)) return null;
+    return TMDB_IMG + posterPath;
+  }
+
+  // TMDB search/multi payload in, admin-ready rows out. Drops people and
+  // anything without a usable id; preserves media_type exactly.
+  function normalizeTmdbSearchResults(raw) {
+    const list = raw && Array.isArray(raw.results) ? raw.results : [];
+    const out = [];
+    for (const r of list) {
+      if (!r || (r.media_type !== 'movie' && r.media_type !== 'tv')) continue;
+      const id = parseInt(r.id, 10);
+      if (!Number.isInteger(id) || id < 1 || id > 2147483647) continue;
+      const title = String(r.title || r.name || '').trim() || 'Untitled';
+      const date = String(r.release_date || r.first_air_date || '');
+      const vote = Number(r.vote_average);
+      out.push({
+        media: r.media_type,
+        id,
+        title: title.slice(0, 200),
+        year: date.slice(0, 4),
+        vote: Number.isFinite(vote) ? vote : 0,
+        poster: typeof r.poster_path === 'string' && r.poster_path ? r.poster_path : null,
+        overview: String(r.overview || '').slice(0, 500),
+      });
+    }
+    return out;
+  }
+
+  // Pure Editor's Picks item helpers (same { media, id } shape as custom sources).
+  function normalizeEpItems(items) {
+    return (Array.isArray(items) ? items : [])
+      .map((it) => {
+        if (!it || typeof it !== 'object') return null;
+        const id = parseInt(it.id, 10);
+        if (!Number.isInteger(id) || id < 1) return null;
+        return { media: it.media === 'tv' ? 'tv' : 'movie', id };
+      })
+      .filter(Boolean);
+  }
+
+  function isInEditorPicks(items, media, id) {
+    const n = parseInt(id, 10);
+    return normalizeEpItems(items).some((it) => it.media === media && it.id === n);
+  }
+
+  function withAddedToEditorPicks(items, media, id) {
+    const t = validPickTarget(media, id);
+    const cur = normalizeEpItems(items);
+    if (cur.some((it) => it.media === t.media && it.id === t.id)) return cur;
+    return cur.concat([{ media: t.media, id: t.id }]);
+  }
+
+  function withRemovedFromEditorPicks(items, media, id) {
+    const t = validPickTarget(media, id);
+    return normalizeEpItems(items).filter((it) => !(it.media === t.media && it.id === t.id));
+  }
+
+  // No admin token here on purpose: /api/tmdb is the public proxy and needs
+  // none. Only safe params are sent (the proxy allowlists path + params).
+  async function tmdbSearchFetch(query) {
+    const q = String(query || '').trim();
+    if (!q) throw { status: 400, message: 'Type a title first.' };
+    if (q.length > 120) throw { status: 400, message: 'Query must be at most 120 characters.' };
+    const url = '/api/tmdb/search/multi?language=en-US&page=1&include_adult=false&query=' + encodeURIComponent(q);
+    let res;
+    try {
+      res = await fetch(url, { headers: { accept: 'application/json' } });
+    } catch (e) {
+      throw { status: 0, message: 'Network error: could not reach the server.' };
+    }
+    if (res.status === 204) return { results: [] };
+    let data = null;
+    try { data = await res.json(); } catch { data = null; }
+    if (!res.ok) throw { status: res.status, message: (data && data.error) || ('Search failed (' + res.status + ').') };
+    return data;
+  }
+
+  async function setEditorPicksMembership(media, id, want) {
+    const t = validPickTarget(media, id);
+    let col;
+    try {
+      col = await api(API.collections + '/' + EDITOR_PICKS_SLUG);
+    } catch (e) {
+      if (e && e.status === 404) throw { message: "Editor's Picks collection not found." };
+      throw e;
+    }
+    if (!col.source || col.source.type !== 'custom' || !Array.isArray(col.source.items)) {
+      throw { message: "Editor's Picks is not a custom collection." };
+    }
+    const items = want
+      ? withAddedToEditorPicks(col.source.items, t.media, t.id)
+      : withRemovedFromEditorPicks(col.source.items, t.media, t.id);
+    const updated = await api(API.collections + '/' + EDITOR_PICKS_SLUG, {
+      method: 'PUT',
+      body: { ...col, slug: EDITOR_PICKS_SLUG, source: { type: 'custom', items } },
+    });
+    searchState.epItems = normalizeEpItems(updated.source && updated.source.items);
+    return updated;
+  }
+
+  function manageOverrideFor(media, id) {
+    const t = validPickTarget(media, id);
+    const known = findCachedOverride(t.media, t.id);
+    const apply = (row) => {
+      showTab('overrides');
+      fillOverrideForm(row || { media: t.media, tmdb_id: t.id });
+    };
+    if (known) { apply(known); return Promise.resolve(); }
+    return readOverrideRow(t.media, t.id).then(apply, (e) => { notice('err', (e && e.message) || e); });
+  }
+
+  function buildSearchPanel() {
+    const f = $('tmdb-search-form');
+    if (!f) return;
+    f.innerHTML = '';
+    f.appendChild(fieldRow('Title', textInput('tmdb-search-q', '', 'Fight Club')));
+    const hint = el('p', 'text-xs text-zinc-500', 'Searches TMDB through the existing server-side proxy (no key in the browser). Movies + TV only — people are hidden.');
+    f.appendChild(hint);
+    const row = el('div', 'flex gap-2');
+    const go = el('button', BTN_GO + ' px-5 py-2 rounded-lg text-sm', 'Search');
+    go.type = 'submit';
+    row.appendChild(go);
+    f.appendChild(row);
+    f.onsubmit = (e) => { e.preventDefault(); runTmdbSearch(); };
+    const host = $('tmdb-search-list');
+    if (host) host.innerHTML = '<p class="text-sm text-zinc-500">Type a movie or TV title above, then Search.</p>';
+  }
+
+  async function runTmdbSearch() {
+    const host = $('tmdb-search-list');
+    const qEl = $('tmdb-search-q');
+    const q = qEl ? qEl.value.trim() : '';
+    if (!q) { notice('err', 'Type a title first.'); return; }
+    if (q.length > 120) { notice('err', 'Query must be at most 120 characters.'); return; }
+    if (host) host.innerHTML = '<div class="inline-loader"><span class="spinner"></span> Searching TMDB…</div>';
+    try {
+      const [tmdbRes, epRes, ovRes] = await Promise.allSettled([
+        tmdbSearchFetch(q),
+        api(API.collections + '/' + EDITOR_PICKS_SLUG),
+        api(API.overrides),
+      ]);
+      if (tmdbRes.status === 'rejected') throw tmdbRes.reason;
+      if (ovRes.status === 'fulfilled') ovCache = ovRes.value;
+      searchState = {
+        query: q,
+        results: normalizeTmdbSearchResults(tmdbRes.value),
+        epItems: epRes.status === 'fulfilled' && epRes.value && epRes.value.source
+          ? normalizeEpItems(epRes.value.source.items)
+          : null,
+      };
+      renderSearchCards();
+      if (!searchState.results.length && host) {
+        host.innerHTML = '';
+        host.appendChild(el('p', 'text-sm text-zinc-500', 'No matches for “' + q + '”. Try another spelling.'));
+      }
+    } catch (e) {
+      if (host) {
+        host.innerHTML = '';
+        host.appendChild(el('p', 'text-sm text-red-300', 'Search failed: ' + ((e && e.message) || e)));
+      }
+      notice('err', 'Search failed: ' + ((e && e.message) || e));
+    }
+  }
+
+  function renderSearchCards() {
+    const host = $('tmdb-search-list');
+    if (!host) return;
+    host.innerHTML = '';
+    searchState.results.forEach((r) => {
+      const card = el('div', 'bg-white/5 border border-white/10 rounded-2xl p-4');
+      const row = el('div', 'flex gap-3');
+      const img = document.createElement('img');
+      const posterUrl = tmdbPosterUrl(r.poster);
+      img.className = 'w-12 h-[72px] object-cover rounded-lg shrink-0';
+      img.loading = 'lazy';
+      img.alt = '';
+      img.src = posterUrl || 'https://via.placeholder.com/48x72?text=?';
+      row.appendChild(img);
+      const body = el('div', 'min-w-0 flex-1');
+      const head = el('div', 'flex items-center gap-2 flex-wrap');
+      head.appendChild(el('span', 'font-bold', r.title));
+      head.appendChild(el('span', 'text-xs bg-white/10 px-2 py-0.5 rounded', r.media === 'tv' ? 'TV' : 'Movie'));
+      if (isGreyboxPick(findCachedOverride(r.media, r.id))) {
+        head.appendChild(el('span', 'text-xs bg-amber-500 text-black font-bold px-2 py-0.5 rounded', '★ Greybox Pick'));
+      }
+      body.appendChild(head);
+      const metaBits = [(r.year || '—'), '⭐ ' + Number(r.vote || 0).toFixed(1), 'TMDB ' + r.media + ':' + r.id];
+      body.appendChild(el('p', 'mt-1 text-xs text-zinc-400', metaBits.join(' · ')));
+      if (r.overview) body.appendChild(el('p', 'mt-1 text-xs text-zinc-500 line-clamp-3', r.overview));
+      row.appendChild(body);
+      card.appendChild(row);
+      const inPicks = searchState.epItems !== null && isInEditorPicks(searchState.epItems, r.media, r.id);
+      const marked = isGreyboxPick(findCachedOverride(r.media, r.id));
+      card.appendChild(rowButtons([
+        ['Open ↗', BTN, () => { try { window.open(detailUrlFor(r.media, r.id), '_blank', 'noopener'); } catch { /* noop */ } }],
+        [searchState.epItems === null ? "+ Editor's Picks" : (inPicks ? "✓ In Editor's Picks" : "+ Editor's Picks"), BTN, () => toggleEditorPicksFromSearch(r)],
+        [marked ? '☆ Unmark Pick' : '★ Mark Pick', BTN, () => togglePickFromSearch(r)],
+        ['Override', BTN, () => manageOverrideFor(r.media, r.id)],
+      ]));
+      host.appendChild(card);
+    });
+  }
+
+  async function toggleEditorPicksFromSearch(r) {
+    try {
+      const member = searchState.epItems !== null && isInEditorPicks(searchState.epItems, r.media, r.id);
+      await setEditorPicksMembership(r.media, r.id, !member);
+      notice('ok', member ? ('Removed ' + r.media + ':' + r.id + " from Editor's Picks.") : ('Added ' + r.media + ':' + r.id + " to Editor's Picks."));
+      renderSearchCards();
+    } catch (e) {
+      notice('err', (e && e.message) || e);
+    }
+  }
+
+  async function togglePickFromSearch(r) {
+    try {
+      const known = findCachedOverride(r.media, r.id);
+      await toggleGreyboxPick(r.media, r.id, known);
+      try { ovCache = await api(API.overrides); } catch { /* keep stale cache */ }
+      notice('ok', isGreyboxPick(findCachedOverride(r.media, r.id))
+        ? ('Marked ' + r.media + ':' + r.id + ' as Greybox Pick.')
+        : ('Unmarked ' + r.media + ':' + r.id + '.'));
+      renderSearchCards();
+    } catch (e) {
+      notice('err', (e && e.message) || e);
     }
   }
 
@@ -908,6 +1464,7 @@
         if (b.dataset.atab === 'sections') loadSections();
         if (b.dataset.atab === 'collections') loadCollections();
         if (b.dataset.atab === 'overrides') loadOverrides();
+        if (b.dataset.atab === 'search') { /* results persist; nothing to reload */ }
         if (b.dataset.atab === 'settings') loadHero();
       };
     });
@@ -941,6 +1498,7 @@
   buildSectionForm();
   buildCollectionForm();
   buildOverrideForm();
+  buildSearchPanel();
   buildHeroForm();
   bindTabs();
   const cbtn = $('admin-connect-btn');
@@ -959,6 +1517,12 @@
       fillSectionForm, readSectionForm,
       fillCollectionForm, readCollectionForm,
       fillOverrideForm, readOverrideForm, readHeroForm,
+      fetchGenres, genreName, GENRE_CACHE,
+      PICK_BADGE, isGreyboxPick, validPickTarget,
+      markGreyboxPick, unmarkGreyboxPick, toggleGreyboxPick,
+      EDITOR_PICKS_SLUG, detailUrlFor, tmdbPosterUrl,
+      normalizeTmdbSearchResults, normalizeEpItems, isInEditorPicks,
+      withAddedToEditorPicks, withRemovedFromEditorPicks, tmdbSearchFetch,
       HOME_SOURCE_TYPES, COL_SOURCE_TYPES, OVERRIDE_FIELDS, SLUG_RE,
       API,
     });
