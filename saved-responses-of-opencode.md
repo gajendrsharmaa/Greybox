@@ -32,3 +32,6 @@ Verified: node --check passes; JWT sweep across all committed files is empty; 9/
 Two action items for you:
 1. Rotate that token. The old JWT lived in client code — if it ever reached GitHub, revoke it in TMDB Settings → API and issue a new one; put the new value only in host env vars.
 2. Set the env var (TMDB_READ_TOKEN) in your Cloudflare Pages or Vercel dashboard, or the site will show "Backend not configured" — that message is intentional; the embedded fallback that masked it is gone.
+
+
+CONTINUE FROM STEP 6, STEP 5 COMMITED AND PUSHED.  Continue  opencode -s ses_f73c3749dffeigFhDxhjX9x1Sc

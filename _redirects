@@ -10,6 +10,8 @@
 /movie/* /index.html 200
 /search /index.html 200
 /person/* /index.html 200
+/collection /index.html 200
+/collection/* /index.html 200
 /anime /index.html 200
 /anime/* /index.html 200
 /mylist /index.html 200

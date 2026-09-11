@@ -21,6 +21,7 @@
  *   /tv/:id                    tv detail (numeric id; non-numeric = category)
  *   /search?q=...[&page=N]     search results page (grid)
  *   /person/:id                person detail (via existing /api/tmdb proxy)
++ *   /collection/:slug          Greybox collection (local config, Greybox order)
  *   /anime[/series|/movies]    preserved existing mode
  *   /mylist                    preserved existing mode (localStorage)
  *
@@ -62,6 +63,7 @@
     if (p === '/movie' || p.indexOf('/movie/') === 0) return true;
     if (p === '/search') return true;
     if (p === '/person' || p.indexOf('/person/') === 0) return true;
+    if (p === '/collection' || p.indexOf('/collection/') === 0) return true;
     if (p === '/anime' || p.indexOf('/anime/') === 0) return true;
     if (p === '/mylist') return true;
     return false;
@@ -134,6 +136,17 @@
       return { name: 'not-found', path: p };
     }
 
+    if (head === 'collection') {
+      // Greybox-controlled slug (local config): lowercase letters/numbers/hyphens.
+      if (segs.length === 2) {
+        var slug = String(segs[1] || '').trim().toLowerCase();
+        if (/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) && slug.length <= 64) {
+          return { name: 'collection', slug: slug, path: p };
+        }
+      }
+      return { name: 'not-found', path: p };
+    }
+
     if (head === 'anime') {
       if (segs.length === 1) return { name: 'anime', kind: 'series', path: p, page: parsePage(q.page) };
       if (segs.length === 2) {
@@ -166,6 +179,7 @@
       case 'tv-detail': return 'TV Show ' + route.id + ' — Greybox';
       case 'search': return (route.q ? 'Search: ' + route.q : 'Search') + ' — Greybox';
       case 'person': return 'Person ' + route.id + ' — Greybox';
+      case 'collection': return 'Collection — Greybox'; // app.js sets the real title after config load
       case 'anime': return 'Anime (' + route.kind + ') — Greybox';
       case 'mylist': return 'My List — Greybox';
       case 'not-found': return 'Not found — Greybox';
@@ -209,6 +223,11 @@
       return s;
     },
     person: function (id) { return '/person/' + parseId(id); },
+    collection: function (slug) {
+      var s = String(slug || '').trim().toLowerCase();
+      if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(s) || s.length > 64) return '/';
+      return '/collection/' + s;
+    },
     anime: function (kind, page) {
       kind = (kind || 'series').toLowerCase();
       if (ANIME_KINDS.indexOf(kind) < 0) kind = 'series';

@@ -161,6 +161,54 @@
     if (host) host.innerHTML = '';
   }
 
+  /* ---------------- Greybox collection page (config order, shared grid shell) ---------------- */
+
+  // Renders a resolved collection into the standard list shell (#grid):
+  // title header, optional cover banner + description + metadata line, then
+  // cards in Greybox config order. Reuses .card markup and col-span-full
+  // message blocks exactly like search/mylist — no new layout.
+  // ctx: { collection: {title, description, cover, meta}, items, isInList(id, mt) }
+  function renderCollection(ctx) {
+    const c = C();
+    const col = (ctx && ctx.collection) || {};
+    c.setSectionTitle(col.title || 'Collection');
+    c.clearTabs();
+    c.setPageLabel(1);
+    c.clearHeroLoading();
+    const items = Array.isArray(ctx.items) ? ctx.items : [];
+    let head = '';
+    if (col.cover) {
+      head += `<div class="col-span-full overflow-hidden rounded-2xl border border-white/10"><img src="${c.escapeHtml(col.cover)}" alt="" loading="lazy" class="w-full h-48 md:h-64 object-cover"/></div>`;
+    }
+    if (col.description) {
+      head += `<p class="col-span-full text-sm text-zinc-400">${c.escapeHtml(col.description)}</p>`;
+    }
+    const metaBits = [];
+    if (col.meta && col.meta.curator) metaBits.push('Curated by ' + col.meta.curator);
+    if (col.meta && col.meta.updated) metaBits.push('Updated ' + col.meta.updated);
+    if (metaBits.length) {
+      head += `<p class="col-span-full text-xs text-zinc-500">${c.escapeHtml(metaBits.join(' · '))}</p>`;
+    }
+    $('grid').innerHTML = head + (c.cardsHTML(items, ctx.isInList) || '<div class="text-zinc-500 col-span-full">No titles available in this collection right now.</div>');
+    if (items[0]) c.setHero(items[0]);
+  }
+
+  function renderCollectionLoading(title) {
+    const c = C();
+    c.setNotice('');
+    c.setSectionTitle(title || 'Collection');
+    c.clearTabs();
+    c.showGridLoading(12);
+    c.setHeroLoading(false);
+    c.clearHeroLoading();
+  }
+
+  function renderCollectionError(err) {
+    const c = C();
+    $('grid').innerHTML = '';
+    c.showErrorNotice(err);
+  }
+
   /* ---------------- not found ---------------- */
 
   function renderNotFound(path) {
@@ -316,6 +364,9 @@
     renderSearchError,
     renderMyList,
     renderNotFound,
+    renderCollection,
+    renderCollectionLoading,
+    renderCollectionError,
     renderHomeSections,
     clearHomeSections,
     renderTitleDetail,

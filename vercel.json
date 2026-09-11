@@ -8,6 +8,8 @@
     { "source": "/movie/:path*", "destination": "/index.html" },
     { "source": "/search", "destination": "/index.html" },
     { "source": "/person/:path*", "destination": "/index.html" },
+    { "source": "/collection", "destination": "/index.html" },
+    { "source": "/collection/:path*", "destination": "/index.html" },
     { "source": "/anime", "destination": "/index.html" },
     { "source": "/anime/:path*", "destination": "/index.html" },
     { "source": "/mylist", "destination": "/index.html" }

@@ -25,10 +25,11 @@
   }
 
   // ---- page state (derived from the route on every navigation) ----
-  let mode = 'home';       // home | movie | tv | anime | mylist | search
+  let mode = 'home';       // home | movie | tv | anime | mylist | search | collection
   let subTab = 'trending'; // per-mode tab
   let pageNum = 1;
   let searchQuery = '';
+  let collectionSlug = '';
   let heroItem = null;
   let currentDetail = null; // {...} + media_type, or {kind:'person', id}
   let currentSeasons = [];
@@ -59,6 +60,7 @@
     if (mode === 'anime') return R.url.anime(animeSubToKind(subTab), p);
     if (mode === 'mylist') return R.url.mylist();
     if (mode === 'search') return R.url.search(searchQuery, p);
+    if (mode === 'collection') return R ? R.url.collection(collectionSlug) : '/';
     return '/';
   }
 
@@ -136,11 +138,33 @@
     hasLoadedList = true;
   }
 
+  // Greybox collection page: config (structure + order) + Greybox API (data).
+  // Unknown or hidden slugs render Not found, like any bad route.
+  async function loadCollectionPage() {
+    const col = Data.getCollection(collectionSlug);
+    if (!col) {
+      Pages.renderNotFound('/collection/' + (collectionSlug || ''));
+      document.querySelectorAll('.nav-btn').forEach((b) => b.classList.remove('active'));
+      return;
+    }
+    Pages.renderCollectionLoading(col.title);
+    highlightNav();
+    try {
+      const { items } = await Data.resolveCollection(col);
+      Pages.renderCollection({ collection: col, items, isInList: (id, mt) => Data.isInMyList(id, mt) });
+      if (R) document.title = `${col.title} — Greybox`;
+      hasLoadedList = true;
+    } catch (e) {
+      Pages.renderCollectionError(e);
+    }
+  }
+
   // Settings-save refresh: reload the background list in place (modal untouched),
   // exactly like the pre-refactor load() did.
   function reloadBackground() {
     if (mode === 'mylist') return loadMyList();
     if (mode === 'search') return loadSearchPage();
+    if (mode === 'collection') return loadCollectionPage();
     return loadList();
   }
 
@@ -419,6 +443,14 @@
       window.scrollTo({ top: 0 });
       Pages.clearHomeSections();
       await loadSearchPage();
+      return;
+    }
+    if (route.name === 'collection') {
+      hideModal(); currentDetail = null;
+      mode = 'collection'; collectionSlug = route.slug || ''; pageNum = 1;
+      window.scrollTo({ top: 0 });
+      Pages.clearHomeSections();
+      await loadCollectionPage();
       return;
     }
     if (route.name === 'movie-detail' || route.name === 'tv-detail') {

@@ -190,17 +190,27 @@
     };
   }
 
-  function getByGenre(media, genreId, page, sort) {
-    const type = media === 'tv' ? 'tv' : 'movie';
-    const gid = parseId(genreId);
-    if (!gid) return Promise.reject(new Error('Invalid genre id'));
+  // General TMDB discover through the allowlisted proxy transport
+  // (/api/tmdb/discover/*, secret stays server-side). opts:
+  // { media: 'movie'|'tv', genre: <id>, year: <yyyy>, sort: <sort_by>, page }.
+  // Every filter is optional. Shaping mirrors gbItem so cards render identically.
+  function getDiscover(opts) {
+    const o = (opts && typeof opts === 'object') ? opts : {};
+    const type = o.media === 'tv' ? 'tv' : 'movie';
+    const params = { language: 'en-US', page: parsePage(o.page), sort_by: String(o.sort || 'popularity.desc') };
+    if (o.genre != null && String(o.genre).trim() !== '') {
+      const gid = parseId(o.genre);
+      if (!gid) return Promise.reject(new Error('Invalid genre id'));
+      params.with_genres = String(gid);
+    }
+    if (o.year != null && String(o.year).trim() !== '') {
+      if (!/^\d{4}$/.test(String(o.year).trim())) return Promise.reject(new Error('Invalid year'));
+      const y = parseInt(String(o.year).trim(), 10);
+      if (y < 1900 || y > 2100) return Promise.reject(new Error('Invalid year'));
+      params[type === 'tv' ? 'first_air_date_year' : 'primary_release_year'] = String(y);
+    }
     const mt = type === 'tv' ? 'tv' : 'movie';
-    return api().tmdb('discover/' + type, {
-      language: 'en-US',
-      page: parsePage(page),
-      with_genres: String(gid),
-      sort_by: String(sort || 'popularity.desc'),
-    }).then((d) => {
+    return api().tmdb('discover/' + type, params).then((d) => {
       const results = Array.isArray(d && d.results) ? d.results : [];
       return {
         page: d.page || 1,
@@ -211,6 +221,10 @@
           .map((x) => shapeRawItem(x, mt)),
       };
     });
+  }
+
+  function getByGenre(media, genreId, page, sort) {
+    return getDiscover({ media, genre: genreId, page, sort });
   }
 
   /* ---------------- homepage configuration (local file, no database) ---------------- */
@@ -302,6 +316,17 @@
     };
   }
 
+  // Ordered hand-picked IDs through the Greybox API. Config order is
+  // preserved exactly (TMDB never re-sorts); failed IDs are dropped.
+  // Shared by homepage `ids` shelves and Greybox collections.
+  function resolveIdItems(items) {
+    const list = Array.isArray(items) ? items : [];
+    return Promise.allSettled(list.map((it) =>
+      (it.media === 'tv' ? getTVDetails(it.id) : getMovie(it.id)).then((d) => ({ ...d, media_type: it.media }))
+    )).then((settled) => settled.filter((s) => s.status === 'fulfilled').map((s) => s.value)
+      .filter((x) => x.poster_path || x.backdrop_path));
+  }
+
   // Resolve ONE normalized section through the Greybox API.
   // Returns Promise<{ section, items }> with limit applied; rejects on
   // unknown source or fetch failure (caller isolates failures per section).
@@ -317,12 +342,7 @@
     else if (src.type === 'search') p = getSearchResults(src.query, 1);
     else if (src.type === 'genre') p = getByGenre(src.media, src.genreId, 1, src.sort);
     else if (src.type === 'ids') {
-      p = Promise.allSettled(src.items.map((it) =>
-        (it.media === 'tv' ? getTVDetails(it.id) : getMovie(it.id)).then((d) => ({ ...d, media_type: it.media }))
-      )).then((settled) => ({
-        results: settled.filter((s) => s.status === 'fulfilled').map((s) => s.value)
-          .filter((x) => x.poster_path || x.backdrop_path),
-      }));
+      p = resolveIdItems(src.items).then((results) => ({ results }));
     } else {
       return Promise.reject(new Error('Unknown home source type: ' + src.type));
     }
@@ -351,6 +371,269 @@
       (r) => r.items[pick] || r.items[0] || null,
       () => null
     );
+  }
+
+  /* ---------------- Greybox collections (local config, no database) ---------------- */
+
+  const COLLECTION_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+  function normalizeSlug(v) {
+    const s = String(v == null ? '' : v).trim().toLowerCase();
+    if (!s || s.length > 64 || !COLLECTION_SLUG.test(s)) return '';
+    return s;
+  }
+
+  // One collection entry: { media, id }. Bare numbers (and { id } without
+  // media) default to movie so `items: [550, 157336]` just works.
+  function normalizeCollectionItem(it) {
+    if (it == null) return null;
+    if (typeof it === 'number' || typeof it === 'string') {
+      const bare = parseId(it);
+      return bare ? { media: 'movie', id: bare } : null;
+    }
+    if (typeof it !== 'object') return null;
+    const mid = parseId(it.id);
+    if (!mid) return null;
+    return { media: it.media === 'tv' ? 'tv' : 'movie', id: mid };
+  }
+
+  // Returns a clean collection source or null (malformed → console.warn).
+  // Dynamic types fetch current TMDB matches at render time; only `custom`
+  // carries hand-picked IDs. Greybox owns title/filters/sort/limit/visibility;
+  // TMDB only supplies the matching titles, posters and metadata.
+  function normalizeCollectionSource(src, slug) {
+    if (!src || typeof src !== 'object' || typeof src.type !== 'string') {
+      console.warn('[collections] collection needs source.type:', slug);
+      return null;
+    }
+    const type = src.type;
+    const clean = { type };
+    const mediaOr = (def) => (src.media === 'tv' ? 'tv' : (src.media === 'movie' ? 'movie' : def));
+    if (type === 'trending') {
+      clean.media = src.media === 'movie' ? 'movie' : (src.media === 'tv' ? 'tv' : 'all');
+    } else if (type === 'popular' || type === 'top-rated') {
+      clean.media = src.media === 'tv' ? 'tv' : 'movie';
+    } else if (type === 'now-playing') {
+      if (src.media != null && src.media !== 'movie') { console.warn('[collections] now-playing is movies only:', slug); return null; }
+      clean.media = 'movie';
+    } else if (type === 'discover') {
+      clean.media = mediaOr('movie');
+      if (src.genre != null && String(src.genre).trim() !== '') {
+        if (!parseId(src.genre)) { console.warn('[collections] discover needs a valid genre id:', slug); return null; }
+        clean.genre = parseId(src.genre);
+      }
+      if (src.year != null && String(src.year).trim() !== '') {
+        if (!/^\d{4}$/.test(String(src.year).trim())) { console.warn('[collections] discover needs a valid year:', slug); return null; }
+        const y = parseInt(String(src.year).trim(), 10);
+        if (y < 1900 || y > 2100) { console.warn('[collections] discover needs a valid year:', slug); return null; }
+        clean.year = y;
+      }
+      clean.sort = (typeof src.sort === 'string' && src.sort.trim()) ? src.sort.trim() : 'popularity.desc';
+    } else if (type === 'genre') {
+      if (!parseId(src.genreId)) { console.warn('[collections] genre source needs genreId:', slug); return null; }
+      clean.media = mediaOr('movie');
+      clean.genreId = parseId(src.genreId);
+      clean.sort = (typeof src.sort === 'string' && src.sort.trim()) ? src.sort.trim() : 'popularity.desc';
+    } else if (type === 'year') {
+      if (!/^\d{4}$/.test(String(src.year == null ? '' : src.year).trim())) { console.warn('[collections] year source needs year:', slug); return null; }
+      const y = parseInt(String(src.year).trim(), 10);
+      if (y < 1900 || y > 2100) { console.warn('[collections] year source needs year:', slug); return null; }
+      clean.media = mediaOr('movie');
+      clean.year = y;
+      clean.sort = (typeof src.sort === 'string' && src.sort.trim()) ? src.sort.trim() : 'popularity.desc';
+    } else if (type === 'search') {
+      const q = String(src.query || '').trim();
+      if (!q) { console.warn('[collections] search source needs query:', slug); return null; }
+      clean.query = q;
+    } else if (type === 'custom') {
+      const items = (Array.isArray(src.items) ? src.items : []).map(normalizeCollectionItem).filter(Boolean);
+      if (!items.length) { console.warn('[collections] custom source needs at least one valid item:', slug); return null; }
+      clean.items = items;
+    } else {
+      console.warn('[collections] unknown source type:', type);
+      return null;
+    }
+    return clean;
+  }
+
+  function normalizeCollectionLimit(v) {
+    const n = parseInt(String(v == null ? '20' : v), 10);
+    if (!isFinite(n) || n < 1) return 20;
+    return Math.min(n, 60);
+  }
+
+  // Manual-override entries: { media, id } objects, bare numbers (= movie),
+  // or bare ids for exclude (match any media).
+  function normalizeOverride(it, forExclude) {
+    if (it == null) return null;
+    if (typeof it === 'number' || typeof it === 'string') {
+      const id = parseId(it);
+      if (!id) return null;
+      return forExclude ? { id } : { media: 'movie', id };
+    }
+    if (typeof it !== 'object') return null;
+    const id = parseId(it.id);
+    if (!id) return null;
+    if (forExclude && it.media !== 'tv' && it.media !== 'movie') return { id };
+    return { media: it.media === 'tv' ? 'tv' : 'movie', id };
+  }
+
+  // Returns a clean collection or null (malformed → console.warn, page survives).
+  function normalizeCollection(raw) {
+    if (!raw || typeof raw !== 'object') { console.warn('[collections] dropping malformed collection:', raw); return null; }
+    const slug = normalizeSlug(raw.slug);
+    const title = String(raw.title || '').trim();
+    if (!slug || !title) { console.warn('[collections] collection needs slug + title:', raw); return null; }
+    const source = normalizeCollectionSource(raw.source, slug);
+    if (!source) return null;
+    const pin = (Array.isArray(raw.pin) ? raw.pin : []).map((it) => normalizeOverride(it, false)).filter(Boolean);
+    const exclude = (Array.isArray(raw.exclude) ? raw.exclude : []).map((it) => normalizeOverride(it, true)).filter(Boolean);
+    const cover = (typeof raw.cover === 'string' && raw.cover.trim())
+      ? raw.cover.trim()
+      : ((typeof raw.hero === 'string' && raw.hero.trim()) ? raw.hero.trim() : '');
+    const meta = (raw.meta && typeof raw.meta === 'object' && !Array.isArray(raw.meta)) ? raw.meta : null;
+    return {
+      slug, title,
+      description: typeof raw.description === 'string' ? raw.description : '',
+      cover,
+      visible: raw.visible !== false,
+      limit: normalizeCollectionLimit(raw.limit),
+      source, pin, exclude,
+      meta,
+    };
+  }
+
+  // All valid collections in config order; duplicate slugs keep the first.
+  function getCollections() {
+    const raw = window.GreyboxCollections;
+    const list = Array.isArray(raw) ? raw : [];
+    const seen = new Set();
+    const out = [];
+    for (const r of list) {
+      const c = normalizeCollection(r);
+      if (!c) continue;
+      if (seen.has(c.slug)) { console.warn('[collections] duplicate slug ignored:', c.slug); continue; }
+      seen.add(c.slug);
+      out.push(c);
+    }
+    return out;
+  }
+
+  // Visible collection by slug, or null (unknown, malformed, or hidden —
+  // hidden collections render as Not found everywhere, URL included).
+  function getCollection(slug, opts) {
+    const s = normalizeSlug(slug);
+    if (!s) return null;
+    const found = getCollections().find((c) => c.slug === s) || null;
+    if (found && found.visible === false && !(opts && opts.includeHidden)) return null;
+    return found;
+  }
+
+  // Fetch list pages until `limit` items are gathered, results run out, or
+  // the page cap is hit. Dynamic collections with limit > 20 (one TMDB page)
+  // transparently read further pages through the same Greybox fetchers.
+  function fetchPaged(fetchPage, limit) {
+    const out = [];
+    let page = 1, total = 1;
+    const next = () => {
+      if (out.length >= limit || page > total || page > 5) return Promise.resolve(out.slice(0, limit));
+      return fetchPage(page).then((d) => {
+        total = (d && d.total_pages) || 1;
+        out.push(...((d && d.results) || []));
+        page++;
+        return next();
+      });
+    };
+    return next();
+  }
+
+  function itemKey(media, id) { return media + ':' + id; }
+
+  function isExcluded(it, exclude) {
+    return exclude.some((x) => (x.media ? (x.media === it.media && x.id === it.id) : (x.id === it.id)));
+  }
+
+  // Resolve ONE dynamic source through the Greybox API. Returns the raw
+  // ordered item list capped at `limit` (extra pages are fetched only while
+  // the cap is unfilled, so limit: 24 reads pages 1+2 and stops).
+  function resolveCollectionSource(src, limit) {
+    if (!src || !src.type) return Promise.reject(new Error('Invalid collection source'));
+    const cap = normalizeCollectionLimit(limit == null ? 60 : limit);
+    if (src.type === 'trending') {
+      const media = src.media || 'all';
+      return fetchPaged((p) => getTrending(p).then((d) => ({
+        page: d.page, total_pages: d.total_pages,
+        results: media === 'all'
+          ? (d.results || [])
+          : (d.results || []).filter((x) => (x.media_type || (x.title ? 'movie' : 'tv')) === media),
+      })), cap).then((results) => ({ results }));
+    }
+    if (src.type === 'popular') {
+      return fetchPaged((p) => (src.media === 'tv' ? getTVList('popular', p) : getMovies('popular', p)), cap)
+        .then((results) => ({ results }));
+    }
+    if (src.type === 'top-rated') {
+      return fetchPaged((p) => (src.media === 'tv' ? getTVList('top-rated', p) : getMovies('top-rated', p)), cap)
+        .then((results) => ({ results }));
+    }
+    if (src.type === 'now-playing') {
+      return fetchPaged((p) => getMovies('now-playing', p), cap).then((results) => ({ results }));
+    }
+    if (src.type === 'discover') {
+      const o = { media: src.media, page: 1, sort: src.sort };
+      if (src.genre != null) o.genre = src.genre;
+      if (src.year != null) o.year = src.year;
+      return fetchPaged((p) => getDiscover({ ...o, page: p }), cap).then((results) => ({ results }));
+    }
+    if (src.type === 'genre') {
+      return fetchPaged((p) => getByGenre(src.media, src.genreId, p, src.sort), cap)
+        .then((results) => ({ results }));
+    }
+    if (src.type === 'year') {
+      return fetchPaged((p) => getDiscover({ media: src.media, year: src.year, sort: src.sort, page: p }), cap)
+        .then((results) => ({ results }));
+    }
+    if (src.type === 'search') {
+      return fetchPaged((p) => getSearchResults(src.query, p), cap).then((results) => ({ results }));
+    }
+    if (src.type === 'custom') {
+      return resolveIdItems(src.items).then((results) => ({ results }));
+    }
+    return Promise.reject(new Error('Unknown collection source type: ' + src.type));
+  }
+
+  // Resolve a collection: Greybox rules in, current TMDB matches out.
+  // Pins resolve via details and lead; dynamic/custom base follows in source
+  // order; excludes drop out; the total is capped at the collection limit.
+  // Accepts a slug or a normalized collection. Rejects when not found.
+  function resolveCollection(slugOrCollection) {
+    const c = (slugOrCollection && typeof slugOrCollection === 'object')
+      ? slugOrCollection
+      : getCollection(slugOrCollection);
+    if (!c || !c.source) return Promise.reject(new Error('Collection not found'));
+    const limit = normalizeCollectionLimit(c.limit);
+    // Custom lists are hand-sized: resolve every listed ID (failures drop),
+    // then cap — a dead ID never eats a display slot. Dynamic sources page
+    // only until the cap is filled.
+    const base = c.source.type === 'custom'
+      ? resolveIdItems(c.source.items).then((results) => ({ results }))
+      : resolveCollectionSource(c.source, limit);
+    const pins = (c.pin && c.pin.length)
+      ? resolveIdItems(c.pin)
+      : Promise.resolve([]);
+    return Promise.all([pins, base]).then(([pinned, d]) => {
+      const seen = new Set(pinned.map((x) => itemKey(x.media_type || (x.title ? 'movie' : 'tv'), x.id)));
+      const items = [...pinned];
+      for (const x of (d.results || [])) {
+        const mt = x.media_type || (x.title ? 'movie' : 'tv');
+        if (seen.has(itemKey(mt, x.id))) continue;
+        if (isExcluded({ media: mt, id: x.id }, c.exclude || [])) continue;
+        seen.add(itemKey(mt, x.id));
+        items.push({ ...x, media_type: mt });
+        if (items.length >= limit) break;
+      }
+      return { collection: c, items: items.slice(0, limit) };
+    });
   }
 
   /* ---------------- My List (localStorage, no database) ---------------- */
@@ -405,12 +688,19 @@
     getSearchResults,
     getSuggestions,
     getByGenre,
+    getDiscover,
+    normalizeCollectionSource,
     defaultHomeConfig,
     normalizeHomeSection,
     getHomeConfig,
     resolveHomeSection,
     getHomeSections,
     getHeroItem,
+    normalizeSlug,
+    normalizeCollection,
+    getCollections,
+    getCollection,
+    resolveCollection,
     getMyList,
     saveMyList,
     toggleMyListItem,
