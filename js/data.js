@@ -36,6 +36,45 @@
 
   function getRegion() { return api().getRegion(); }
 
+  /* ---------------- Greybox-owned config: D1 first, local files as fallback ---------------- */
+
+  // Boot preload of Greybox-owned config from D1 (via GET /api/config/*,
+  // served server-side by functions/api/config/* — the browser never talks
+  // to D1 directly). Never rejects: any failure (static preview, Vercel
+  // without D1, DB not yet bound) leaves that source null and the getters
+  // below fall back to the local js/*.config.js files.
+  let _remoteConfig = null;
+  let _remotePromise = null;
+
+  function fetchJsonTimeout(url, ms) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), ms);
+    return fetch(url, { signal: ctrl.signal, headers: { accept: 'application/json' } })
+      .then((r) => {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      })
+      .finally(() => clearTimeout(t));
+  }
+
+  function preloadGreyboxConfig() {
+    if (_remotePromise) return _remotePromise;
+    const load = (url) => fetchJsonTimeout(url, 8000).catch(() => null);
+    _remotePromise = Promise.all([
+      load('/api/config/home'),
+      load('/api/config/collections'),
+      load('/api/config/overrides'),
+    ]).then(([home, collections, overrides]) => {
+      _remoteConfig = {
+        home: (home && typeof home === 'object' && !Array.isArray(home)) ? home : null,
+        collections: Array.isArray(collections) ? collections : null,
+        overrides: Array.isArray(overrides) ? overrides : null,
+      };
+      return _remoteConfig;
+    });
+    return _remotePromise;
+  }
+
   // Backend already shapes lists; keep the single UI filter in ONE place
   // (previously tripled across home/movie/tv + search + suggestions).
   function withImages(list, fallbackType) {
@@ -305,7 +344,8 @@
   }
 
   function getHomeConfig() {
-    const raw = (typeof window.GreyboxHome === 'object' && window.GreyboxHome) || null;
+    const raw = (_remoteConfig && _remoteConfig.home)
+      || ((typeof window.GreyboxHome === 'object' && window.GreyboxHome) || null);
     const hero = (raw && raw.hero && typeof raw.hero === 'object') ? raw.hero : { mode: 'follow-grid' };
     const sections = raw && Array.isArray(raw.sections)
       ? raw.sections.map(normalizeHomeSection).filter(Boolean)
@@ -509,8 +549,9 @@
   }
 
   // All valid collections in config order; duplicate slugs keep the first.
+  // Source: D1 once preloaded, else the local js/collections.config.js.
   function getCollections() {
-    const raw = window.GreyboxCollections;
+    const raw = (_remoteConfig && _remoteConfig.collections) || window.GreyboxCollections;
     const list = Array.isArray(raw) ? raw : [];
     const seen = new Set();
     const out = [];
@@ -654,6 +695,7 @@
   let _overrideCacheMap = null;
 
   function getOverrideConfig() {
+    if (_remoteConfig && _remoteConfig.overrides) return _remoteConfig.overrides;
     const raw = window.GreyboxOverrides;
     return Array.isArray(raw) ? raw : [];
   }
@@ -761,6 +803,7 @@
     parsePage,
     parseId,
     getRegion,
+    preloadGreyboxConfig,
     getTrending,
     getMovies,
     getPopularMovies,

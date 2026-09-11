@@ -618,16 +618,22 @@
 
   /* ---- boot: router owns the initial render so refresh/direct-URL work ---- */
   updateCount();
-  renderFooter();
   try { window.addEventListener('greybox:mylist', updateCount); } catch { /* noop */ }
   try { if ('scrollRestoration' in window.history) window.history.scrollRestoration = 'manual'; } catch { /* noop */ }
-  if (R) {
-    R.init();
-    R.onChange((route) => { renderRoute(route); });
-    renderRoute(R.current());
-  } else {
-    renderRoute({ name: 'home', tab: 'trending', page: 1, path: '/' });
-  }
+  // Greybox-owned config (D1) loads first so homepage, collections, footer
+  // links and overrides reflect the database. Local config files cover any
+  // failure — and preloadGreyboxConfig itself never rejects, so the first
+  // render always happens.
+  Data.preloadGreyboxConfig().then(() => {
+    renderFooter();
+    if (R) {
+      R.init();
+      R.onChange((route) => { renderRoute(route); });
+      renderRoute(R.current());
+    } else {
+      renderRoute({ name: 'home', tab: 'trending', page: 1, path: '/' });
+    }
+  });
 
   // Headless/test hook (no UI effect): lets node-based checks drive the
   // route->state mapping without a browser.

@@ -1,0 +1,29 @@
+# Greybox — Cloudflare Pages + D1 configuration.
+#
+# Pages settings in the Dashboard stay as documented in README.md
+# (Framework preset: None, empty build command, output directory `/`).
+# This file adds what the Dashboard Git flow cannot express in-repo:
+# the D1 database binding used by functions/api/config/* (read-only
+# Greybox-owned config: homepage structure, collections, overrides).
+#
+# First-time setup (run once, then paste the real id below):
+#   npx wrangler d1 create greybox
+# Local dev uses the same binding against local SQLite state, no account needed:
+#   npx wrangler d1 execute greybox --local --file=migrations/0001_schema.sql
+#   npx wrangler d1 execute greybox --local --file=migrations/0002_seed.sql
+#   npx wrangler pages dev .
+#
+# TMDB secrets are NOT stored here — they live in `.dev.vars` locally
+# (gitignored) and in Pages environment variables in production.
+
+name = "greybox"
+compatibility_date = "2025-01-01"
+pages_build_output_dir = "."
+
+[[d1_databases]]
+binding = "DB"
+database_name = "greybox-db"
+# TODO: replace with the id from `npx wrangler d1 create greybox`.
+# Local `wrangler pages dev` / `--local` runs do not contact the API.
+database_id = "79121f79-0365-47e9-a417-893fce25b8c9"
+migrations_dir = "migrations"

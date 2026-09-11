@@ -27,6 +27,13 @@ functions/api/movies/[category].js  # Cloudflare: GET /api/movies/:category
 functions/api/movie/[id].js         # Cloudflare: GET /api/movie/:id (detail bundle)
 functions/api/anime/[kind].js       # Cloudflare: GET /api/anime/:kind
 functions/api/tv/[[rest]].js        # Cloudflare: GET /api/tv/:category | :id | :id/season/:n
+functions/lib/db.js               # Cloudflare: D1 access layer (ONLY file with raw SQL)
+functions/api/config/home.js          # Cloudflare: GET /api/config/home (D1 homepage structure)
+functions/api/config/collections.js   # Cloudflare: GET /api/config/collections (D1, display order)
+functions/api/config/collections/[slug].js  # Cloudflare: GET /api/config/collections/:slug (404 if hidden/unknown)
+functions/api/config/overrides.js     # Cloudflare: GET /api/config/overrides (override fields only)
+migrations/0001_schema.sql, migrations/0002_seed.sql  # D1 schema + seed (mirrors js/*.config.js)
+wrangler.toml                     # Pages + D1 binding (DB); secrets stay in .dev.vars / dashboard
 api/trending.js, api/search.js, api/movies/[category].js, api/movie/[id].js, api/anime/[kind].js, api/tv/[...rest].js
                         # Vercel equivalents of the same Greybox contract
 functions/api/tmdb/[[path]].js  # Cloudflare Pages Function — legacy raw TMDB proxy (kept for static-preview fallback)
@@ -100,7 +107,51 @@ Local Vercel dev: `Copy-Item .env.example .env` (paste real token) → `vercel d
 
 > Only enable **one** platform's serverless proxy per deployment. If you deploy to Vercel, the `functions/` folder ships as inert static files (it contains no secrets); if you deploy to Cloudflare Pages, the `api/` folder ships as inert static files.
 
-## 4) How playback works (full logic, source slot left blank)
+## 4) Greybox-owned config in D1 (homepage, collections, overrides)
+
+TMDB stays the live source for all movie/TV metadata. D1 stores **only**
+data that belongs to Greybox itself — never the TMDB catalog, never posters
+in bulk, never API secrets:
+
+| Table | Holds |
+|---|---|
+| `home_sections` | Homepage shelf order, titles, visibility, limits, rule sources |
+| `collections` | Collection rules, ordering, pins/excludes, visibility |
+| `overrides` | Explicit per-title field overrides (`media`, `tmdb_id`, override fields only) |
+| `settings` | Single-row settings, currently `home_hero` |
+
+Flow: browser → `GET /api/config/*` (Cloudflare Pages Functions, same-origin)
+→ D1 read via `functions/lib/db.js` (the only file with raw SQL) → frontend
+`js/data.js` preloads once at boot, then all existing getters, merge logic
+(`applyOverrides`), and renderers work unchanged. If D1 is unreachable
+(static preview, Vercel, binding missing), the local `js/*.config.js` files
+take over automatically — they remain in the repo as the offline fallback.
+
+Local D1 development (secret stays server-side via `.dev.vars`):
+
+```powershell
+npx wrangler d1 create greybox          # once: paste the id into wrangler.toml
+npx wrangler d1 execute greybox --local --file=migrations/0001_schema.sql
+npx wrangler d1 execute greybox --local --file=migrations/0002_seed.sql
+npx wrangler pages dev .
+# verify: curl /api/config/home, /api/config/collections,
+#         /api/config/collections/science-fiction, /api/config/overrides
+# edit check: wrangler d1 execute greybox --local --command="UPDATE home_sections SET title='X' WHERE id='popular-movies'"
+#             → hard-refresh shows the new title (config cache is ~60s)
+```
+
+Production (Cloudflare dashboard):
+
+1. **Workers & Pages → D1 → Create** a database named `greybox`.
+2. Apply migrations remotely (or via `wrangler d1 execute greybox --remote --file=...` after `wrangler login`).
+3. Pages project → **Settings → Functions → D1 database bindings** → add binding name `DB` pointing at the `greybox` database (Production + Preview).
+4. Set `TMDB_READ_TOKEN` env var as before, redeploy.
+5. Verify `/api/config/home` returns the seeded homepage, then change a title in D1 and hard-refresh within ~a minute.
+
+> Vercel has no D1: the `api/` equivalents are untouched and `/api/config/*`
+> 404s there, so Vercel deploys keep working off the local config files.
+
+## 5) How playback works (full logic, source slot left blank)
 
 - **Browse/search**: `GET /api/trending`, `/api/movies/popular`, `/api/tv/popular`, `/api/search?q=...` — see `js/app.js:load()`. The Greybox backend (`functions/lib/greybox.js` + `functions/api/*`) calls TMDB internally and returns only the fields the UI needs.
 - **Details**: `GET /api/movie/{id}?region=US` or `/api/tv/{id}?region=US` — one bundle with detail + cast + `trailer_key` (YouTube) + region-filtered `providers` (+ `seasons` for TV). Episodes via `GET /api/tv/{id}/season/{n}` with stills.
@@ -108,7 +159,7 @@ Local Vercel dev: `Copy-Item .env.example .env` (paste real token) → `vercel d
 - **Source slot — change ONE line** (`Stream.EMBED.base` in `js/stream.js`, marked PUT YOUR OFFICIAL API STREAMING LINK HERE): everything derives from it — `{base}/embed/movie/{tmdb_id}` and `{base}/embed/tv/{tmdb_id}/{season}/{episode}`. While it points at `example.com`, Watch buttons show "No stream source configured". Point it only at a host you own or license.
 - **Free films**: `https://archive.org/metadata/{id}` → smallest MP4 → plays through the same engine with resume support.
 
-## 5) Going further (all legal, all Pages-compatible)
+## 6) Going further (all legal, all Pages-compatible)
 
 - Add Cloudflare **D1 + Pages Functions** `/api/mylist` for cross-device watchlists (currently localStorage).
 - Add **Cloudflare Stream** for your uploads; add **Access** if you want logins/paywall.
