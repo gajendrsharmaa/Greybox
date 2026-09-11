@@ -336,6 +336,13 @@
       clean.source.media = src.media === 'tv' ? 'tv' : 'movie';
       clean.source.genreId = gid;
       clean.source.sort = String(src.sort || 'popularity.desc');
+    } else if (type === 'collection') {
+      // Expandable shelf: references an existing collection slug. Preview and
+      // /collection/:slug share the SAME rule via resolveCollection — no
+      // second content system. Slug only; limit stays on the section.
+      const slug = normalizeSlug(src.slug);
+      if (!slug) { console.warn('[home] collection source needs slug:', id); return null; }
+      clean.source.slug = slug;
     } else {
       console.warn('[home] unknown source type:', type);
       return null;
@@ -373,12 +380,23 @@
   }
 
   // Resolve ONE normalized section through the Greybox API.
-  // Returns Promise<{ section, items }> with limit applied; rejects on
-  // unknown source or fetch failure (caller isolates failures per section).
+  // Returns Promise<{ section, items, collection? }> with limit applied;
+  // rejects on unknown source or fetch failure (caller isolates failures
+  // per section). `collection` sources delegate to resolveCollection — the
+  // SAME rule the /collection/:slug page uses — then slice to the section
+  // limit for the preview. Unknown/hidden slugs reject so the shelf is
+  // skipped instead of rendering a broken View All link.
   function resolveHomeSection(section) {
     if (!section || !section.source) return Promise.reject(new Error('Invalid home section'));
     const src = section.source;
     const limit = normalizeLimit(section.limit);
+    if (src.type === 'collection') {
+      const slug = normalizeSlug(src.slug);
+      if (!slug) return Promise.reject(new Error('Invalid collection slug'));
+      return resolveCollection(slug).then(({ collection, items }) => ({
+        section, items: (items || []).slice(0, limit), collection,
+      }));
+    }
     let p;
     if (src.type === 'trending') p = getTrending(1);
     else if (src.type === 'movies') p = getMovies(src.category, 1);

@@ -111,7 +111,7 @@
   const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
   const HOME_MOVIE_CATS = ['popular', 'top-rated', 'upcoming', 'now-playing'];
   const HOME_TV_CATS = ['popular', 'top-rated', 'on-the-air', 'airing-today'];
-  const HOME_SOURCE_TYPES = ['trending', 'movies', 'tv', 'anime', 'search', 'ids', 'genre'];
+  const HOME_SOURCE_TYPES = ['trending', 'movies', 'tv', 'anime', 'search', 'ids', 'genre', 'collection'];
   const COL_SOURCE_TYPES = ['trending', 'popular', 'top-rated', 'now-playing', 'discover', 'genre', 'year', 'search', 'custom'];
   const OVERRIDE_FIELDS = ['title', 'name', 'overview', 'description', 'poster_path', 'backdrop_path', 'vote_average', 'release_date', 'first_air_date', 'featured', 'custom_badge'];
 
@@ -161,6 +161,12 @@
       if (src.media != null && src.media !== 'movie' && src.media !== 'tv') return "media must be 'movie' or 'tv'";
       if (!(parseInt(src.genreId, 10) > 0)) return 'genre needs a genreId';
     }
+    if (t === 'collection') {
+      const s = String(src.slug || '').trim().toLowerCase();
+      if (!s) return 'collection needs a slug';
+      if (s.length > 64 || !SLUG_RE.test(s)) return 'collection slug must match [a-z0-9-] (lowercase, max 64 chars)';
+      return null;
+    }
     if (t === 'year' && !/^\d{4}$/.test(String(src.year || '').trim())) return 'year must be YYYY';
     if ((t === 'ids' || t === 'custom') && (!Array.isArray(src.items) || !src.items.length)) return 'source needs at least one item';
     if (t === 'movies' && HOME_MOVIE_CATS.indexOf(String(src.category || 'popular').toLowerCase()) < 0 && allowed === HOME_SOURCE_TYPES) return 'unknown movies category';
@@ -199,6 +205,7 @@
   function summarizeSource(src) {
     if (!src || typeof src.type !== 'string') return '—';
     const bits = [src.type];
+    if (src.slug) bits.push('/collection/' + src.slug);
     if (src.category) bits.push(src.category);
     if (src.kind) bits.push(src.kind);
     if (src.media) bits.push(src.media);
@@ -466,6 +473,47 @@
         sub.appendChild(fieldRow('Media', selectInput(prefix + '-media', [['movie', 'movie'], ['tv', 'tv']], val('media', 'movie'))));
         sub.appendChild(fieldRow('Year', numInput(prefix + '-year', val('year', ''), '1999')));
         sub.appendChild(fieldRow('Sort', textInput(prefix + '-sort', val('sort', 'popularity.desc'), 'popularity.desc')));
+      } else if (t === 'collection') {
+        // Expandable shelf: associate the section with ONE existing collection
+        // slug. Preview + View All share that collection's rule (no second
+        // list). Prefer a dropdown of existing collections; fall back to a
+        // plain slug input when the list is unavailable.
+        const cur = String(val('slug', '') || '').trim().toLowerCase();
+        const slugHost = el('div', 'grid gap-3');
+        sub.appendChild(slugHost);
+        slugHost.appendChild(el('p', 'text-xs text-zinc-500', 'Loading collections…'));
+        const stillCurrent = () => {
+          try {
+            if (!slugHost.isConnected) return false;
+            if (typeSel.value !== 'collection') return false;
+          } catch { /* noop */ }
+          return true;
+        };
+        const fillSelect = (list) => {
+          if (!stillCurrent()) return;
+          slugHost.innerHTML = '';
+          const arr = Array.isArray(list) ? list.filter((c) => c && typeof c.slug === 'string' && c.slug) : [];
+          if (arr.length) {
+            const opts = arr.map((c) => [c.slug, c.title ? c.slug + ' — ' + c.title : c.slug]);
+            if (cur && !opts.some(([v]) => v === cur)) opts.unshift([cur, cur + ' (current)']);
+            slugHost.appendChild(fieldRow('Collection (existing slug)', selectInput(prefix + '-collection', opts, cur || opts[0][0])));
+          } else {
+            slugHost.appendChild(fieldRow('Collection slug', textInput(prefix + '-collection', cur, 'kids')));
+          }
+          slugHost.appendChild(el('p', 'text-xs text-zinc-500', 'Preview shows the first N of this collection; View All → opens /collection/<slug>. Same rule, no second list.'));
+        };
+        const fillText = () => {
+          if (!stillCurrent()) return;
+          slugHost.innerHTML = '';
+          slugHost.appendChild(fieldRow('Collection slug', textInput(prefix + '-collection', cur, 'kids')));
+          slugHost.appendChild(el('p', 'text-xs text-zinc-500', 'Type an existing collection slug (e.g. kids). Preview + View All use that collection’s rule.'));
+        };
+        fetch('/api/config/collections', { headers: { accept: 'application/json' } }).then((r) => {
+          if (!r.ok) throw new Error('no public list');
+          return r.json();
+        }).then(fillSelect, () => {
+          api(API.collections).then(fillSelect, fillText);
+        });
       }
     };
     typeSel.onchange = paint;
@@ -498,6 +546,7 @@
     } else if (document.getElementById(prefix + '-genreId')) { const n = numOrEmpty(v(prefix + '-genreId')); if (n !== '') src.genreId = n; }
     if (document.getElementById(prefix + '-genre') && !src.genre) { const n = numOrEmpty(v(prefix + '-genre')); if (n !== '') src.genre = n; }
     if (document.getElementById(prefix + '-year')) { const n = numOrEmpty(v(prefix + '-year')); if (n !== '') src.year = n; }
+    if (document.getElementById(prefix + '-collection')) { const s = String(v(prefix + '-collection') || '').trim().toLowerCase(); if (s) src.slug = s; }
     if (document.getElementById(prefix + '-items')) {
       const parsed = parseEntryLines(v(prefix + '-items'));
       if (!parsed.ok) throw { message: parsed.error };

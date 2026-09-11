@@ -172,6 +172,12 @@ export function validateHomeSource(src) {
     clean.media = validateMediaOr('movie')(src.media);
     clean.genreId = validateGenreId(src.genreId, 'source');
     clean.sort = validateSort(src.sort, 'source');
+  } else if (type === 'collection') {
+    // Expandable shelf: references an existing collection slug. Preview and
+    // /collection/:slug share the SAME rule (resolveCollection) — no second
+    // list system. Existence is render-time (unknown/hidden skips the shelf),
+    // so validation only checks slug shape to keep create order flexible.
+    clean.slug = validateSlug(src.slug);
   } else {
     fail('unknown home source type: ' + type);
   }

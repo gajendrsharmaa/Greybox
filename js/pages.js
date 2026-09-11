@@ -136,8 +136,29 @@
 
   // Renders resolved config sections below the main grid. Same heading sizes,
   // same .card grid as the main section — the style is reused, not redesigned.
-  // resolved: [{ section: {id,title,description}, items }] in config order.
-  // Empty shelves render nothing (a bad query shouldn't leave holes).
+  // resolved: [{ section: {id,title,description}, items, collection? }] in
+  // config order. Empty shelves render nothing (a bad query shouldn't leave
+  // holes). Sections with source { type: 'collection', slug } get an optional
+  // "View All →" link to the SAME collection (/collection/:slug) — the preview
+  // above already resolved through resolveCollection, so no second list system.
+  // Sections without a collection keep the current header with no link.
+  function homeSectionHref(r) {
+    const s = (r && r.section) || {};
+    const src = (s.source && typeof s.source === 'object') ? s.source : null;
+    let slug = '';
+    if (r && r.collection && typeof r.collection.slug === 'string') slug = r.collection.slug;
+    else if (src && src.type === 'collection' && typeof src.slug === 'string') slug = src.slug;
+    else return '';
+    slug = String(slug).trim().toLowerCase();
+    if (!slug || slug.length > 64 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) return '';
+    try {
+      if (window.Router && window.Router.url && typeof window.Router.url.collection === 'function') {
+        return window.Router.url.collection(slug);
+      }
+    } catch { /* fall through to plain path */ }
+    return '/collection/' + slug;
+  }
+
   function renderHomeSections(resolved, isInList) {
     const c = C();
     const host = $('home-sections');
@@ -148,8 +169,12 @@
       .map((r) => {
         const s = r.section;
         const domId = 'home-section-' + String(s.id).replace(/[^a-z0-9-_]/gi, '-');
+        const href = homeSectionHref(r);
+        const viewAll = href
+          ? `<a href="${c.escapeHtml(href)}" class="text-sm text-zinc-400 hover:text-white shrink-0 ml-4 whitespace-nowrap">View All →</a>`
+          : '';
         return `<section class="mt-8" id="${c.escapeHtml(domId)}">` +
-          `<div class="flex items-end justify-between mb-3"><h2 class="text-xl font-bold">${c.escapeHtml(s.title)}</h2></div>` +
+          `<div class="flex items-end justify-between mb-3"><h2 class="text-xl font-bold">${c.escapeHtml(s.title)}</h2>${viewAll}</div>` +
           (s.description ? `<p class="text-sm text-zinc-400 -mt-1 mb-3">${c.escapeHtml(s.description)}</p>` : '') +
           `<div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">${c.cardsHTML(r.items, isInList)}</div>` +
           `</section>`;
