@@ -85,6 +85,19 @@
     c.classList.toggle('hidden', !n);
   }
 
+  // Footer discoverability: visible collections from js/collections.config.js
+  // become footer links via the real route URLs (R.url.collection), so adding
+  // a collection to the config automatically adds its footer link. Runs once
+  // at boot — the config is static for the lifetime of the page.
+  function renderFooter() {
+    let cols = [];
+    try { cols = (Data.getCollections() || []).filter((c) => c && c.visible !== false); } catch { cols = []; }
+    Pages.renderFooterCollections(cols.map((c) => ({
+      href: R ? R.url.collection(c.slug) : '/collection/' + c.slug,
+      label: c.title,
+    })));
+  }
+
   function tabNavigator() {
     // Tabs are navigation: the URL updates so refresh/back/deep-links work.
     return (k) => {
@@ -605,6 +618,7 @@
 
   /* ---- boot: router owns the initial render so refresh/direct-URL work ---- */
   updateCount();
+  renderFooter();
   try { window.addEventListener('greybox:mylist', updateCount); } catch { /* noop */ }
   try { if ('scrollRestoration' in window.history) window.history.scrollRestoration = 'manual'; } catch { /* noop */ }
   if (R) {

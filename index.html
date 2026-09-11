@@ -182,12 +182,35 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
   </div>
 </div>
 
-<footer class="border-t border-white/10 text-center text-xs text-zinc-500 py-8 px-4">
-  Metadata & images by TMDB. Trailers via YouTube.<br/>
-  <a href="/disclaimer.html" class="hover:text-white underline">Disclaimer</a> ·
-  <a href="/contact.html" class="hover:text-white underline">Contact</a><br/>
-  <span class="block mt-2">Thank you for visiting Greybox! 🍿</span>
-  <span class="block mt-1">Deploy: Cloudflare Pages → static root <code>/</code> + Functions in <code>/functions</code>.</span>
+<footer class="border-t border-white/10 py-10 px-4 text-xs text-zinc-500">
+  <div class="max-w-7xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-8">
+    <div>
+      <div class="text-lg font-black tracking-tight text-zinc-100">Grey<span class="text-red-500">box</span></div>
+      <p class="mt-2">Metadata & images by TMDB. Trailers via YouTube.</p>
+    </div>
+    <nav aria-label="Browse">
+      <h3 class="text-sm font-bold text-zinc-200">Browse</h3>
+      <a href="/" class="block mt-2 hover:text-white">Home</a>
+      <a href="/movies" class="block mt-2 hover:text-white">Movies</a>
+      <a href="/tv" class="block mt-2 hover:text-white">TV Shows</a>
+      <a href="/anime" class="block mt-2 hover:text-white">Anime</a>
+      <a href="/search" class="block mt-2 hover:text-white">Search</a>
+      <a href="/mylist" class="block mt-2 hover:text-white">My List</a>
+    </nav>
+    <nav aria-label="Collections" id="footer-collections-section">
+      <h3 class="text-sm font-bold text-zinc-200">Collections</h3>
+      <div id="footer-collections"></div>
+    </nav>
+    <nav aria-label="Greybox">
+      <h3 class="text-sm font-bold text-zinc-200">Greybox</h3>
+      <a href="/disclaimer.html" class="block mt-2 hover:text-white underline">Disclaimer</a>
+      <a href="/contact.html" class="block mt-2 hover:text-white underline">Contact</a>
+    </nav>
+  </div>
+  <div class="max-w-7xl mx-auto text-center">
+    <span class="block mt-8">Thank you for visiting Greybox! 🍿</span>
+    <span class="block mt-1">Deploy: Cloudflare Pages → static root <code>/</code> + Functions in <code>/functions</code>.</span>
+  </div>
 </footer>
 
 <script src="/js/api.js?v=5"></script>

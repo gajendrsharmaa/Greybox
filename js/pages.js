@@ -161,6 +161,29 @@
     if (host) host.innerHTML = '';
   }
 
+  /* ---------------- footer navigation (config-driven collections) ---------------- */
+
+  // Renders footer collection links from [{ href, label }]. Labels use
+  // textContent (never innerHTML), so config titles cannot inject markup.
+  // Empty/invalid lists hide the whole Collections column instead of leaving
+  // a dead heading. Styling matches the static footer links in index.html.
+  function renderFooterCollections(links) {
+    const host = $('footer-collections');
+    const section = $('footer-collections-section');
+    if (!host || !section) return;
+    host.innerHTML = '';
+    const list = (Array.isArray(links) ? links : []).filter((l) => l && typeof l.href === 'string' && l.href);
+    if (!list.length) { section.classList.add('hidden'); return; }
+    section.classList.remove('hidden');
+    for (const l of list) {
+      const a = document.createElement('a');
+      a.href = l.href;
+      a.textContent = typeof l.label === 'string' && l.label ? l.label : l.href;
+      a.className = 'block mt-2 hover:text-white';
+      host.appendChild(a);
+    }
+  }
+
   /* ---------------- Greybox collection page (config order, shared grid shell) ---------------- */
 
   // Renders a resolved collection into the standard list shell (#grid):
@@ -369,6 +392,7 @@
     renderCollectionError,
     renderHomeSections,
     clearHomeSections,
+    renderFooterCollections,
     renderTitleDetail,
     renderCast,
     renderProviders,
