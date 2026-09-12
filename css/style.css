@@ -3,12 +3,11 @@
 .card{transition:transform .15s ease, box-shadow .15s ease;cursor:pointer}
 .card:hover{transform:translateY(-3px) scale(1.02);box-shadow:0 10px 30px rgba(0,0,0,.5)}
 .card img{aspect-ratio:2/3;object-fit:cover;width:100%}
-.nav-btn.active{color:#fff;font-weight:700;text-decoration:underline;text-underline-offset:6px;text-decoration-color:#dc2626}
+/* Phase 1: .nav-btn base + .active pill lives in css/navbar.css (glass system) */
 /* season dropdown: native popup must stay dark, otherwise white-on-white */
 #m-season option{background:#14141f;color:#fff}
 #modal-close{pointer-events:auto}
-::-webkit-scrollbar{height:8px;width:8px}
-::-webkit-scrollbar-thumb{background:#333;border-radius:8px}
+/* Phase 1: scrollbars live in css/tokens.css */
 code{background:rgba(255,255,255,.1);padding:1px 5px;border-radius:5px}
 
 /* ---- loading skeletons + spinner (replaces blank black page) ---- */

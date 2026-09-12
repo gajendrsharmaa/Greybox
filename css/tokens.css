@@ -1,0 +1,104 @@
+/* Greybox Phase 1 — visual tokens + cinematic foundation.
+ * Single source of truth for color / surface / border / shadow / motion.
+ * Later phases (hero, cards, detail) should consume these variables instead
+ * of hardcoding new values. No framework, no dependency. */
+
+:root {
+  /* ——— background ——— */
+  --gx-bg-0: #07070c;          /* near-black cinematic base */
+  --gx-bg-1: #0c0c13;          /* page lift for sections */
+  --gx-bg-2: #101016;
+
+  /* ——— surfaces ——— */
+  --gx-surface: #13131b;       /* charcoal */
+  --gx-surface-2: #181822;
+
+  /* ——— glass surfaces ——— */
+  --gx-glass: rgba(14, 14, 20, 0.58);
+  --gx-glass-strong: rgba(14, 14, 20, 0.84);
+  --gx-glass-wash: rgba(255, 255, 255, 0.06);
+
+  /* ——— borders (low-opacity white only) ——— */
+  --gx-border: rgba(255, 255, 255, 0.08);
+  --gx-border-strong: rgba(255, 255, 255, 0.12);
+  --gx-border-faint: rgba(255, 255, 255, 0.05);
+
+  /* ——— text ——— */
+  --gx-text: #f4f3ee;          /* white / off-white primary */
+  --gx-text-dim: #a8a8b4;      /* muted grey secondary */
+  --gx-text-faint: #6e6e7a;
+
+  /* ——— accent (very restrained warm amber/gold) ——— */
+  --gx-accent: #d0a24f;
+  --gx-accent-strong: #e2ba6b;
+  --gx-accent-soft: rgba(208, 162, 79, 0.13);
+  --gx-accent-border: rgba(208, 162, 79, 0.32);
+
+  /* ——— shadows ——— */
+  --gx-shadow-bar: 0 12px 40px rgba(0, 0, 0, 0.45);
+  --gx-shadow-pop: 0 20px 55px rgba(0, 0, 0, 0.55);
+  --gx-shadow-soft: 0 8px 24px rgba(0, 0, 0, 0.35);
+
+  /* ——— shape / spacing / motion ——— */
+  --gx-radius-bar: 16px;
+  --gx-radius-pop: 14px;
+  --gx-radius-pill: 999px;
+  --gx-max: 80rem;
+  --gx-transition: 180ms ease;
+}
+
+/* ——— base ——— */
+html {
+  color-scheme: dark;
+  background: var(--gx-bg-0);
+}
+
+body {
+  background: var(--gx-bg-0);
+  color: var(--gx-text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Inter, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  line-height: 1.5;
+}
+
+/* Subtle atmospheric light. Static (no animation) so it is cheap and
+   respects prefers-reduced-motion by default. Artwork-derived color
+   comes in a later phase — this stays neutral. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(58% 38% at 50% -4%, rgba(208, 162, 79, 0.07), transparent 70%),
+    radial-gradient(46% 32% at 88% 6%, rgba(130, 140, 190, 0.055), transparent 70%),
+    radial-gradient(40% 28% at 8% 2%, rgba(255, 255, 255, 0.028), transparent 70%);
+}
+
+::selection {
+  background: rgba(208, 162, 79, 0.32);
+  color: #fff;
+}
+
+:focus-visible {
+  outline: 2px solid var(--gx-accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Quiet scrollbars that match the new surfaces */
+::-webkit-scrollbar { height: 8px; width: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #26262f; border-radius: 8px; border: 2px solid var(--gx-bg-0); }
+::-webkit-scrollbar-thumb:hover { background: #34343f; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
