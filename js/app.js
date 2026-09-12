@@ -30,6 +30,11 @@
   let pageNum = 1;
   let searchQuery = '';
   let collectionSlug = '';
+  let collectionMedia = null; // Phase 5.3: 'movie' | 'tv' | null (null = All)
+  // Phase 5.3: last resolved collection set — filter switches on the same
+  // slug re-render instantly from this instead of refetching. Holds exactly
+  // one slug (the current page); any other slug refetches and replaces it.
+  let collectionCache = null; // { slug, configKey, items } | null
   let heroItem = null;
   let currentDetail = null; // {...} + media_type, or {kind:'person', id}
   let currentSeasons = [];
@@ -164,12 +169,47 @@
 
   // Greybox collection page: config (structure + order) + Greybox API (data).
   // Unknown or hidden slugs render Not found, like any bad route.
+  // Phase 5.3: the resolved set is cached per slug+config so ?media= filter
+  // switches re-render instantly with no refetch; filtering itself is
+  // in-memory inside renderCollection.
+  function collectionConfigKey(col) {
+    try { return JSON.stringify(col); } catch { return ''; }
+  }
+
+  // Filter control callback: filter state lives in the URL (?media=movie|tv,
+  // absent = All) so back/forward/refresh preserve it. Same-filter clicks
+  // no-op inside Router.navigate (identical URL), so no fetch loop is possible.
+  function collectionFilterNav(f) {
+    const slug = collectionSlug;
+    const want = f === 'tv' ? 'tv' : (f === 'movie' ? 'movie' : 'all');
+    const to = (R && R.url && typeof R.url.collection === 'function')
+      ? R.url.collection(slug, want === 'all' ? null : want)
+      : ('/collection/' + slug + (want === 'all' ? '' : '?media=' + want));
+    navTo(to);
+  }
+
   async function loadCollectionPage() {
     const myGen = routeGen;
     const col = Data.getCollection(collectionSlug);
     if (!col) {
+      collectionCache = null;
       Pages.renderNotFound('/collection/' + (collectionSlug || ''));
       document.querySelectorAll('.nav-btn').forEach((b) => b.classList.remove('active'));
+      return;
+    }
+    const filter = collectionMedia === 'tv' ? 'tv' : (collectionMedia === 'movie' ? 'movie' : 'all');
+    const renderFiltered = (items) => {
+      Pages.renderCollection({
+        collection: col, items, filter,
+        onFilter: collectionFilterNav,
+        isInList: (id, mt) => Data.isInMyList(id, mt),
+      });
+      if (R) document.title = `${col.title} — Greybox`;
+      hasLoadedList = true;
+    };
+    const cached = collectionCache;
+    if (cached && cached.slug === col.slug && cached.configKey === collectionConfigKey(col) && Array.isArray(cached.items)) {
+      renderFiltered(cached.items);
       return;
     }
     Pages.renderCollectionLoading(col.title);
@@ -177,9 +217,8 @@
     try {
       const { items } = await Data.resolveCollection(col);
       if (myGen !== routeGen) return; // navigated away: a newer route owns the page
-      Pages.renderCollection({ collection: col, items, isInList: (id, mt) => Data.isInMyList(id, mt) });
-      if (R) document.title = `${col.title} — Greybox`;
-      hasLoadedList = true;
+      collectionCache = { slug: col.slug, configKey: collectionConfigKey(col), items };
+      renderFiltered(items);
     } catch (e) {
       if (myGen !== routeGen) return;
       Pages.renderCollectionError(col, e);
@@ -191,7 +230,7 @@
   function reloadBackground() {
     if (mode === 'mylist') return loadMyList();
     if (mode === 'search') return loadSearchPage();
-    if (mode === 'collection') return loadCollectionPage();
+    if (mode === 'collection') { collectionCache = null; return loadCollectionPage(); }
     return loadList();
   }
 
@@ -481,8 +520,12 @@
     }
     if (route.name === 'collection') {
       hideModal(); currentDetail = null;
+      // Same-slug filter switches (?media=) must not yank scroll: the user is
+      // already looking at this collection's catalog.
+      const sameCollection = mode === 'collection' && collectionSlug === (route.slug || '');
       mode = 'collection'; collectionSlug = route.slug || ''; pageNum = 1;
-      window.scrollTo({ top: 0 });
+      collectionMedia = route.media === 'tv' ? 'tv' : (route.media === 'movie' ? 'movie' : null);
+      if (!sameCollection) window.scrollTo({ top: 0 });
       Pages.clearHomeSections();
       await loadCollectionPage();
       return;

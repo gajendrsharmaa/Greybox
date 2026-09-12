@@ -129,6 +129,27 @@
 
 @keyframes gx-col-pulse { 100% { transform: translateX(100%); } }
 
+/* ---------------- Phase 5.3: quiet segmented media filter ----------------
+ * Reuses the existing .gx-tab pill (see css/shelves.css) for shape, type,
+ * and focus behavior; only the active state gets the restrained amber
+ * treatment (same tokens as the card My List state). Compact row under the
+ * collection meta — never a toolbar, no animation of its own. */
+
+.gx-col-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.9rem;
+}
+
+.gx-col-filter .gx-tab { min-height: 2.25rem; }
+
+.gx-col-filter .gx-tab.active {
+  color: var(--gx-accent-strong);
+  border-color: var(--gx-accent-border);
+  background: var(--gx-accent-soft);
+}
+
 /* ---------------- responsive ---------------- */
 
 @media (max-width: 640px) {

@@ -138,10 +138,14 @@
 
     if (head === 'collection') {
       // Greybox-controlled slug (local config): lowercase letters/numbers/hyphens.
+      // Optional ?media=movie|tv filter (Phase 5.3); anything else means All.
       if (segs.length === 2) {
         var slug = String(segs[1] || '').trim().toLowerCase();
         if (/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) && slug.length <= 64) {
-          return { name: 'collection', slug: slug, path: p };
+          var cmedia = '';
+          try { cmedia = String(q.media || '').trim().toLowerCase(); } catch (e) { cmedia = ''; }
+          if (cmedia !== 'movie' && cmedia !== 'tv') cmedia = '';
+          return { name: 'collection', slug: slug, media: cmedia || null, path: p };
         }
       }
       return { name: 'not-found', path: p };
@@ -223,10 +227,12 @@
       return s;
     },
     person: function (id) { return '/person/' + parseId(id); },
-    collection: function (slug) {
+    collection: function (slug, media) {
       var s = String(slug || '').trim().toLowerCase();
       if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(s) || s.length > 64) return '/';
-      return '/collection/' + s;
+      var base = '/collection/' + s;
+      if (media === 'movie' || media === 'tv') return base + '?media=' + media;
+      return base;
     },
     anime: function (kind, page) {
       kind = (kind || 'series').toLowerCase();

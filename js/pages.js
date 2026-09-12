@@ -284,10 +284,71 @@
       `<div class="gx-col-shade" aria-hidden="true"></div>`;
   }
 
+  // Media scope derived from the already-resolved items (never hardcoded
+  // slugs): exact media_type only — never invent a type for unknown items.
+  // The resolver always sets media_type, so unknowns mean "cannot be
+  // determined reliably" and the filter UI is skipped (existing behavior).
+  function collectionMediaOf(item) {
+    const mt = item && item.media_type;
+    return (mt === 'movie' || mt === 'tv') ? mt : '';
+  }
+
+  // Returns the applicable filter options for the resolved set:
+  // ['all','movie','tv'] when both are present, a single scope when only one
+  // is, or [] when nothing can be determined (empty/unknown) — in which case
+  // no filter UI renders and behavior is unchanged.
+  function collectionFilterOptions(items) {
+    const list = Array.isArray(items) ? items : [];
+    let movies = false, tv = false;
+    for (let i = 0; i < list.length; i++) {
+      const mt = collectionMediaOf(list[i]);
+      if (mt === 'movie') movies = true;
+      else if (mt === 'tv') tv = true;
+      if (movies && tv) break;
+    }
+    if (movies && tv) return ['all', 'movie', 'tv'];
+    if (movies) return ['movie'];
+    if (tv) return ['tv'];
+    return [];
+  }
+
+  const COLLECTION_FILTER_LABELS = { all: 'All', movie: 'Movies', tv: 'TV' };
+  const COLLECTION_FILTER_EMPTY = {
+    movie: 'No films found in this collection.',
+    tv: 'No television found in this collection.',
+  };
+
+  function collectionFilterHTML(options, active, c) {
+    return `<div class="gx-col-filter" role="group" aria-label="Filter by media type">` +
+      options.map((f) =>
+        `<button type="button" class="gx-tab${f === active ? ' active' : ''}" data-media="${f}"` +
+        ` aria-pressed="${f === active ? 'true' : 'false'}"` +
+        `${f === active ? ' aria-current="true"' : ''}>${c.escapeHtml(COLLECTION_FILTER_LABELS[f])}</button>`
+      ).join('') + `</div>`;
+  }
+
+  // Wire the filter buttons to the controller callback (same delegation-free
+  // pattern as the episode/known-for buttons below). No-op in headless use.
+  function wireCollectionFilter(onFilter) {
+    if (typeof onFilter !== 'function') return;
+    try {
+      const head = $('collection-head');
+      if (!head || !head.querySelectorAll) return;
+      head.querySelectorAll('[data-media]').forEach((b) => {
+        b.onclick = () => onFilter(b.getAttribute ? b.getAttribute('data-media') : (b.dataset && b.dataset.media));
+      });
+    } catch (e) { /* filter stays inert without DOM */ }
+  }
+
   // Renders a resolved collection as its own destination: compact cinematic
   // header (title, concise description, quiet meta) + the shared Phase-4 card
   // catalog in Greybox config order.
-  // ctx: { collection: {title, description, cover, source, meta}, items, isInList(id, mt) }
+  // ctx: { collection: {title, description, cover, source, meta}, items,
+  //        filter: 'all'|'movie'|'tv' (default 'all'),
+  //        onFilter(f): 'all'|'movie'|'tv', isInList(id, mt) }
+  // Filtering is in-memory on the already-resolved set: no refetch, no fake
+  // loader, cards/hero/meta follow the shown set, media_type is preserved so
+  // movie cards still route to /movie/:id and TV cards to /tv/:id.
   function renderCollection(ctx) {
     const c = C();
     const col = (ctx && ctx.collection) || {};
@@ -296,18 +357,28 @@
     c.setPageLabel(1);
     c.clearHeroLoading();
     const items = Array.isArray(ctx.items) ? ctx.items : [];
+    const options = collectionFilterOptions(items);
+    // Never fall back to All automatically: a valid requested filter with no
+    // results (e.g. ?media=tv on a movie-only collection) renders the quiet
+    // per-media empty state below. (app.js already normalizes garbage to All.)
+    const filter = (ctx && ctx.filter) || 'all';
+    const active = options.indexOf(filter) >= 0 ? filter : '';
+    const shown = filter === 'all' ? items : items.filter((x) => collectionMediaOf(x) === filter);
     const cover = (typeof col.cover === 'string' && col.cover.trim()) ? col.cover.trim() : '';
     $('collection-head').innerHTML =
-      `<div class="gx-col">${collectionAtmo(items, c)}<div class="gx-col-body">` +
+      `<div class="gx-col">${collectionAtmo(shown, c)}<div class="gx-col-body">` +
       (cover ? `<img class="gx-col-cover" src="${c.escapeHtml(cover)}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none'"/>` : '') +
       `<div class="gx-col-main">` +
       `<p class="gx-col-eyebrow">${c.escapeHtml(collectionEyebrow(col))}</p>` +
       `<h1 class="gx-col-title">${c.escapeHtml(col.title || 'Collection')}</h1>` +
       (col.description ? `<p class="gx-col-desc">${c.escapeHtml(col.description)}</p>` : '') +
-      `<p class="gx-col-meta">${c.escapeHtml(collectionMetaLine(col, items.length))}</p>` +
+      `<p class="gx-col-meta">${c.escapeHtml(collectionMetaLine(col, shown.length))}</p>` +
+      (options.length ? collectionFilterHTML(options, active, c) : '') +
       `</div></div></div>`;
-    $('grid').innerHTML = c.cardsHTML(items, ctx.isInList) || '<div class="gx-empty col-span-full">No titles available in this collection right now.</div>';
-    if (items[0]) c.setHero(items[0]);
+    wireCollectionFilter(ctx && ctx.onFilter);
+    $('grid').innerHTML = c.cardsHTML(shown, ctx.isInList) ||
+      `<div class="gx-empty col-span-full">${c.escapeHtml(COLLECTION_FILTER_EMPTY[filter] || 'No titles available in this collection right now.')}</div>`;
+    if (shown[0]) c.setHero(shown[0]);
   }
 
   function renderCollectionLoading(title) {
