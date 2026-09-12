@@ -13,6 +13,7 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
 <link rel="stylesheet" href="/css/tokens.css" />
 <link rel="stylesheet" href="/css/style.css" />
 <link rel="stylesheet" href="/css/navbar.css" />
+<link rel="stylesheet" href="/css/hero.css" />
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 </head>
 <body class="min-h-screen">
@@ -76,19 +77,29 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
   </div>
 </header>
 
-<!-- HERO -->
-<section id="hero" class="relative h-[78vh] min-h-[520px] overflow-hidden hero-loading">
-  <img id="hero-img" class="absolute inset-0 w-full h-full object-cover object-top opacity-60" alt="" />
-  <div class="absolute inset-0 bg-gradient-to-t from-[#0a0a12] via-[#0a0a12]/40 to-transparent"></div>
-  <div class="relative max-w-7xl mx-auto px-4 h-full flex flex-col justify-end pb-10">
-    <div id="hero-badge" class="text-xs uppercase tracking-widest text-red-400 font-bold mb-2">Loading…</div>
-    <h1 id="hero-title" class="text-4xl md:text-6xl font-black max-w-3xl"><span class="hero-spinner"></span> Fetching trending…</h1>
-    <p id="hero-overview" class="mt-3 max-w-2xl text-zinc-300 line-clamp-3"><span class="skeleton skeleton-line"></span><span class="skeleton skeleton-line short"></span></p>
-    <div class="mt-5 flex gap-3">
-      <button id="hero-play" class="bg-red-600 hover:bg-red-500 px-6 py-3 rounded-lg font-bold">▶ Details & Trailer</button>
-      <button id="hero-list" class="bg-white/15 hover:bg-white/25 px-6 py-3 rounded-lg font-bold">+ My List</button>
+<!-- HERO — Phase 2 cinematic dynamic hero (IDs preserved, trailer inside) -->
+<section id="hero" class="gx-hero hero-loading" aria-label="Featured title">
+  <div class="gx-hero-bg" aria-hidden="true">
+    <img id="hero-ambient" class="gx-hero-ambient" alt="" />
+    <img id="hero-img" class="gx-hero-img" alt="" fetchpriority="high" decoding="async" />
+    <div id="hero-trailer-wrap" class="gx-hero-trailer hidden">
+      <iframe id="hero-trailer" title="Featured trailer" tabindex="-1" aria-hidden="true" allow="autoplay; encrypted-media; picture-in-picture"></iframe>
+    </div>
+    <div class="gx-hero-shade"></div>
+    <div class="gx-hero-vignette"></div>
+  </div>
+  <div class="gx-hero-content">
+    <div id="hero-badge" class="gx-hero-kicker">Loading…</div>
+    <h1 id="hero-title" class="gx-hero-title"><span class="hero-spinner"></span> Fetching trending…</h1>
+    <p id="hero-meta" class="gx-hero-meta"></p>
+    <p id="hero-overview" class="gx-hero-overview"><span class="skeleton skeleton-line"></span><span class="skeleton skeleton-line short"></span></p>
+    <div class="gx-hero-actions">
+      <button id="hero-play" class="gx-btn gx-btn-primary">▶ Watch Now</button>
+      <button id="hero-info" class="gx-btn gx-btn-glass">More Info</button>
+      <button id="hero-list" class="gx-btn gx-btn-ghost">+ My List</button>
     </div>
   </div>
+  <button id="hero-mute" class="gx-hero-mute hidden" aria-label="Unmute trailer" aria-pressed="false">🔇</button>
 </section>
 
 <main class="max-w-7xl mx-auto px-4 pb-24">
@@ -256,6 +267,7 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
 <script src="/js/data.js?v=2"></script>
 <script src="/js/components.js?v=1"></script>
 <script src="/js/pages.js?v=1"></script>
+<script src="/js/hero.js?v=1"></script>
 <script src="/js/app.js?v=9"></script>
 <script src="/js/collections-nav.js?v=1"></script>
 <script src="/js/navbar.js?v=1"></script>

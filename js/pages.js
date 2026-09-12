@@ -262,6 +262,7 @@
   function renderNotFound(path) {
     const c = C();
     c.hideModal();
+    try { if (window.GreyboxHero && typeof window.GreyboxHero.reset === 'function') window.GreyboxHero.reset(); } catch (e) { /* hero optional */ }
     c.setSectionTitle('Not found');
     c.clearTabs();
     $('grid').innerHTML = `<div class="text-zinc-400 col-span-full">No page at <code>${c.escapeHtml(path || '')}</code>. <a class="text-red-400 underline" href="/" data-route>Back to home</a></div>`;

@@ -24,7 +24,7 @@ code{background:rgba(255,255,255,.1);padding:1px 5px;border-radius:5px}
 @keyframes spin{to{transform:rotate(360deg)}}
 .inline-loader{display:flex;align-items:center;gap:.6rem;color:#a1a1aa;font-size:.9rem;padding:.75rem 0}
 .hero-spinner{display:inline-block;width:1em;height:1em;border-radius:9999px;
-  border:3px solid rgba(255,255,255,.25);border-top-color:#ef4444;
+  border:3px solid rgba(255,255,255,.25);border-top-color:var(--gx-accent, #d0a24f);
   animation:spin .8s linear infinite;vertical-align:-0.15em;margin-right:.5rem}
 #hero.hero-loading #hero-img{opacity:.15;filter:blur(2px)}
 #hero.hero-loading #hero-title{color:#d4d4d8}

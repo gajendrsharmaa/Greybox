@@ -1,0 +1,294 @@
+/* Greybox Phase 2 — cinematic dynamic hero.
+ * Consumes Phase 1 tokens (black / glass / amber). No red primary, no neon.
+ * Backdrop: slow Ken Burns (100% → 106% + subtle drift). Trailer crossfades
+ * over the still. Ambient layer reuses the same artwork (blurred, static).
+ * Respects prefers-reduced-motion (no zoom/movement). */
+
+.gx-hero {
+  position: relative;
+  height: 78vh;
+  min-height: 560px;
+  max-height: 860px;
+  overflow: hidden;
+  background: var(--gx-bg-0);
+  isolation: isolate;
+}
+
+/* Reserve full space before art loads: dark placeholder, never a broken icon */
+.gx-hero-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background:
+    radial-gradient(70% 50% at 50% 20%, rgba(208, 162, 79, 0.05), transparent 70%),
+    linear-gradient(to bottom, #0a0a11, var(--gx-bg-0));
+}
+
+.gx-hero-ambient,
+.gx-hero-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* Subtle artwork-derived atmosphere. Static blur — no canvas, no realtime cost. */
+.gx-hero-ambient {
+  object-fit: cover;
+  object-position: center 20%;
+  filter: blur(70px) saturate(1.15);
+  opacity: 0;
+  transform: scale(1.12);
+  transition: opacity 900ms ease;
+}
+
+.gx-hero-img {
+  object-fit: cover;
+  object-position: center 20%;
+  opacity: 0;
+  transition: opacity 900ms ease;
+  /* Ken Burns runs only once shown (see .is-ready) */
+}
+
+.gx-hero.is-ready .gx-hero-ambient { opacity: 0.26; }
+.gx-hero.is-ready .gx-hero-img { opacity: 1; }
+
+.gx-hero.is-ready .gx-hero-img {
+  animation: gx-kenburns 24s ease-out forwards;
+}
+
+@keyframes gx-kenburns {
+  from { transform: scale(1) translate(0, 0); }
+  to { transform: scale(1.06) translate(-0.6%, 0.6%); }
+}
+
+/* Layered cinematic shading: readable text, deep vignette, navbar-safe top */
+.gx-hero-shade {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(to top, var(--gx-bg-0) 3%, rgba(7, 7, 12, 0.84) 26%, rgba(7, 7, 12, 0.38) 55%, rgba(7, 7, 12, 0.08) 78%, transparent 100%),
+    linear-gradient(to right, rgba(7, 7, 12, 0.55) 0%, transparent 45%),
+    linear-gradient(to bottom, rgba(7, 7, 12, 0.55) 0%, transparent 20%);
+}
+
+.gx-hero-vignette {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(120% 95% at 50% 42%, transparent 52%, rgba(0, 0, 0, 0.6) 100%);
+}
+
+/* Trailer sits between still and shade: crossfade, fills hero, no controls */
+.gx-hero-trailer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: opacity 1200ms ease;
+}
+
+.gx-hero-trailer.is-visible { opacity: 1; }
+.gx-hero-trailer.hidden { display: none; }
+
+.gx-hero-trailer iframe {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max(100%, 177.78vh);
+  height: max(100%, 56.25vw);
+  border: 0;
+  transform: translate(-50%, -50%);
+  pointer-events: none; /* our own mute control; no giant YouTube bar */
+}
+
+/* Content */
+.gx-hero-content {
+  position: relative;
+  z-index: 2;
+  max-width: var(--gx-max);
+  margin: 0 auto;
+  padding: 0 16px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding-bottom: 56px;
+  min-width: 0;
+}
+
+.gx-hero-kicker {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--gx-text-dim);
+  margin-bottom: 10px;
+}
+
+.gx-hero-kicker:empty { display: none; }
+
+.gx-hero-title {
+  font-size: clamp(2rem, 5vw, 3.75rem);
+  line-height: 1.04;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--gx-text);
+  max-width: 16ch;
+  text-wrap: balance;
+}
+
+.gx-hero-meta {
+  margin-top: 10px;
+  font-size: 13.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--gx-text-dim);
+}
+
+.gx-hero-meta:empty { display: none; }
+
+.gx-hero-meta .gx-star { color: var(--gx-accent-strong); }
+
+.gx-hero-overview {
+  margin-top: 12px;
+  max-width: 42rem;
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: #c9c9d2;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.gx-hero-overview:empty { display: none; }
+
+.gx-hero-actions {
+  margin-top: 22px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.gx-btn {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: var(--gx-radius-pill);
+  font-size: 14px;
+  font-weight: 700;
+  padding: 12px 26px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--gx-transition), border-color var(--gx-transition), transform var(--gx-transition);
+}
+
+.gx-btn:active { transform: translateY(1px); }
+
+.gx-btn-primary {
+  background: var(--gx-text);
+  color: #0b0b10;
+}
+
+.gx-btn-primary:hover { background: #fff; }
+
+.gx-btn-glass {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: var(--gx-border-strong);
+  color: var(--gx-text);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.gx-btn-glass:hover { background: rgba(255, 255, 255, 0.15); }
+
+.gx-btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--gx-text-dim);
+  font-weight: 600;
+  padding: 12px 14px;
+}
+
+.gx-btn-ghost:hover { color: var(--gx-text); }
+.gx-btn-ghost.is-in-list { color: var(--gx-accent-strong); }
+
+/* Mute: small, unobtrusive, bottom-right above content */
+.gx-hero-mute {
+  position: absolute;
+  z-index: 3;
+  right: 20px;
+  bottom: 28px;
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  font-size: 16px;
+  background: rgba(10, 10, 15, 0.6);
+  border: 1px solid var(--gx-border-strong);
+  color: var(--gx-text);
+  cursor: pointer;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: background var(--gx-transition), border-color var(--gx-transition);
+}
+
+.gx-hero-mute:hover {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: var(--gx-accent-border);
+}
+
+.gx-hero-mute.hidden { display: none; }
+
+/* Loading state keeps structure, dark placeholder, no layout jump */
+.gx-hero.hero-loading .gx-hero-img,
+.gx-hero.hero-loading .gx-hero-ambient { opacity: 0; }
+
+.hero-spinner {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  border-radius: 9999px;
+  border: 3px solid rgba(255, 255, 255, 0.25);
+  border-top-color: var(--gx-accent);
+  animation: gx-spin 0.8s linear infinite;
+  vertical-align: -0.15em;
+  margin-right: 0.5rem;
+}
+
+@keyframes gx-spin { to { transform: rotate(360deg); } }
+
+/* Mobile composition (not a shrunk desktop) */
+@media (max-width: 640px) {
+  .gx-hero {
+    height: 82vh;
+    min-height: 520px;
+  }
+
+  .gx-hero-img { object-position: center 15%; }
+
+  .gx-hero-content { padding-bottom: 40px; }
+
+  .gx-hero-overview {
+    font-size: 13.5px;
+    -webkit-line-clamp: 2;
+  }
+
+  .gx-btn { padding: 11px 20px; font-size: 13.5px; }
+  .gx-btn-ghost { padding: 11px 10px; }
+
+  .gx-hero-mute {
+    right: 14px;
+    bottom: 18px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gx-hero.is-ready .gx-hero-img { animation: none; }
+  .gx-hero-ambient,
+  .gx-hero-img,
+  .gx-hero-trailer { transition: none; }
+  .gx-btn:active { transform: none; }
+}

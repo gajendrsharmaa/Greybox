@@ -95,11 +95,20 @@
 
   function clearTabs() { $('tabs').innerHTML = ''; }
 
-  /* ---------------- hero ---------------- */
+  /* ---------------- hero (Phase 2 cinematic module owns rendering) ---------------- */
+
+  function hero() {
+    try {
+      if (window.GreyboxHero) return window.GreyboxHero;
+    } catch (e) { /* fall through to legacy */ }
+    return null;
+  }
 
   function setHeroLoading(on) {
-    const hero = $('hero');
-    if (hero) hero.classList.toggle('hero-loading', !!on);
+    const H = hero();
+    if (H && typeof H.setLoading === 'function') { H.setLoading(!!on); return; }
+    const heroEl = $('hero');
+    if (heroEl) heroEl.classList.toggle('hero-loading', !!on);
     if (on) {
       $('hero-badge').textContent = 'Loading…';
       $('hero-title').innerHTML = '<span class="hero-spinner"></span> Fetching trending…';
@@ -109,11 +118,15 @@
   }
 
   function clearHeroLoading() {
-    const hero = $('hero');
-    if (hero) hero.classList.remove('hero-loading');
+    const H = hero();
+    if (H && typeof H.clearLoading === 'function') { H.clearLoading(); return; }
+    const heroEl = $('hero');
+    if (heroEl) heroEl.classList.remove('hero-loading');
   }
 
   function setHero(item) {
+    const H = hero();
+    if (H && typeof H.setHero === 'function') return H.setHero(item);
     clearHeroLoading();
     if ($('hero-badge')) $('hero-badge').textContent = '#1 Trending';
     $('hero-title').textContent = item.title || item.name;
@@ -122,6 +135,8 @@
   }
 
   function showHeroError(message) {
+    const H = hero();
+    if (H && typeof H.showError === 'function') { H.showError(message); return; }
     clearHeroLoading();
     $('hero-badge').textContent = 'Offline';
     $('hero-title').textContent = 'Could not load';

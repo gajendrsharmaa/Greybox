@@ -530,12 +530,58 @@
   // Pager is navigation: ?page=N stays in the URL so refresh/deep-links keep it.
   $('prev').onclick = () => { if (pageNum > 1) navTo(currentListURL(pageNum - 1)); };
   $('next').onclick = () => { navTo(currentListURL(pageNum + 1)); };
-  $('hero-play').onclick = () => heroItem && navTo(detailURL(heroItem.id, heroItem.media_type || (heroItem.title ? 'movie' : 'tv')));
-  $('hero-list').onclick = () => {
-    if (!heroItem) return;
-    const mt = heroItem.media_type || (heroItem.title ? 'movie' : 'tv');
-    Data.toggleMyListItem({ ...heroItem, media_type: mt }); updateCount();
-  };
+  // Hero actions (Phase 2): Watch uses the existing Stream behavior for movies
+  // (direct embed when configured) and falls back to the detail route;
+  // More Info always uses the existing movie/TV detail route. No route changes.
+  function heroMedia(item) { return item.media_type || (item.title ? 'movie' : 'tv'); }
+  function watchHeroItem(item) {
+    const mt = heroMedia(item);
+    try {
+      if (mt === 'movie' && window.Stream && typeof window.Stream.getMovieUrl === 'function') {
+        const url = window.Stream.getMovieUrl(item.id);
+        if (url && window.Stream.Player && typeof window.Stream.Player.open === 'function') {
+          window.Stream.Player.open({
+            title: item.title || item.name || 'Movie',
+            sub: 'Movie',
+            url,
+            mode: 'embed',
+            progressKey: 'movie:' + item.id,
+          });
+          return;
+        }
+      }
+    } catch (e) { /* fall through to detail route */ }
+    navTo(detailURL(item.id, mt));
+  }
+  try {
+    if (window.GreyboxHero && typeof window.GreyboxHero.bind === 'function') {
+      window.GreyboxHero.bind({
+        onWatch: (item) => watchHeroItem(item),
+        onInfo: (item) => navTo(detailURL(item.id, heroMedia(item))),
+        onToggleList: (item) => {
+          const added = Data.toggleMyListItem({ ...item, media_type: heroMedia(item) });
+          updateCount();
+          return added;
+        },
+        isInList: (id, mt) => Data.isInMyList(id, mt),
+      });
+    } else {
+      $('hero-play').onclick = () => heroItem && navTo(detailURL(heroItem.id, heroMedia(heroItem)));
+      if ($('hero-info')) $('hero-info').onclick = () => heroItem && navTo(detailURL(heroItem.id, heroMedia(heroItem)));
+      $('hero-list').onclick = () => {
+        if (!heroItem) return;
+        Data.toggleMyListItem({ ...heroItem, media_type: heroMedia(heroItem) }); updateCount();
+      };
+    }
+  } catch (e) {
+    try {
+      $('hero-play').onclick = () => heroItem && navTo(detailURL(heroItem.id, heroMedia(heroItem)));
+      $('hero-list').onclick = () => {
+        if (!heroItem) return;
+        Data.toggleMyListItem({ ...heroItem, media_type: heroMedia(heroItem) }); updateCount();
+      };
+    } catch (ignored) { /* hero optional */ }
+  }
   $('m-list').onclick = () => { if (currentDetail) { const added = Data.toggleMyListItem(currentDetail); $('m-list').textContent = added ? '★ In My List' : '+ My List'; updateCount(); } };
   $('custom-play').onclick = () => {
     const u = $('custom-url').value.trim();
