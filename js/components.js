@@ -47,6 +47,17 @@
     return list.map((item) => card(item, !!fn(item.id, item.media_type || (item.title ? 'movie' : 'tv')))).join('');
   }
 
+  // Phase 5.5 unified discovery link: ONE reusable control for every
+  // homepage shelf header. Semantic <a> (keyboard focusable by default),
+  // accessible name includes the section title so repeated links stay
+  // distinguishable, arrow is aria-hidden decoration. Styling (compact glass
+  // pill, amber accent) lives in css/shelves.css (.gx-viewall).
+  function exploreAllHTML(href, title) {
+    const safeHref = escapeHtml(href);
+    const label = String(title || '').trim() || 'this collection';
+    return `<a class="gx-viewall" href="${safeHref}" aria-label="Explore all ${escapeHtml(label)}">Explore all <span class="gx-viewall-arrow" aria-hidden="true">→</span></a>`;
+  }
+
   function gridSkeleton(n) {
     let h = '';
     const count = n > 0 ? n : 12;
@@ -254,6 +265,7 @@
     escapeHtml,
     card,
     cardsHTML,
+    exploreAllHTML,
     gridSkeleton,
     showGridLoading,
     showGridEmpty,

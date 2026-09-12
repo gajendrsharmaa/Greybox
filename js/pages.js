@@ -144,25 +144,56 @@
   // grid — only the shelf shell differs.
   // resolved: [{ section: {id,title,description}, items, collection? }] in
   // config order. Empty shelves render nothing (a bad query shouldn't leave
-  // holes). Sections with source { type: 'collection', slug } get an optional
-  // "View All →" link to the SAME collection (/collection/:slug) — the preview
-  // above already resolved through resolveCollection, so no second list system.
-  // Sections without a collection keep the current header with no link.
+  // holes).
+  //
+  // Phase 5.5 unified discovery: EVERY homepage section — Trending, Movies,
+  // TV, Top Rated, Kids, Horror, Science Fiction, … — renders through THIS
+  // renderer. No legacy grid/tabs presentation on the homepage; the D1
+  // home-section configuration (order, visibility, limits) is the source of
+  // truth, and each section's existing collection association decides its
+  // Explore all link (see homeSectionHref). No hardcoded slugs or URLs.
   function homeSectionHref(r) {
     const s = (r && r.section) || {};
     const src = (s.source && typeof s.source === 'object') ? s.source : null;
     let slug = '';
-    if (r && r.collection && typeof r.collection.slug === 'string') slug = r.collection.slug;
-    else if (src && src.type === 'collection' && typeof src.slug === 'string') slug = src.slug;
-    else return '';
+    if (r && r.collection && typeof r.collection.slug === 'string' && r.collection.slug) {
+      // Authoritative: the resolver only returns a collection for a valid,
+      // visible slug (unknown/hidden slugs reject and the shelf is skipped).
+      if (r.collection.visible === false) return '';
+      slug = r.collection.slug;
+    } else if (src && src.type === 'collection' && typeof src.slug === 'string') {
+      slug = src.slug;
+    } else {
+      return '';
+    }
     slug = String(slug).trim().toLowerCase();
     if (!slug || slug.length > 64 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) return '';
+    // Render-time guard against broken links: the associated collection must
+    // currently resolve (exists + visible). Uses the existing collection
+    // registry — never a hardcoded list. Skipped when the data layer is
+    // unavailable (headless use keeps the slug-validated href).
+    try {
+      const gd = window.GreyboxData;
+      if (gd && typeof gd.getCollection === 'function' && !gd.getCollection(slug)) return '';
+    } catch { /* registry optional */ }
     try {
       if (window.Router && window.Router.url && typeof window.Router.url.collection === 'function') {
         return window.Router.url.collection(slug);
       }
     } catch { /* fall through to plain path */ }
     return '/collection/' + slug;
+  }
+
+  // Phase 5.5: the ONE consistent section-header pattern. Title first,
+  // optional description (already-available metadata), optional Explore all
+  // link (secondary, right-aligned on desktop, wraps on mobile via CSS).
+  // All section types share it — no duplicated header markup.
+  function homeSectionHeader(s, href, c) {
+    const safeTitle = c.escapeHtml(s.title);
+    const link = href ? c.exploreAllHTML(href, s.title) : '';
+    return `<div class="gx-shelf-head"><div class="gx-shelf-titles"><h2 class="gx-shelf-title">${safeTitle}</h2>` +
+      (s.description ? `<p class="gx-shelf-desc">${c.escapeHtml(s.description)}</p>` : '') +
+      `</div>${link}</div>`;
   }
 
   function renderHomeSections(resolved, isInList) {
@@ -177,13 +208,8 @@
         const domId = 'home-section-' + String(s.id).replace(/[^a-z0-9-_]/gi, '-');
         const href = homeSectionHref(r);
         const safeTitle = c.escapeHtml(s.title);
-        const viewAll = href
-          ? `<a href="${c.escapeHtml(href)}" class="gx-viewall">View All <span class="gx-viewall-arrow" aria-hidden="true">→</span></a>`
-          : '';
         return `<section class="gx-shelf" id="${c.escapeHtml(domId)}" aria-label="${safeTitle}">` +
-          `<div class="gx-shelf-head"><div class="gx-shelf-titles"><h2 class="gx-shelf-title">${safeTitle}</h2>` +
-          (s.description ? `<p class="gx-shelf-desc">${c.escapeHtml(s.description)}</p>` : '') +
-          `</div>${viewAll}</div>` +
+          homeSectionHeader(s, href, c) +
           `<div class="gx-shelf-viewport" data-overflow="false" data-at-start="true" data-at-end="true">` +
           `<div class="gx-shelf-track" role="region" aria-label="${safeTitle} titles">${c.cardsHTML(r.items, isInList)}</div>` +
           `<button class="gx-shelf-btn" data-dir="prev" aria-label="Scroll ${safeTitle} back"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 3 5 8l5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>` +
@@ -195,6 +221,22 @@
   function clearHomeSections() {
     const host = $('home-sections');
     if (host) host.innerHTML = '';
+  }
+
+  // Phase 5.5 unified homepage discovery surface. On the homepage (page 1)
+  // ALL content renders as config-driven shelves through renderHomeSections —
+  // the legacy grid/tabs/pager presentation for Trending/Movies/TV/Top Rated
+  // is hidden, not redesigned: list/collection/search pages keep using it
+  // (setCollectionChrome restores the grid whenever they render).
+  function setHomeDiscoverMode(on) {
+    try {
+      const ids = ['list-head', 'grid', 'pager'];
+      for (const id of ids) {
+        const el = $(id);
+        if (el) el.classList.toggle('hidden', !!on);
+      }
+      if (on) clearCollectionMore();
+    } catch (e) { /* chrome optional in headless use */ }
   }
 
   /* ---------------- footer navigation (config-driven collections) ---------------- */
@@ -225,6 +267,9 @@
   // The list shell (#list-head row + #pager) and the collection header
   // (#collection-head) are mutually exclusive. Every renderer declares its
   // mode up front so navigation never leaves a stale header behind.
+  // The shared grid (#grid) belongs to list/collection pages, so leaving
+  // collection chrome always restores it (the homepage discover surface hides
+  // it again via setHomeDiscoverMode when needed).
   function setCollectionChrome(on) {
     try {
       const head = $('collection-head');
@@ -234,6 +279,8 @@
       }
       const row = $('list-head');
       if (row) row.classList.toggle('hidden', !!on);
+      const grid = $('grid');
+      if (grid) grid.classList.remove('hidden');
       const pager = $('pager');
       if (pager) pager.classList.toggle('hidden', !!on);
       // Phase 5.4 pagination mount lives after the grid; other pages must
@@ -654,6 +701,9 @@
     updateCollectionMeta,
     renderHomeSections,
     clearHomeSections,
+    setHomeDiscoverMode,
+    homeSectionHref,
+    homeSectionHeader,
     renderFooterCollections,
     renderTitleDetail,
     renderCast,

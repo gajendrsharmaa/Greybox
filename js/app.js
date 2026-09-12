@@ -126,6 +126,7 @@
 
   async function loadList() {
     const myGen = routeGen;
+    Pages.setHomeDiscoverMode(false);
     Pages.renderListLoading(pageNum);
     Pages.renderListChrome(mode, subTab, tabNavigator());
     C.setPageLabel(pageNum);
@@ -149,6 +150,7 @@
 
   async function loadSearchPage() {
     const myGen = routeGen;
+    Pages.setHomeDiscoverMode(false);
     Pages.renderSearchLoading(searchQuery);
     highlightNav();
     try {
@@ -368,9 +370,41 @@
 
   /* ---------------- homepage extras: config -> Greybox API -> shelves + hero ---------------- */
 
-  // Runs after the main home grid. Shelves/hero come from js/homepage.config.js
-  // (structure) with items from the Greybox API (data); TMDB never decides
-  // what the homepage contains. Any failure leaves the main grid intact.
+  // Phase 5.5 unified discovery surface (homepage page 1): hero + the
+  // config-driven shelves ONLY — the legacy grid/tabs/pager presentation is
+  // hidden via setHomeDiscoverMode, not redesigned. Hero behavior is
+  // unchanged: it follows the same source the grid showed (home tab, page 1,
+  // first item), then the custom-hero override below may replace it, exactly
+  // as when the grid was visible. Shelves resolve independently — one bad
+  // shelf is skipped and never breaks the page (see getHomeSections).
+  async function loadHomeDiscover() {
+    const gen = routeGen;
+    Pages.setHomeDiscoverMode(true);
+    Pages.clearHomeSections();
+    C.setNotice('');
+    C.setHeroLoading(true);
+    highlightNav();
+    try {
+      const data = await Data.getList('home', subTab, 1);
+      if (gen !== routeGen) return; // navigated away: a newer route owns the page
+      const items = (data && data.results) || [];
+      heroItem = items[0] || null;
+      if (heroItem) C.setHero(heroItem);
+      else C.clearHeroLoading();
+      hasLoadedList = true;
+    } catch (e) {
+      if (gen !== routeGen) return;
+      heroItem = null;
+      C.showHeroError(e && e.message ? e.message : String(e));
+    }
+    if (gen !== routeGen) return;
+    await loadHomeExtras();
+  }
+
+  // Custom hero (optional spotlight) + config shelves for the discover
+  // surface. Shelves/hero come from js/homepage.config.js (structure) with
+  // items from the Greybox API (data); TMDB never decides what the homepage
+  // contains. Any failure leaves the hero intact and shelves empty.
   async function loadHomeExtras() {
     const gen = routeGen;
     let cfg;
@@ -604,11 +638,11 @@
       mode = 'home'; subTab = route.tab || 'trending'; pageNum = route.page || 1;
       window.scrollTo({ top: 0 });
       Pages.clearHomeSections();
+      // Phase 5.5: page 1 is the unified discovery surface (config-driven
+      // shelves through the common section renderer — no legacy grid). Deeper
+      // pages keep the classic single-grid browser so ?page= links resolve.
+      if (pageNum === 1) { await loadHomeDiscover(); return; }
       await loadList();
-      if (myGen !== routeGen) return; // navigated away while the grid loaded
-      // Config shelves + custom hero live on page 1 only; deeper pages keep
-      // the classic single-grid browser.
-      if (pageNum === 1) await loadHomeExtras();
       return;
     }
     if (route.name === 'movies') {

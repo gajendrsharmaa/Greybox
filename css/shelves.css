@@ -14,12 +14,14 @@
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
+  flex-wrap: wrap;
+  row-gap: 0.5rem;
   gap: 1rem;
   margin-bottom: 0.9rem;
   min-width: 0;
 }
 
-.gx-shelf-titles { min-width: 0; }
+.gx-shelf-titles { flex: 1 1 auto; min-width: 0; }
 
 .gx-shelf-title,
 #section-title {
@@ -37,27 +39,47 @@
   max-width: 46rem;
 }
 
+/* Phase 5.5 Explore all: one compact glass pill, secondary to the title.
+ * Slightly amber-accented (arrow + hover), clearly interactive, never a CTA
+ * box: no glow, no red, no icon beyond the tiny → (aria-hidden in markup). */
 .gx-viewall {
   flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
-  font-size: 0.83rem;
+  align-self: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
   font-weight: 600;
+  letter-spacing: 0.01em;
   color: var(--gx-text-dim);
   text-decoration: none;
   white-space: nowrap;
-  padding: 0.25rem 0;
-  transition: color var(--gx-transition);
+  padding: 0.32rem 0.7rem;
+  border-radius: var(--gx-radius-pill);
+  background: var(--gx-glass-wash);
+  border: 1px solid var(--gx-border-faint);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: color var(--gx-transition), border-color var(--gx-transition), background var(--gx-transition);
 }
 
 .gx-viewall .gx-viewall-arrow {
   display: inline-block;
+  color: var(--gx-accent-strong);
   transition: transform var(--gx-transition);
 }
 
-.gx-viewall:hover { color: var(--gx-text); }
+.gx-viewall:hover {
+  color: var(--gx-text);
+  border-color: var(--gx-accent-border);
+  background: var(--gx-accent-soft);
+}
 .gx-viewall:hover .gx-viewall-arrow { transform: translateX(3px); }
+
+.gx-viewall:focus-visible {
+  outline: 2px solid var(--gx-accent);
+  outline-offset: 2px;
+}
 
 /* ---------------- shelf carousel ---------------- */
 
@@ -186,6 +208,13 @@
   border-radius: 0.8rem;
   background: var(--gx-surface);
   border: 1px solid var(--gx-border-faint);
+  /* Phase 5.5 shelf-edge fix: keep the surface background inside the rounded
+   * border curve (no bleed fringe) and composite border + artwork together so
+   * the first/last visible card's outer edge paints exactly like inner cards
+   * where it meets the scrollport/viewport boundary. Border, radius, artwork
+   * and hover/focus behavior are unchanged. */
+  background-clip: padding-box;
+  isolation: isolate;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
   transition: box-shadow 160ms ease, border-color 160ms ease;
 }
@@ -383,7 +412,7 @@
   .gx-shelf-track { gap: 0.7rem; }
   .gx-shelf-title,
   #section-title { font-size: 1.1rem; }
-  .gx-viewall { font-size: 0.78rem; }
+  .gx-viewall { font-size: 0.78rem; padding: 0.45rem 0.8rem; }
 }
 
 /* ---------------- reduced motion ---------------- */
