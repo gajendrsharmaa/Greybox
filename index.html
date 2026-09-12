@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Greybox — Legal Movie & TV Browser for Cloudflare Pages</title>
+<title>Greybox — The Screen Remembers</title>
 <meta name="description" content="Browse movies & TV legally. TMDB metadata + trailers + watch providers. Cloudflare Pages ready." />
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
@@ -15,6 +15,7 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
 <link rel="stylesheet" href="/css/navbar.css" />
 <link rel="stylesheet" href="/css/hero.css" />
 <link rel="stylesheet" href="/css/shelves.css" />
+<link rel="stylesheet" href="/css/collection.css" />
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 </head>
 <body class="min-h-screen">
@@ -93,7 +94,6 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
     <div id="hero-badge" class="gx-hero-kicker">Loading…</div>
     <h1 id="hero-title" class="gx-hero-title"><span class="hero-spinner"></span> Fetching trending…</h1>
     <p id="hero-meta" class="gx-hero-meta"></p>
-    <p id="hero-overview" class="gx-hero-overview"><span class="skeleton skeleton-line"></span><span class="skeleton skeleton-line short"></span></p>
     <div class="gx-hero-actions">
       <button id="hero-play" class="gx-btn gx-btn-primary">▶ Watch Now</button>
       <button id="hero-info" class="gx-btn gx-btn-glass">More Info</button>
@@ -117,8 +117,10 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
 <main class="max-w-7xl mx-auto px-4 pb-24">
   <div id="notice" class="mt-6 text-sm bg-amber-500/10 border border-amber-500/30 text-amber-200 rounded-xl p-4 hidden"></div>
 
+  <div id="collection-head" class="hidden"></div>
+
   <section class="mt-8">
-    <div class="flex items-end justify-between mb-3">
+    <div id="list-head" class="flex items-end justify-between mb-3">
       <h2 id="section-title" class="text-xl font-bold">Trending Now</h2>
       <div id="tabs" class="flex gap-2 text-sm"></div>
     </div>
@@ -136,7 +138,7 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
       <div class="gx-sk" aria-hidden="true"><div class="gx-sk-media"></div><div class="gx-sk-bar"></div><div class="gx-sk-bar short"></div></div>
       <div class="gx-sk" aria-hidden="true"><div class="gx-sk-media"></div><div class="gx-sk-bar"></div><div class="gx-sk-bar short"></div></div>
     </div>
-    <div class="flex justify-center mt-8 gap-3">
+    <div id="pager" class="flex justify-center mt-8 gap-3">
       <button id="prev" class="px-4 py-2 bg-white/10 rounded-lg">← Prev</button>
       <span id="page" class="px-4 py-2 text-sm text-zinc-400">Page 1</span>
       <button id="next" class="px-4 py-2 bg-white/10 rounded-lg">Next →</button>

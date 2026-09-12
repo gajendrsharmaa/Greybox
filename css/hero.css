@@ -155,21 +155,6 @@
 
 .gx-hero-meta .gx-star { color: var(--gx-accent-strong); }
 
-.gx-hero-overview {
-  margin-top: 12px;
-  max-width: 42rem;
-  font-size: 14.5px;
-  line-height: 1.6;
-  color: #c9c9d2;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.gx-hero-overview:empty { display: none; }
-
 .gx-hero-actions {
   margin-top: 22px;
   display: flex;
@@ -293,12 +278,6 @@
   .gx-hero-img { object-position: center 15%; }
 
   .gx-hero-content { padding-bottom: 40px; }
-
-  .gx-hero-overview {
-    font-size: 13.5px;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-  }
 
   .gx-btn { padding: 11px 20px; font-size: 13.5px; }
   .gx-btn-ghost { padding: 11px 10px; }

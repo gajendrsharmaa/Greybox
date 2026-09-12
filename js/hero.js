@@ -253,16 +253,11 @@
 
   function setText(item) {
     var title = $('hero-title');
-    var overview = $('hero-overview');
     var meta = $('hero-meta');
     var badge = $('hero-badge');
     if (badge) badge.textContent = ''; // clean hero: no badge in normal state
     if (title) title.textContent = item.title || item.name || 'Untitled';
     if (meta) meta.innerHTML = metaHTML(item);
-    if (overview) {
-      overview.textContent = item.overview || '';
-      overview.style.display = item.overview ? '' : 'none';
-    }
     refreshListLabel();
   }
 
@@ -554,12 +549,10 @@
       if (hero) { hero.classList.add('hero-loading'); hero.classList.remove('is-ready'); }
       var badge = $('hero-badge');
       var title = $('hero-title');
-      var overview = $('hero-overview');
       var meta = $('hero-meta');
       if (badge) badge.textContent = 'Loading…';
       if (title) title.innerHTML = '<span class="hero-spinner"></span> Fetching trending…';
       if (meta) meta.innerHTML = '';
-      if (overview) { overview.style.display = ''; overview.innerHTML = '<span class="skeleton skeleton-line"></span><span class="skeleton skeleton-line short"></span>'; }
       hideControl();
       return;
     }
@@ -579,12 +572,11 @@
     if (hero) { hero.classList.remove('hero-loading'); hero.classList.remove('is-ready'); }
     var badge = $('hero-badge');
     var title = $('hero-title');
-    var overview = $('hero-overview');
     var meta = $('hero-meta');
     if (badge) badge.textContent = 'Offline';
     if (title) title.textContent = 'Could not load';
     if (meta) meta.innerHTML = '';
-    if (overview) { overview.style.display = ''; overview.textContent = message || ''; }
+    void message; // detail surfaces through the page notice; hero stays clean
   }
 
   function toggleMute() {

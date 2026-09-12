@@ -49,6 +49,7 @@
   // ctx: { mode, subTab, page, items, isInList(id, mt), onTab(subTab) }
   function renderList(ctx) {
     const c = C();
+    setCollectionChrome(false);
     c.setSectionTitle(headingFor(ctx.mode, ctx.subTab));
     c.setPageLabel(ctx.page);
     c.renderTabs(TABS[ctx.mode] || [], ctx.subTab, ctx.onTab);
@@ -73,6 +74,7 @@
   // painted tabs synchronously, then filled the grid when data arrived).
   function renderListChrome(mode, subTab, onTab) {
     const c = C();
+    setCollectionChrome(false);
     c.setSectionTitle(headingFor(mode, subTab));
     c.renderTabs(TABS[mode] || [], subTab, onTab);
   }
@@ -90,6 +92,7 @@
   // ctx: { query, page, items, isInList }
   function renderSearch(ctx) {
     const c = C();
+    setCollectionChrome(false);
     c.setSectionTitle(ctx.query ? `Results for “${ctx.query}”` : 'Search');
     c.clearTabs();
     c.setPageLabel(ctx.page);
@@ -104,6 +107,7 @@
 
   function renderSearchLoading(query) {
     const c = C();
+    setCollectionChrome(false);
     c.setNotice('');
     c.setSectionTitle(query ? `Results for “${query}”` : 'Search');
     c.clearTabs();
@@ -122,6 +126,7 @@
 
   function renderMyList(items, isInList) {
     const c = C();
+    setCollectionChrome(false);
     c.setSectionTitle('My List');
     c.clearTabs();
     $('grid').innerHTML = '';
@@ -215,52 +220,123 @@
     }
   }
 
-  /* ---------------- Greybox collection page (config order, shared grid shell) ---------------- */
+  /* ---------------- Greybox collection page (cinematic destination) ---------------- */
 
-  // Renders a resolved collection into the standard list shell (#grid):
-  // title header, optional cover banner + description + metadata line, then
-  // cards in Greybox config order. Reuses .card markup and col-span-full
-  // message blocks exactly like search/mylist — no new layout.
-  // ctx: { collection: {title, description, cover, meta}, items, isInList(id, mt) }
+  // The list shell (#list-head row + #pager) and the collection header
+  // (#collection-head) are mutually exclusive. Every renderer declares its
+  // mode up front so navigation never leaves a stale header behind.
+  function setCollectionChrome(on) {
+    try {
+      const head = $('collection-head');
+      if (head) {
+        head.classList.toggle('hidden', !on);
+        if (!on) head.innerHTML = '';
+      }
+      const row = $('list-head');
+      if (row) row.classList.toggle('hidden', !!on);
+      const pager = $('pager');
+      if (pager) pager.classList.toggle('hidden', !!on);
+    } catch (e) { /* chrome optional in headless use */ }
+  }
+
+  const COLLECTION_KINDS = {
+    trending: 'Trending', popular: 'Popular', 'top-rated': 'Top Rated',
+    'now-playing': 'Now Playing', discover: 'Discover', genre: 'Genre',
+    year: 'Year', search: 'Search', custom: 'Curated',
+  };
+
+  // Generic source/media labels derived from the data model — never hardcoded
+  // collection names, so a new D1 collection works automatically.
+  function collectionEyebrow(col) {
+    const src = (col && col.source && typeof col.source === 'object') ? col.source : null;
+    const kind = src && COLLECTION_KINDS[src.type] ? COLLECTION_KINDS[src.type] : '';
+    const media = src ? src.media : '';
+    const scope = media === 'movie' ? 'Movies' : (media === 'tv' ? 'TV Shows' : 'Movies & TV');
+    return kind ? kind + ' · ' + scope : scope;
+  }
+
+  function collectionMetaLine(col, count) {
+    const bits = [(count === 1 ? '1 title' : count + ' titles')];
+    try {
+      if (col && col.meta && typeof col.meta === 'object') {
+        if (col.meta.curator) bits.push('Curated by ' + col.meta.curator);
+        if (col.meta.updated) bits.push('Updated ' + col.meta.updated);
+      }
+    } catch (e) { /* meta optional */ }
+    return bits.join(' · ');
+  }
+
+  // Subtle atmosphere from the collection's own resolved artwork (paths only,
+  // no new fetches): first backdrop wins, else first poster, else nothing.
+  function collectionAtmo(items, c) {
+    const list = Array.isArray(items) ? items : [];
+    let path = '';
+    for (let i = 0; i < list.length && i < 8 && !path; i++) {
+      if (list[i] && list[i].backdrop_path) path = list[i].backdrop_path;
+    }
+    if (!path) {
+      for (let i = 0; i < list.length && i < 8 && !path; i++) {
+        if (list[i] && list[i].poster_path) path = list[i].poster_path;
+      }
+    }
+    if (!path) return '';
+    return `<div class="gx-col-atmo" aria-hidden="true"><img src="${c.escapeHtml(c.IMG + path)}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none'"/></div>` +
+      `<div class="gx-col-shade" aria-hidden="true"></div>`;
+  }
+
+  // Renders a resolved collection as its own destination: compact cinematic
+  // header (title, concise description, quiet meta) + the shared Phase-4 card
+  // catalog in Greybox config order.
+  // ctx: { collection: {title, description, cover, source, meta}, items, isInList(id, mt) }
   function renderCollection(ctx) {
     const c = C();
     const col = (ctx && ctx.collection) || {};
-    c.setSectionTitle(col.title || 'Collection');
-    c.clearTabs();
+    setCollectionChrome(true);
+    c.setNotice('');
     c.setPageLabel(1);
     c.clearHeroLoading();
     const items = Array.isArray(ctx.items) ? ctx.items : [];
-    let head = '';
-    if (col.cover) {
-      head += `<div class="col-span-full overflow-hidden rounded-2xl border border-white/10"><img src="${c.escapeHtml(col.cover)}" alt="" loading="lazy" class="w-full h-48 md:h-64 object-cover"/></div>`;
-    }
-    if (col.description) {
-      head += `<p class="col-span-full text-sm text-zinc-400">${c.escapeHtml(col.description)}</p>`;
-    }
-    const metaBits = [];
-    if (col.meta && col.meta.curator) metaBits.push('Curated by ' + col.meta.curator);
-    if (col.meta && col.meta.updated) metaBits.push('Updated ' + col.meta.updated);
-    if (metaBits.length) {
-      head += `<p class="col-span-full text-xs text-zinc-500">${c.escapeHtml(metaBits.join(' · '))}</p>`;
-    }
-    $('grid').innerHTML = head + (c.cardsHTML(items, ctx.isInList) || '<div class="gx-empty col-span-full">No titles available in this collection right now.</div>');
+    const cover = (typeof col.cover === 'string' && col.cover.trim()) ? col.cover.trim() : '';
+    $('collection-head').innerHTML =
+      `<div class="gx-col">${collectionAtmo(items, c)}<div class="gx-col-body">` +
+      (cover ? `<img class="gx-col-cover" src="${c.escapeHtml(cover)}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none'"/>` : '') +
+      `<div class="gx-col-main">` +
+      `<p class="gx-col-eyebrow">${c.escapeHtml(collectionEyebrow(col))}</p>` +
+      `<h1 class="gx-col-title">${c.escapeHtml(col.title || 'Collection')}</h1>` +
+      (col.description ? `<p class="gx-col-desc">${c.escapeHtml(col.description)}</p>` : '') +
+      `<p class="gx-col-meta">${c.escapeHtml(collectionMetaLine(col, items.length))}</p>` +
+      `</div></div></div>`;
+    $('grid').innerHTML = c.cardsHTML(items, ctx.isInList) || '<div class="gx-empty col-span-full">No titles available in this collection right now.</div>';
     if (items[0]) c.setHero(items[0]);
   }
 
   function renderCollectionLoading(title) {
     const c = C();
+    setCollectionChrome(true);
     c.setNotice('');
-    c.setSectionTitle(title || 'Collection');
-    c.clearTabs();
+    c.setPageLabel(1);
     c.showGridLoading(12);
     c.setHeroLoading(false);
     c.clearHeroLoading();
+    $('collection-head').innerHTML =
+      `<div class="gx-col"><div class="gx-col-body"><div class="gx-col-main">` +
+      `<h1 class="gx-col-title">${c.escapeHtml(title || 'Collection')}</h1>` +
+      `<div class="gx-col-loading-meta" aria-hidden="true"></div>` +
+      `</div></div></div>`;
   }
 
-  function renderCollectionError(err) {
+  // Graceful failure: quiet empty state, never raw API errors in the UI
+  // (diagnostics go to the console). Signature is (collection, err).
+  function renderCollectionError(col, err) {
     const c = C();
-    $('grid').innerHTML = '';
-    c.showErrorNotice(err);
+    setCollectionChrome(true);
+    try { console.warn('[collection] failed:', (err && err.message) || err); } catch (e) { /* noop */ }
+    const title = (col && col.title) || 'Collection';
+    $('collection-head').innerHTML =
+      `<div class="gx-col"><div class="gx-col-body"><div class="gx-col-main">` +
+      `<h1 class="gx-col-title">${c.escapeHtml(title)}</h1>` +
+      `</div></div></div>`;
+    $('grid').innerHTML = '<div class="gx-empty col-span-full">This collection could not be loaded right now. Please try again later.</div>';
   }
 
   /* ---------------- not found ---------------- */
@@ -268,6 +344,7 @@
   function renderNotFound(path) {
     const c = C();
     c.hideModal();
+    setCollectionChrome(false);
     try { if (window.GreyboxHero && typeof window.GreyboxHero.reset === 'function') window.GreyboxHero.reset(); } catch (e) { /* hero optional */ }
     c.setSectionTitle('Not found');
     c.clearTabs();
@@ -275,7 +352,6 @@
     c.clearHeroLoading();
     $('hero-badge').textContent = '404';
     $('hero-title').textContent = 'That URL does not exist';
-    $('hero-overview').textContent = 'Check /movies, /tv, /movie/:id, /tv/:id, /search?q=..., or /person/:id.';
     c.setPageLabel(1);
   }
 

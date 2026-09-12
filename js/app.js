@@ -168,7 +168,7 @@
       if (R) document.title = `${col.title} — Greybox`;
       hasLoadedList = true;
     } catch (e) {
-      Pages.renderCollectionError(e);
+      Pages.renderCollectionError(col, e);
     }
   }
 

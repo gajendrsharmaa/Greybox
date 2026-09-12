@@ -119,7 +119,6 @@
     if (on) {
       $('hero-badge').textContent = 'Loading…';
       $('hero-title').innerHTML = '<span class="hero-spinner"></span> Fetching trending…';
-      $('hero-overview').innerHTML = '<span class="skeleton skeleton-line"></span><span class="skeleton skeleton-line short"></span>';
       $('hero-img').removeAttribute('src');
     }
   }
@@ -137,7 +136,6 @@
     clearHeroLoading();
     if ($('hero-badge')) $('hero-badge').textContent = '#1 Trending';
     $('hero-title').textContent = item.title || item.name;
-    $('hero-overview').textContent = item.overview || '';
     $('hero-img').src = item.backdrop_path ? IMG_BIG + item.backdrop_path : (item.poster_path ? IMG + item.poster_path : '');
   }
 
@@ -147,7 +145,6 @@
     clearHeroLoading();
     $('hero-badge').textContent = 'Offline';
     $('hero-title').textContent = 'Could not load';
-    $('hero-overview').textContent = message;
   }
 
   /* ---------------- modal shell ---------------- */
