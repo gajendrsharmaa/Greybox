@@ -202,6 +202,7 @@
     var menu = $('collections-menu');
     var btn = $('collections-btn');
     if (!menu || !btn || !collections.length) return;
+    cancelClose();
     if (isOpen()) {
       if (focusFirst) { var l = menuLinks(); if (l[0]) l[0].focus(); }
       return;
@@ -218,6 +219,7 @@
   function close(focusButton) {
     var menu = $('collections-menu');
     var btn = $('collections-btn');
+    cancelClose();
     if (menu) { menu.classList.add('hidden'); menu.classList.remove('open'); }
     if (btn) btn.setAttribute('aria-expanded', 'false');
     if (query) {
@@ -231,6 +233,22 @@
   }
 
   function toggle() { if (isOpen()) close(false); else open(false); }
+
+  // Grace period before a hover-exit closes the menu: the cursor needs time
+  // to travel the gap between the button and the panel, and small pointer
+  // slips shouldn't dismiss the menu mid-selection. Click-outside, Escape,
+  // link-choice and route changes still close immediately.
+  var CLOSE_DELAY = 280;
+  var closeTimer = 0;
+
+  function cancelClose() {
+    if (closeTimer) { try { clearTimeout(closeTimer); } catch (e) { /* noop */ } closeTimer = 0; }
+  }
+
+  function scheduleClose() {
+    cancelClose();
+    closeTimer = setTimeout(function () { closeTimer = 0; close(false); }, CLOSE_DELAY);
+  }
 
   function hoverCapable() {
     try { return window.matchMedia('(hover: hover) and (pointer: fine)').matches; }
@@ -296,9 +314,13 @@
 
     // Hover-friendly on precise pointers only — touch uses click-to-toggle
     // (a tap would otherwise fire mouseenter + click and instantly re-close).
+    // Leaving starts a short grace timer instead of closing instantly, so the
+    // cursor can cross the button→panel gap and survive small slips; coming
+    // back (or keyboard focus) cancels the pending close.
     if (wrap && hoverCapable()) {
       wrap.addEventListener('mouseenter', function () { open(false); });
-      wrap.addEventListener('mouseleave', function () { close(false); });
+      wrap.addEventListener('mouseleave', function () { if (isOpen()) scheduleClose(); });
+      wrap.addEventListener('focusin', function () { cancelClose(); });
     }
 
     if (menu) {
@@ -400,6 +422,7 @@
       isOpen: isOpen,
       isMobileOpen: isMobileOpen,
       SEARCH_THRESHOLD: SEARCH_THRESHOLD,
+      CLOSE_DELAY: CLOSE_DELAY,
     };
   } catch (e) { /* noop */ }
 })();

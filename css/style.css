@@ -41,6 +41,9 @@ code{background:rgba(255,255,255,.1);padding:1px 5px;border-radius:5px}
   padding:.65rem;z-index:50}
 .collections-menu::before{content:"";position:absolute;top:-6px;left:2rem;width:10px;height:10px;transform:rotate(45deg);
   background:rgba(20,20,31,.97);border-left:1px solid rgba(255,255,255,.12);border-top:1px solid rgba(255,255,255,.12)}
+/* Invisible hover bridge over the button→panel gap: the cursor stays "inside"
+/  the menu while travelling down, so the panel never flickers mid-selection. */
+.collections-menu::after{content:"";position:absolute;left:0;right:0;top:-12px;height:12px;background:transparent}
 .collections-menu.hidden{display:none}
 .collections-menu.open{animation:collections-pop .16s ease-out}
 @keyframes collections-pop{from{opacity:0;transform:translateY(-6px) scale(.98)}to{opacity:1;transform:none}}
