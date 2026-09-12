@@ -87,6 +87,13 @@
   position: relative;
   margin: 0;
   min-width: 0;
+  /* Shelf edge-hairline fix: the track's scrollport (its padding box) extends
+   * 0.15rem past this box on each side via the track's negative margins, so
+   * live card paint reached past the edge-fade line (::before/::after end
+   * exactly here) and read as a bright vertical strip. Bounding this box
+   * terminates content exactly where the fades terminate. Track scrolling,
+   * arrows (inside this box), fades, and card paint are otherwise untouched. */
+  overflow: hidden;
 }
 
 .gx-shelf-track {
