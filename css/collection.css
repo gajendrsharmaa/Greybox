@@ -150,6 +150,21 @@
   background: var(--gx-accent-soft);
 }
 
+/* ---------------- Phase 5.4: quiet pagination note (retry) ----------------
+ * Sits in the #collection-more grid tail (spans full width). Same quiet
+ * language as the empty states; the Retry control reuses .gx-tab. Static —
+ * nothing here animates, so reduced-motion needs no override. */
+
+.gx-more-note {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 1.25rem 1rem;
+  font-size: 0.83rem;
+  color: var(--gx-text-dim);
+}
+
 /* ---------------- responsive ---------------- */
 
 @media (max-width: 640px) {

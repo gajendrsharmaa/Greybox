@@ -708,10 +708,114 @@
     return Promise.reject(new Error('Unknown collection source type: ' + src.type));
   }
 
+  // Fetch ONE page of a dynamic collection source through the same Greybox
+  // fetchers as resolveCollectionSource above — same endpoints, same shaping,
+  // same media handling (including genre-both round-robin interleave), just
+  // without the fetchPaged multi-page loop. Returns { results, page,
+  // total_pages } straight from the (single) TMDB page.
+  function fetchCollectionBasePage(src, page) {
+    const p = parsePage(page);
+    if (!src || !src.type) return Promise.reject(new Error('Invalid collection source'));
+    if (src.type === 'trending') {
+      const media = src.media || 'all';
+      return getTrending(p).then((d) => ({
+        page: d.page, total_pages: d.total_pages,
+        results: media === 'all'
+          ? (d.results || [])
+          : (d.results || []).filter((x) => (x.media_type || (x.title ? 'movie' : 'tv')) === media),
+      }));
+    }
+    if (src.type === 'popular') {
+      return src.media === 'tv' ? getTVList('popular', p) : getMovies('popular', p);
+    }
+    if (src.type === 'top-rated') {
+      return src.media === 'tv' ? getTVList('top-rated', p) : getMovies('top-rated', p);
+    }
+    if (src.type === 'now-playing') {
+      return getMovies('now-playing', p);
+    }
+    if (src.type === 'discover') {
+      const o = { media: src.media, page: p, sort: src.sort };
+      if (src.genre != null) o.genre = src.genre;
+      if (src.year != null) o.year = src.year;
+      return getDiscover(o);
+    }
+    if (src.type === 'genre') {
+      if (src.media === 'both' && src.genre && typeof src.genre === 'object') {
+        const mid = parseId(src.genre.movie_id);
+        const tid = parseId(src.genre.tv_id);
+        if (!mid || !tid) return Promise.reject(new Error('Invalid genre both source'));
+        const sort = src.sort || 'popularity.desc';
+        return Promise.all([
+          getByGenre('movie', mid, p, sort),
+          getByGenre('tv', tid, p, sort),
+        ]).then(([movies, shows]) => {
+          const a = (movies && movies.results) || [];
+          const b = (shows && shows.results) || [];
+          const out = [];
+          const n = Math.max(a.length, b.length);
+          for (let i = 0; i < n; i++) {
+            if (a[i]) out.push({ ...a[i], media_type: 'movie' });
+            if (b[i]) out.push({ ...b[i], media_type: 'tv' });
+          }
+          return {
+            page: p,
+            total_pages: Math.max((movies && movies.total_pages) || 1, (shows && shows.total_pages) || 1),
+            results: out,
+          };
+        });
+      }
+      return getByGenre(src.media, src.genreId, p, src.sort);
+    }
+    if (src.type === 'year') {
+      return getDiscover({ media: src.media, year: src.year, sort: src.sort, page: p });
+    }
+    if (src.type === 'search') {
+      return getSearchResults(src.query, p);
+    }
+    return Promise.reject(new Error('Unknown collection source type: ' + src.type));
+  }
+
+  // Resolve ONE page of a collection (Phase 5.4 progressive loading).
+  // Same Greybox rules as resolveCollection (pins lead on page 1 only,
+  // excludes drop out, media_type preserved) but exactly one TMDB page per
+  // call — the controller appends and dedupes across pages itself.
+  // Custom (hand-picked ID) collections are finite: page 1 carries everything.
+  // Accepts a slug or a normalized collection. Rejects when not found.
+  // Resolves { collection, items, page, totalPages }.
+  function resolveCollectionPage(slugOrCollection, page) {
+    const c = (slugOrCollection && typeof slugOrCollection === 'object')
+      ? slugOrCollection
+      : getCollection(slugOrCollection);
+    if (!c || !c.source) return Promise.reject(new Error('Collection not found'));
+    const p = parsePage(page);
+    if (c.source.type === 'custom') {
+      if (p > 1) return Promise.resolve({ collection: c, items: [], page: p, totalPages: 1 });
+      return resolveIdItems(c.source.items).then((results) => ({ collection: c, items: results, page: 1, totalPages: 1 }));
+    }
+    const pins = (p === 1 && c.pin && c.pin.length)
+      ? resolveIdItems(c.pin)
+      : Promise.resolve([]);
+    return Promise.all([pins, fetchCollectionBasePage(c.source, p)]).then(([pinned, d]) => {
+      const seen = new Set(pinned.map((x) => itemKey(x.media_type || (x.title ? 'movie' : 'tv'), x.id)));
+      const items = [...pinned];
+      for (const x of (d.results || [])) {
+        const mt = x.media_type || (x.title ? 'movie' : 'tv');
+        if (seen.has(itemKey(mt, x.id))) continue;
+        if (isExcluded({ media: mt, id: x.id }, c.exclude || [])) continue;
+        seen.add(itemKey(mt, x.id));
+        items.push({ ...x, media_type: mt });
+      }
+      return { collection: c, items, page: (d && d.page) || p, totalPages: (d && d.total_pages) || 1 };
+    });
+  }
+
   // Resolve a collection: Greybox rules in, current TMDB matches out.
   // Pins resolve via details and lead; dynamic/custom base follows in source
   // order; excludes drop out; the total is capped at the collection limit.
   // Accepts a slug or a normalized collection. Rejects when not found.
+  // (Unchanged by Phase 5.4 — homepage shelves/previews still use this
+  // capped multi-page resolve; collection pages use resolveCollectionPage.)
   function resolveCollection(slugOrCollection) {
     const c = (slugOrCollection && typeof slugOrCollection === 'object')
       ? slugOrCollection
@@ -899,6 +1003,7 @@
     getCollections,
     getCollection,
     resolveCollection,
+    resolveCollectionPage,
     OVERRIDABLE_FIELDS,
     getOverrides,
     getOverride,

@@ -31,10 +31,14 @@
   let searchQuery = '';
   let collectionSlug = '';
   let collectionMedia = null; // Phase 5.3: 'movie' | 'tv' | null (null = All)
-  // Phase 5.3: last resolved collection set — filter switches on the same
-  // slug re-render instantly from this instead of refetching. Holds exactly
-  // one slug (the current page); any other slug refetches and replaces it.
-  let collectionCache = null; // { slug, configKey, items } | null
+  // Phase 5.4: live pagination state for the current collection page. items
+  // and seen accumulate raw (unfiltered) results across TMDB pages; the
+  // Phase 5.3 filter applies at paint time so filter switches never refetch.
+  // Exactly one view lives at a time; navigation disconnects its observer
+  // (accumulated data may persist for an instant same-collection resume).
+  // view: { slug, configKey, col, filter, items, seen:Set, page, totalPages,
+  //         loadingPage:0, done:false, observer:null }
+  let colView = null;
   let heroItem = null;
   let currentDetail = null; // {...} + media_type, or {kind:'person', id}
   let currentSeasons = [];
@@ -192,36 +196,164 @@
     const myGen = routeGen;
     const col = Data.getCollection(collectionSlug);
     if (!col) {
-      collectionCache = null;
+      colView = null;
       Pages.renderNotFound('/collection/' + (collectionSlug || ''));
       document.querySelectorAll('.nav-btn').forEach((b) => b.classList.remove('active'));
       return;
     }
     const filter = collectionMedia === 'tv' ? 'tv' : (collectionMedia === 'movie' ? 'movie' : 'all');
-    const renderFiltered = (items) => {
-      Pages.renderCollection({
-        collection: col, items, filter,
-        onFilter: collectionFilterNav,
-        isInList: (id, mt) => Data.isInMyList(id, mt),
-      });
-      if (R) document.title = `${col.title} — Greybox`;
-      hasLoadedList = true;
-    };
-    const cached = collectionCache;
-    if (cached && cached.slug === col.slug && cached.configKey === collectionConfigKey(col) && Array.isArray(cached.items)) {
-      renderFiltered(cached.items);
+    const key = collectionConfigKey(col);
+    // Same collection + config: re-render from accumulated results (filter
+    // switches, back/forward) — no refetch, observer rebuilt below.
+    if (colView && colView.slug === col.slug && colView.configKey === key && Array.isArray(colView.items)) {
+      colView.filter = filter;
+      renderCollectionView(colView);
+      setupCollectionPaging(colView);
       return;
     }
     Pages.renderCollectionLoading(col.title);
     highlightNav();
     try {
-      const { items } = await Data.resolveCollection(col);
+      const res = await Data.resolveCollectionPage(col, 1);
       if (myGen !== routeGen) return; // navigated away: a newer route owns the page
-      collectionCache = { slug: col.slug, configKey: collectionConfigKey(col), items };
-      renderFiltered(items);
+      colView = newCollectionView(col, key, filter, res);
+      renderCollectionView(colView);
+      setupCollectionPaging(colView);
     } catch (e) {
       if (myGen !== routeGen) return;
+      colView = null;
       Pages.renderCollectionError(col, e);
+    }
+  }
+
+  // Dedupe key: media_type + TMDB id (a movie and a TV item stay distinct).
+  // Mirrors the card fallback (title-bearing items read as movies) so the
+  // accumulated set matches what cards would route to.
+  function collectionItemKey(item) {
+    const mt = (item && (item.media_type === 'movie' || item.media_type === 'tv'))
+      ? item.media_type : ((item && item.title) ? 'movie' : 'tv');
+    return mt + ':' + (item && item.id);
+  }
+
+  function shapeCollectionItem(item) {
+    const mt = (item && (item.media_type === 'movie' || item.media_type === 'tv'))
+      ? item.media_type : ((item && item.title) ? 'movie' : 'tv');
+    return { ...item, media_type: mt };
+  }
+
+  function newCollectionView(col, key, filter, res) {
+    const seen = new Set();
+    const items = [];
+    for (const x of ((res && res.items) || [])) {
+      const k = collectionItemKey(x);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      items.push(shapeCollectionItem(x));
+    }
+    const totalPages = Math.max(1, parseInt((res && res.totalPages) || 1, 10) || 1);
+    const page = Math.max(1, parseInt((res && res.page) || 1, 10) || 1);
+    return {
+      slug: col.slug, configKey: key, col, filter, items, seen,
+      page, totalPages, loadingPage: 0, done: page >= totalPages, observer: null,
+    };
+  }
+
+  function renderCollectionView(view) {
+    Pages.renderCollection({
+      collection: view.col, items: view.items, filter: view.filter,
+      onFilter: collectionFilterNav,
+      isInList: (id, mt) => Data.isInMyList(id, mt),
+    });
+    if (R) document.title = `${view.col.title} — Greybox`;
+    hasLoadedList = true;
+  }
+
+  function collectionShownCount(view) {
+    if (!view || !Array.isArray(view.items)) return 0;
+    if (view.filter === 'all') return view.items.length;
+    return view.items.filter((x) => x && x.media_type === view.filter).length;
+  }
+
+  // One collection-level observer (never per-card, never a scroll handler).
+  // rootMargin starts the next page early so users rarely see a wait.
+  function setupCollectionPaging(view) {
+    teardownCollectionPaging();
+    if (!view || view.done) return;
+    let target = null;
+    try { target = document.getElementById('collection-more'); } catch (e) { target = null; }
+    if (!target) return;
+    if (typeof IntersectionObserver === 'undefined') return; // page 1 still renders
+    const gen = routeGen;
+    let ob = null;
+    try {
+      ob = new IntersectionObserver((entries) => {
+        for (const en of (entries || [])) {
+          if (!en || !en.isIntersecting) continue;
+          if (gen !== routeGen) return; // navigation happened: this view is stale
+          if (colView !== view) return; // view replaced
+          loadNextCollectionPage();
+        }
+      }, { rootMargin: '1200px 0px' });
+    } catch (e) { return; }
+    view.observer = ob;
+    try { ob.observe(target); } catch (e) { view.observer = null; }
+  }
+
+  function teardownCollectionPaging() {
+    try {
+      if (colView && colView.observer) colView.observer.disconnect();
+    } catch (e) { /* observer optional */ }
+    if (colView) { colView.observer = null; colView.loadingPage = 0; }
+  }
+
+  async function loadNextCollectionPage() {
+    const view = colView;
+    // One flight at a time: a page already loading (or finished) ignores
+    // duplicate observer callbacks and rapid re-triggers.
+    if (!view || view.done || view.loadingPage) return;
+    if (view.page >= view.totalPages) {
+      view.done = true;
+      teardownCollectionPaging();
+      try { Pages.showCollectionMoreEnd(); } catch (e) { /* noop */ }
+      return;
+    }
+    const next = view.page + 1;
+    const myGen = routeGen;
+    view.loadingPage = next;
+    Pages.showCollectionMoreLoading(6);
+    try {
+      const col = Data.getCollection(view.slug) || view.col;
+      const res = await Data.resolveCollectionPage(col, next);
+      // Stale (route changed or view replaced): never paint into a newer page.
+      if (myGen !== routeGen || colView !== view) return;
+      view.loadingPage = 0;
+      const fresh = [];
+      for (const x of ((res && res.items) || [])) {
+        const k = collectionItemKey(x);
+        if (view.seen.has(k)) continue;
+        view.seen.add(k);
+        const shaped = shapeCollectionItem(x);
+        view.items.push(shaped);
+        if (view.filter === 'all' || shaped.media_type === view.filter) fresh.push(shaped);
+      }
+      view.page = Math.max(1, parseInt((res && res.page) || next, 10) || next);
+      view.totalPages = Math.max(1, parseInt((res && res.totalPages) || view.totalPages, 10) || view.totalPages);
+      if (fresh.length) {
+        Pages.appendCollectionItems(fresh, (id, mt) => Data.isInMyList(id, mt));
+        Pages.updateCollectionMeta(view.col, collectionShownCount(view));
+      }
+      if (view.page >= view.totalPages) {
+        view.done = true;
+        teardownCollectionPaging();
+        Pages.showCollectionMoreEnd();
+      } else {
+        Pages.clearCollectionMore();
+      }
+    } catch (e) {
+      if (myGen !== routeGen || colView !== view) return;
+      view.loadingPage = 0; // retry requests only this failed page
+      try { console.warn('[collection] page failed:', (e && e.message) || e); } catch (ignored) { /* noop */ }
+      Pages.showCollectionMoreError(() => loadNextCollectionPage());
     }
   }
 
@@ -230,7 +362,7 @@
   function reloadBackground() {
     if (mode === 'mylist') return loadMyList();
     if (mode === 'search') return loadSearchPage();
-    if (mode === 'collection') { collectionCache = null; return loadCollectionPage(); }
+    if (mode === 'collection') { colView = null; return loadCollectionPage(); }
     return loadList();
   }
 
@@ -459,6 +591,7 @@
   async function renderRoute(route) {
     if (!route) route = R ? R.current() : { name: 'home', tab: 'trending', page: 1, path: '/' };
     const myGen = ++routeGen; // this navigation invalidates all older async page work
+    teardownCollectionPaging(); // disconnect the previous collection observer, if any
     lastRouteName = route.name;
     if (R) document.title = R.titleFor(route);
     // Keep the header search box in sync with /search?q=... (but never clobber typing elsewhere).

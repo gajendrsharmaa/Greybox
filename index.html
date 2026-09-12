@@ -138,6 +138,10 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
       <div class="gx-sk" aria-hidden="true"><div class="gx-sk-media"></div><div class="gx-sk-bar"></div><div class="gx-sk-bar short"></div></div>
       <div class="gx-sk" aria-hidden="true"><div class="gx-sk-media"></div><div class="gx-sk-bar"></div><div class="gx-sk-bar short"></div></div>
     </div>
+    <!-- Phase 5.4 progressive-collection mount: sentinel + continuation
+         skeletons/retry live here, after the grid. Hidden unless a collection
+         page has more results to load. -->
+    <div id="collection-more" class="hidden grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4 mt-4"></div>
     <div id="pager" class="flex justify-center mt-8 gap-3">
       <button id="prev" class="px-4 py-2 bg-white/10 rounded-lg">← Prev</button>
       <span id="page" class="px-4 py-2 text-sm text-zinc-400">Page 1</span>

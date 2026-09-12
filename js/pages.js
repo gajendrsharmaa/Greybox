@@ -236,6 +236,9 @@
       if (row) row.classList.toggle('hidden', !!on);
       const pager = $('pager');
       if (pager) pager.classList.toggle('hidden', !!on);
+      // Phase 5.4 pagination mount lives after the grid; other pages must
+      // never inherit its skeletons/retry UI.
+      clearCollectionMore();
     } catch (e) { /* chrome optional in headless use */ }
   }
 
@@ -378,7 +381,80 @@
     wireCollectionFilter(ctx && ctx.onFilter);
     $('grid').innerHTML = c.cardsHTML(shown, ctx.isInList) ||
       `<div class="gx-empty col-span-full">${c.escapeHtml(COLLECTION_FILTER_EMPTY[filter] || 'No titles available in this collection right now.')}</div>`;
+    clearCollectionMore();
     if (shown[0]) c.setHero(shown[0]);
+  }
+
+  /* ---------------- Phase 5.4: progressive collection pagination ----------------
+   * The controller (js/app.js) owns paging state; these helpers only paint
+   * the mount `#collection-more` (static, after #grid in index.html) and the
+   * grid tail. Cards reuse cardsHTML, skeletons reuse gridSkeleton — no new
+   * visual system. Appends never touch the header, hero, or existing cards,
+   * so focus and scroll position are preserved. */
+
+  function collectionMoreEl() {
+    try { return $('collection-more'); } catch (e) { return null; }
+  }
+
+  function clearCollectionMore() {
+    try {
+      const m = collectionMoreEl();
+      if (m) { m.innerHTML = ''; m.classList.add('hidden'); }
+    } catch (e) { /* mount optional in headless use */ }
+  }
+
+  // Continuation skeletons: a small quiet row, grid never replaced.
+  function showCollectionMoreLoading(count) {
+    const c = C();
+    const m = collectionMoreEl();
+    if (!m) return;
+    m.innerHTML = c.gridSkeleton(count || 6);
+    m.classList.remove('hidden');
+  }
+
+  // Quiet retry for a failed page only — existing cards stay put, raw errors
+  // stay in the console. Native button: keyboard accessible by default.
+  function showCollectionMoreError(onRetry) {
+    const m = collectionMoreEl();
+    if (!m) return;
+    m.innerHTML =
+      `<div class="col-span-full gx-more-note"><span>Couldn${"'"}t load more titles.</span> ` +
+      `<button type="button" class="gx-tab" id="gx-more-retry">Retry</button></div>`;
+    m.classList.remove('hidden');
+    if (typeof onRetry === 'function') {
+      try {
+        const b = (m.querySelector && m.querySelector('#gx-more-retry')) || $('gx-more-retry');
+        if (b) b.onclick = () => onRetry();
+      } catch (e) { /* retry stays inert without DOM */ }
+    }
+  }
+
+  // Clean end of results: stop observing (controller-side), leave no banner.
+  function showCollectionMoreEnd() {
+    clearCollectionMore();
+  }
+
+  // Appends already-shaped items to the grid tail in DOM order. Returns the
+  // appended count. Never replaces, never reorders, never touches the hero.
+  function appendCollectionItems(items, isInList) {
+    const c = C();
+    const list = Array.isArray(items) ? items : [];
+    if (!list.length) return 0;
+    try {
+      $('grid').insertAdjacentHTML('beforeend', c.cardsHTML(list, isInList));
+    } catch (e) { return 0; }
+    return list.length;
+  }
+
+  // Refreshes the header result count after appends (meta = currently
+  // displayed results, matching the initial render).
+  function updateCollectionMeta(col, count) {
+    try {
+      const head = $('collection-head');
+      if (!head || !head.querySelector) return;
+      const meta = head.querySelector('.gx-col-meta');
+      if (meta) meta.textContent = collectionMetaLine(col, count);
+    } catch (e) { /* header optional in headless use */ }
   }
 
   function renderCollectionLoading(title) {
@@ -570,6 +646,12 @@
     renderCollection,
     renderCollectionLoading,
     renderCollectionError,
+    clearCollectionMore,
+    showCollectionMoreLoading,
+    showCollectionMoreError,
+    showCollectionMoreEnd,
+    appendCollectionItems,
+    updateCollectionMeta,
     renderHomeSections,
     clearHomeSections,
     renderFooterCollections,
