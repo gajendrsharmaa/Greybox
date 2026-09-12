@@ -31,6 +31,10 @@
     const poster = item.poster_path ? IMG + item.poster_path : 'https://via.placeholder.com/500x750?text=No+Image';
     const star = inList ? '★' : '☆';
     const label = `${title}${year ? ' (' + year + ')' : ''}`;
+    // Standalone detail URL for the small explicit link. The card itself opens
+    // the overlay modal (no navigation); only this link performs real router
+    // navigation. Hardcoded canonical paths match Router.url.movie/show.
+    const detailHref = mt === 'tv' ? '/tv/' + item.id : '/movie/' + item.id;
     return `<div class="card gx-card" data-id="${item.id}" data-type="${mt}" tabindex="0" role="button" aria-label="${escapeHtml(label)}">` +
       `<div class="gx-card-media"><img loading="lazy" decoding="async" src="${poster}" alt="${escapeHtml(title)}"/>` +
       `<div class="gx-card-shade" aria-hidden="true"></div>` +
@@ -38,7 +42,8 @@
       `<button class="list-btn gx-card-list${inList ? ' is-in-list' : ''}" data-id="${item.id}" data-type="${mt}" title="My List" aria-label="Toggle My List">${star}</button>` +
       (item.vote_average ? `<span class="gx-card-rating"><span class="gx-star" aria-hidden="true">★</span> ${Number(item.vote_average).toFixed(1)}</span>` : '') +
       `</div><div class="gx-card-body"><div class="font-semibold gx-card-title">${escapeHtml(title)}</div>` +
-      `<div class="gx-card-sub">${year ? year + ' · ' : ''}${mt === 'movie' ? 'Movie' : 'TV'}</div></div></div>`;
+      `<div class="gx-card-sub">${year ? year + ' · ' : ''}${mt === 'movie' ? 'Movie' : 'TV'}</div>` +
+      `<a class="gx-card-detail" href="${escapeHtml(detailHref)}" data-detail-link aria-label="Open details page for ${escapeHtml(label)}">Details</a></div></div>`;
   }
 
   function cardsHTML(items, isInList) {

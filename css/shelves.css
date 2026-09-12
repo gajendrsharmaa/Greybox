@@ -336,6 +336,20 @@
   white-space: nowrap;
 }
 
+/* Small explicit standalone-detail link. The card itself opens the overlay
+ * modal (no navigation); only this link performs real router navigation to
+ * /movie/:id or /tv/:id. Minimal quiet styling — no card redesign. */
+.gx-card-detail {
+  display: inline-block;
+  margin-top: 0.15rem;
+  font-size: 0.72rem;
+  color: var(--gx-text-faint);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.gx-card-detail:hover { color: var(--gx-text); }
+
 /* ---------------- tabs (replaces old red tab styling) ---------------- */
 
 #tabs { gap: 0.4rem; flex-wrap: wrap; justify-content: flex-end; }
