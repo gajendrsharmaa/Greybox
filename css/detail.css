@@ -1,0 +1,145 @@
+/* Greybox Phase 6.1 — cinematic detail foundation (/movie/:id, /tv/:id).
+ * The route-backed modal (index.html #modal) is the detail page. Scoped under
+ * .gx-detail; consumes Phase 1 tokens + the existing .gx-btn pill system
+ * (css/hero.css). No red, no neon, no emoji, no new color system, no trailer
+ * lifecycle here (hero.js untouched). Vanilla CSS, no library. */
+
+/* ---------------- panel ---------------- */
+
+.gx-detail {
+  background:
+    radial-gradient(60% 30% at 50% 0%, rgba(208, 162, 79, 0.05), transparent 70%),
+    var(--gx-bg-1, #14141f);
+  border-color: var(--gx-border-faint);
+  box-shadow: var(--gx-shadow-pop);
+}
+
+/* ---------------- cinematic header ---------------- */
+
+.gx-detail-hero {
+  position: relative;
+  overflow: hidden;
+  background: var(--gx-bg-0);
+  isolation: isolate;
+}
+
+/* Artwork fills the header; JS hides it when no backdrop/poster exists, so a
+ * broken icon can never flash (the dark header + shade remain valid). */
+.gx-detail-backdrop {
+  object-position: center 22%;
+  display: block;
+}
+
+/* Restrained cinematic treatment: top scrim (close control legibility),
+ * readable text band, strong bottom fade into the panel. */
+.gx-detail-shade {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    linear-gradient(to bottom, rgba(7, 7, 12, 0.5), transparent 22%),
+    linear-gradient(to top, #14141f 2%, rgba(20, 20, 31, 0.88) 30%, rgba(20, 20, 31, 0.35) 62%, transparent 88%);
+}
+
+.gx-detail-head {
+  z-index: 2;
+  min-width: 0;
+}
+
+.gx-detail-title {
+  letter-spacing: -0.015em;
+  line-height: 1.08;
+  color: var(--gx-text);
+  overflow-wrap: break-word;
+  text-wrap: balance;
+  max-width: 22ch;
+}
+
+.gx-detail-meta {
+  color: var(--gx-text-dim);
+}
+
+.gx-detail-meta .gx-star { color: var(--gx-accent-strong); }
+
+/* Greybox Pick / custom badge: quiet amber pill, secondary to the title. */
+.gx-detail-badge {
+  display: inline-block;
+  margin-bottom: 0.55rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gx-accent-strong);
+  background: rgba(10, 10, 14, 0.6);
+  border: 1px solid var(--gx-accent-border);
+  border-radius: var(--gx-radius-pill);
+  padding: 0.2rem 0.65rem;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.gx-detail-badge.hidden { display: none; }
+
+.gx-detail-actions { align-items: center; }
+
+/* Visible keyboard focus inside the detail shell (global rule fallback). */
+.gx-detail .gx-btn:focus-visible {
+  outline: 2px solid var(--gx-accent);
+  outline-offset: 2px;
+}
+
+/* ---------------- poster / information ---------------- */
+
+.gx-detail-body {
+  display: grid;
+  grid-template-columns: 176px minmax(0, 1fr);
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.gx-detail-poster {
+  width: 100%;
+  aspect-ratio: 2/3;
+  object-fit: cover;
+  display: block;
+  border-radius: 0.8rem;
+  background: var(--gx-surface);
+  border: 1px solid var(--gx-border-faint);
+  background-clip: padding-box;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+}
+
+.gx-detail-poster.hidden { display: none; }
+
+.gx-detail-main { min-width: 0; }
+
+/* Full overview belongs here (unlike the hero): readable measure, scannable. */
+.gx-detail-overview {
+  line-height: 1.65;
+  max-width: 44rem;
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+}
+
+/* ---------------- quiet sub-sections (cast / providers / episodes keep
+ * their existing markup + behavior; only the error/link accents align) ---- */
+
+.gx-detail #m-back { margin-top: 1rem; }
+
+/* ---------------- responsive ---------------- */
+
+@media (max-width: 640px) {
+  .gx-detail-head { left: 1.1rem; right: 1.1rem; bottom: 0.9rem; }
+  .gx-detail-title { font-size: 1.5rem; max-width: none; }
+  /* Natural stack: modest poster on top, full-width overview below. */
+  .gx-detail-body { grid-template-columns: minmax(0, 1fr); gap: 0.9rem; }
+  .gx-detail-poster { width: 112px; }
+  .gx-detail-overview { font-size: 0.92rem; }
+}
+
+/* ---------------- reduced motion ---------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .gx-detail-badge { transition: none; }
+}

@@ -551,8 +551,33 @@
 
   /* ---------------- title detail (movie + tv share one shell) ---------------- */
 
-  function detailMeta(d) {
-    return `${(d.release_date || d.first_air_date || '').slice(0, 4)} · ⭐ ${Number(d.vote_average || 0).toFixed(1)} · ${(d.genres || []).join(', ')}`;
+  // Compact title-area line: year · Movie/TV · rating · genres. Blank parts
+  // are dropped so the line never shows dangling separators or "undefined".
+  function detailMeta(d, mediaType) {
+    const bits = [];
+    const year = (d.release_date || d.first_air_date || '').slice(0, 4);
+    if (/^\d{4}$/.test(year)) bits.push(year);
+    bits.push(mediaType === 'tv' ? 'TV Show' : 'Movie');
+    const v = Number(d.vote_average || 0);
+    if (isFinite(v) && v > 0) bits.push(`⭐ ${v.toFixed(1)}`);
+    const genres = (d.genres || []).filter(Boolean).join(', ');
+    if (genres) bits.push(genres);
+    return bits.join(' · ');
+  }
+
+  function setDetailArtwork(imgId, url, alt) {
+    const img = $(imgId);
+    if (!img) return;
+    if (url) {
+      img.style.display = '';
+      img.src = url;
+      if (alt != null) img.alt = alt;
+    } else {
+      // No artwork: hide the element so no broken icon can flash. The dark
+      // cinematic header + shade behind it remain a valid state.
+      img.removeAttribute('src');
+      img.style.display = 'none';
+    }
   }
 
   // Fills the modal shell from an already-fetched Greybox detail bundle.
@@ -561,16 +586,34 @@
   function renderTitleDetail(ctx) {
     const c = C();
     const d = ctx.detail;
+    const mt = ctx.mediaType === 'tv' ? 'tv' : 'movie';
     c.setModalActionsVisible(true);
     c.showModal();
     c.showDetailLoading();
     const title = d.title || d.name || 'Untitled';
     $('m-title').textContent = title;
-    $('m-meta').textContent = detailMeta(d);
-    if (d.custom_badge) $('m-meta').textContent += ' · ' + d.custom_badge;
-    $('m-overview').textContent = d.overview || 'No overview.';
-    $('m-backdrop').src = d.backdrop_path ? c.IMG_BIG + d.backdrop_path : (d.poster_path ? c.IMG + d.poster_path : '');
-    $('m-list').textContent = ctx.inList ? '★ In My List' : '+ My List';
+    $('m-meta').textContent = detailMeta(d, mt);
+    // Greybox Pick / custom badge rides its own pill (overrides stay
+    // authoritative — this only changes where the value paints).
+    const badge = $('m-badge');
+    if (badge) {
+      if (d.custom_badge) { badge.textContent = d.custom_badge; badge.classList.remove('hidden'); }
+      else { badge.textContent = ''; badge.classList.add('hidden'); }
+    }
+    // Full overview belongs on a detail page; absent overview omits the
+    // section cleanly instead of printing a placeholder sentence.
+    const ov = $('m-overview');
+    if (ov) {
+      if (d.overview) { ov.style.display = ''; ov.textContent = d.overview; }
+      else { ov.textContent = ''; ov.style.display = 'none'; }
+    }
+    setDetailArtwork('m-backdrop', d.backdrop_path ? c.IMG_BIG + d.backdrop_path : (d.poster_path ? c.IMG + d.poster_path : ''), '');
+    setDetailArtwork('m-poster', d.poster_path ? c.IMG + d.poster_path : (d.backdrop_path ? c.IMG_BIG + d.backdrop_path : ''), title);
+    const listBtn = $('m-list');
+    if (listBtn) {
+      listBtn.textContent = ctx.inList ? '★ In My List' : '+ My List';
+      listBtn.classList.toggle('is-in-list', !!ctx.inList);
+    }
     renderCast(d.cast || []);
     renderProviders(d.providers, ctx.region);
   }
@@ -591,7 +634,7 @@
     try {
       const hasOffer = p && (p.flatrate.length || p.rent.length || p.buy.length || p.link);
       $('m-providers').innerHTML = hasOffer
-        ? `${p.flatrate?.length ? '<b>Stream:</b> ' + p.flatrate.map(c.escapeHtml).join(', ') + '<br/>' : ''}${p.rent?.length ? '<b>Rent:</b> ' + p.rent.map(c.escapeHtml).join(', ') + '<br/>' : ''}${p.buy?.length ? '<b>Buy:</b> ' + p.buy.map(c.escapeHtml).join(', ') : ''}${p.link ? `<br/><a class="text-red-400 underline" target="_blank" href="${p.link}">Open JustWatch/TMDB guide ↗</a>` : ''}`
+        ? `${p.flatrate?.length ? '<b>Stream:</b> ' + p.flatrate.map(c.escapeHtml).join(', ') + '<br/>' : ''}${p.rent?.length ? '<b>Rent:</b> ' + p.rent.map(c.escapeHtml).join(', ') + '<br/>' : ''}${p.buy?.length ? '<b>Buy:</b> ' + p.buy.map(c.escapeHtml).join(', ') : ''}${p.link ? `<br/><a class="text-amber-300 underline" target="_blank" href="${p.link}">Open JustWatch/TMDB guide ↗</a>` : ''}`
         : `No legal offer found for region ${region}. Change region in Settings ⚙️.`;
     } catch (err) {
       console.warn('[detail] providers failed', err);
@@ -637,7 +680,7 @@
           <div class="text-xs text-zinc-400 line-clamp-3 mt-0.5">${c.escapeHtml(ep.overview || '')}</div>
           <div class="text-xs text-zinc-500 mt-1">${ep.runtime ? ep.runtime + ' min · ' : ''}${ep.air_date || ''}${resume ? ' · <span class="text-emerald-300">' + resume + '</span>' : ''}</div>
         </div>
-        <button class="self-center shrink-0 px-4 py-2 rounded-lg font-bold text-sm ${ctx.configured ? 'bg-red-600 hover:bg-red-500' : 'bg-white/10 text-zinc-400'}"
+        <button class="self-center shrink-0 px-4 py-2 rounded-lg font-bold text-sm ${ctx.configured ? 'bg-amber-500 hover:bg-amber-400 text-black' : 'bg-white/10 text-zinc-400'}"
           data-season="${ctx.seasonNum}" data-ep="${ep.episode_number}">▶</button>
       </div>`;
     }).join('') || '<div class="text-sm text-zinc-500">No episodes listed.</div>';
@@ -659,15 +702,21 @@
     c.setModalActionsVisible(false);
     c.showModal();
     c.showPersonLoading();
+    // Person reuses the title shell: clear title-only furniture (badge,
+    // poster, error route-back) so nothing stale carries over.
+    if ($('m-badge')) { $('m-badge').textContent = ''; $('m-badge').classList.add('hidden'); }
+    setDetailArtwork('m-poster', '', '');
+    if ($('m-back')) $('m-back').classList.add('hidden');
     $('m-title').textContent = person.name || 'Untitled';
     const facts = [person.known_for_department || '', person.birthday || '', person.place_of_birth || ''].filter(Boolean).join(' · ');
     $('m-meta').textContent = facts || 'Person';
     $('m-overview').textContent = person.biography || 'No biography on TMDB.';
-    $('m-backdrop').src = person.profile_path ? c.IMG_BIG + person.profile_path : '';
+    if ($('m-overview')) $('m-overview').style.display = '';
+    setDetailArtwork('m-backdrop', person.profile_path ? c.IMG_BIG + person.profile_path : '', '');
     $('m-providers').innerHTML =
       `${person.birthday ? '<b>Born:</b> ' + c.escapeHtml(person.birthday) + (person.place_of_birth ? ' in ' + c.escapeHtml(person.place_of_birth) : '') + '<br/>' : ''}` +
       `${person.known_for_department ? '<b>Known for:</b> ' + c.escapeHtml(person.known_for_department) + '<br/>' : ''}` +
-      `<a class="text-red-400 underline" target="_blank" href="https://www.themoviedb.org/person/${id}">Open on TMDB ↗</a>`;
+      `<a class="text-amber-300 underline" target="_blank" href="https://www.themoviedb.org/person/${id}">Open on TMDB ↗</a>`;
     const known = Array.isArray(ctx.knownFor) ? ctx.knownFor : [];
     $('m-cast').innerHTML = known.map((x) => {
       const mt = x.media_type;

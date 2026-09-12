@@ -194,42 +194,68 @@
     $('m-tv-wrap').classList.add('hidden');
     $('m-episodes').innerHTML = '';
     $('m-season').innerHTML = '';
+    // Phase 6.1 detail furniture: hidden until a successful render shows it.
+    const poster = $('m-poster');
+    if (poster) { poster.removeAttribute('src'); poster.style.display = 'none'; }
+    const badge = $('m-badge');
+    if (badge) { badge.textContent = ''; badge.classList.add('hidden'); }
+    const back = $('m-back');
+    if (back) back.classList.add('hidden');
   }
 
   function showDetailLoading() {
     resetModalMedia();
     setStreamMessage('');
     $('m-title').textContent = 'Loading...';
-    $('m-overview').textContent = '';
+    const ov = $('m-overview');
+    if (ov) { ov.textContent = ''; ov.style.display = ''; }
     $('m-meta').textContent = '';
     $('m-cast').innerHTML = inlineLoader('Loading cast…');
     $('m-providers').innerHTML = inlineLoader('Finding where to watch…');
-    $('m-backdrop').src = '';
+    const bd = $('m-backdrop');
+    if (bd) { bd.removeAttribute('src'); bd.style.display = ''; }
     $('m-watch').textContent = '▶ Watch Now';
+    const listBtn = $('m-list');
+    if (listBtn) listBtn.classList.remove('is-in-list');
   }
 
   function showPersonLoading() {
     resetModalMedia();
     setStreamMessage('');
     $('m-title').textContent = 'Loading person…';
-    $('m-overview').textContent = '';
+    const ov = $('m-overview');
+    if (ov) { ov.textContent = ''; ov.style.display = ''; }
     $('m-meta').textContent = '';
     $('m-cast').innerHTML = inlineLoader('Loading…');
     $('m-providers').innerHTML = inlineLoader('Loading…');
-    $('m-backdrop').src = '';
+    const bd = $('m-backdrop');
+    if (bd) { bd.removeAttribute('src'); bd.style.display = ''; }
   }
 
+  // Quiet Greybox error state: generic copy only (diagnostics stay in the
+  // console via the controller). The route-back button is the sensible exit —
+  // the controller wires it to the existing modal-close path.
   function showDetailError(message) {
-    $('m-title').textContent = 'Error';
-    $('m-overview').textContent = message + ' — press F12 → Console for details, then hard-refresh (Ctrl+Shift+R).';
+    void message;
+    resetModalMedia();
+    $('m-title').textContent = 'Not available';
+    const ov = $('m-overview');
+    if (ov) { ov.textContent = 'This title could not be loaded right now. Please try again later.'; ov.style.display = ''; }
     $('m-providers').textContent = '—';
+    const back = $('m-back');
+    if (back) back.classList.remove('hidden');
   }
 
   function showPersonError(message) {
-    $('m-title').textContent = 'Error';
-    $('m-overview').textContent = message;
+    void message;
+    resetModalMedia();
+    $('m-title').textContent = 'Not available';
+    const ov = $('m-overview');
+    if (ov) { ov.textContent = 'This person could not be loaded right now. Please try again later.'; ov.style.display = ''; }
     $('m-providers').textContent = '—';
     $('m-cast').textContent = '—';
+    const back = $('m-back');
+    if (back) back.classList.remove('hidden');
   }
 
   function setStreamMessage(msg, ok) {

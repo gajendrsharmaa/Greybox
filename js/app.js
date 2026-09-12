@@ -537,8 +537,14 @@
   }
 
   async function loadTvSeasons(tmdbId, detail) {
+    // Route-safe: seasons/episodes resolve through the same generation
+    // mechanism as the detail fetch — a late resolve for a previous title
+    // must never paint into the modal owned by a newer route.
+    const myGen = routeGen;
+    const owner = currentDetail;
     currentSeasons = (detail.seasons || []).filter((s) => s.season_number >= 0);
     if (!currentSeasons.length) return;
+    if (myGen !== routeGen || currentDetail !== owner) return;
     currentSeasonNum = Pages.renderSeasons(currentSeasons);
     $('m-season').onchange = () => { currentSeasonNum = +$('m-season').value; loadEpisodes(tmdbId, currentSeasonNum); };
     loadEpisodes(tmdbId, currentSeasonNum);
@@ -546,9 +552,13 @@
   }
 
   async function loadEpisodes(tmdbId, seasonNum) {
+    const myGen = routeGen;
+    const owner = currentDetail;
     Pages.renderEpisodesLoading();
     try {
       const s = await Data.getSeason(tmdbId, seasonNum);
+      // Stale (route changed or a newer title owns the modal): never paint.
+      if (myGen !== routeGen || currentDetail !== owner) return;
       currentEpisodes = s.episodes || [];
       Pages.renderEpisodes({
         tmdbId, seasonNum,
@@ -557,7 +567,10 @@
         resumeLabel: (key) => Stream.resumeLabel(key),
         onPlay: (ep) => playEpisode(ep),
       });
-    } catch { Pages.renderEpisodesError(); }
+    } catch {
+      if (myGen !== routeGen || currentDetail !== owner) return;
+      Pages.renderEpisodesError();
+    }
   }
 
   function playEpisode(ep) {
@@ -757,6 +770,8 @@
 
   $('modal-close').addEventListener('click', (e) => { e.stopPropagation(); userCloseDetail(); });
   $('modal-bg').addEventListener('click', userCloseDetail);
+  // Phase 6.1 quiet-error route-back: same existing close path as ✕/backdrop.
+  try { const mb = $('m-back'); if (mb) mb.onclick = () => userCloseDetail(); } catch { /* back button optional */ }
   $('player-close').onclick = closePlayer;
   $('ep-prev').onclick = () => stepEpisode(-1);
   $('ep-next').onclick = () => stepEpisode(1);
@@ -815,7 +830,7 @@
       };
     } catch (ignored) { /* hero optional */ }
   }
-  $('m-list').onclick = () => { if (currentDetail) { const added = Data.toggleMyListItem(currentDetail); $('m-list').textContent = added ? '★ In My List' : '+ My List'; updateCount(); } };
+  $('m-list').onclick = () => { if (currentDetail) { const added = Data.toggleMyListItem(currentDetail); $('m-list').textContent = added ? '★ In My List' : '+ My List'; $('m-list').classList.toggle('is-in-list', added); updateCount(); } };
   $('custom-play').onclick = () => {
     const u = $('custom-url').value.trim();
     if (!u) return alert('Paste an .m3u8 or .mp4 URL you own.');
