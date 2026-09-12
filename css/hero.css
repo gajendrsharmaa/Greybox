@@ -1,8 +1,9 @@
-/* Greybox Phase 2 — cinematic dynamic hero.
+/* Greybox Phase 2 — cinematic dynamic hero (+ trailer lifecycle refinement).
  * Consumes Phase 1 tokens (black / glass / amber). No red primary, no neon.
  * Backdrop: slow Ken Burns (100% → 106% + subtle drift). Trailer crossfades
  * over the still. Ambient layer reuses the same artwork (blurred, static).
- * Respects prefers-reduced-motion (no zoom/movement). */
+ * Trailer control lives in the actions row: countdown ring → speaker icon.
+ * Respects prefers-reduced-motion (no zoom/movement, coarse ring steps). */
 
 .gx-hero {
   position: relative;
@@ -157,6 +158,7 @@
   color: #c9c9d2;
   display: -webkit-box;
   -webkit-line-clamp: 3;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -213,34 +215,77 @@
 .gx-btn-ghost:hover { color: var(--gx-text); }
 .gx-btn-ghost.is-in-list { color: var(--gx-accent-strong); }
 
-/* Mute: small, unobtrusive, bottom-right above content */
-.gx-hero-mute {
-  position: absolute;
-  z-index: 3;
-  right: 20px;
-  bottom: 28px;
-  width: 40px;
-  height: 40px;
+/* Trailer control: one small circular glass button in the actions row.
+ * Countdown ring while waiting → speaker icon while playing. Same component,
+ * same position — never two controls at once. */
+.gx-trailer-btn {
+  position: relative;
+  flex: none;
+  width: 42px;
+  height: 42px;
+  align-self: center;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  font-size: 16px;
-  background: rgba(10, 10, 15, 0.6);
-  border: 1px solid var(--gx-border-strong);
   color: var(--gx-text);
+  background: rgba(10, 10, 15, 0.55);
+  border: 1px solid var(--gx-border-strong);
   cursor: pointer;
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   transition: background var(--gx-transition), border-color var(--gx-transition);
 }
 
-.gx-hero-mute:hover {
-  background: rgba(255, 255, 255, 0.14);
+.gx-trailer-btn:hover {
+  background: rgba(255, 255, 255, 0.13);
   border-color: var(--gx-accent-border);
 }
 
-.gx-hero-mute.hidden { display: none; }
+.gx-trailer-btn:focus-visible {
+  outline: 2px solid var(--gx-accent);
+  outline-offset: 2px;
+}
+
+.gx-trailer-btn.hidden { display: none; }
+
+/* Progress ring (JS drives stroke-dashoffset; no CSS animation involved) */
+.gx-trailer-btn .gx-ring {
+  position: absolute;
+  inset: -1px;
+  width: calc(100% + 2px);
+  height: calc(100% + 2px);
+  transform: rotate(-90deg);
+}
+
+.gx-trailer-btn .gx-ring-track {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.16);
+  stroke-width: 2.5;
+}
+
+.gx-trailer-btn .gx-ring-fill {
+  fill: none;
+  stroke: var(--gx-accent);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-dasharray: 97.4;
+  stroke-dashoffset: 97.4;
+}
+
+/* State visibility: ring only while counting, one icon while playing */
+.gx-trailer-btn .gx-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.gx-trailer-btn.is-countdown .gx-icon { display: none; }
+.gx-trailer-btn.is-muted .gx-ring,
+.gx-trailer-btn.is-muted .gx-icon-unmuted { display: none; }
+.gx-trailer-btn.is-unmuted .gx-ring,
+.gx-trailer-btn.is-unmuted .gx-icon-muted { display: none; }
+.gx-trailer-btn.is-muted .gx-icon-muted,
+.gx-trailer-btn.is-unmuted .gx-icon-unmuted { display: block; }
 
 /* Loading state keeps structure, dark placeholder, no layout jump */
 .gx-hero.hero-loading .gx-hero-img,
@@ -274,15 +319,11 @@
   .gx-hero-overview {
     font-size: 13.5px;
     -webkit-line-clamp: 2;
+    line-clamp: 2;
   }
 
   .gx-btn { padding: 11px 20px; font-size: 13.5px; }
   .gx-btn-ghost { padding: 11px 10px; }
-
-  .gx-hero-mute {
-    right: 14px;
-    bottom: 18px;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -291,4 +332,6 @@
   .gx-hero-img,
   .gx-hero-trailer { transition: none; }
   .gx-btn:active { transform: none; }
+  /* Countdown ring is JS-driven in coarse steps under reduced motion. */
+  .gx-trailer-btn .gx-ring-fill { stroke-dasharray: 97.4; }
 }

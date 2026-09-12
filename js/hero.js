@@ -1,15 +1,17 @@
-/* Greybox Phase 2 — cinematic hero module.
+/* Greybox Phase 2 — cinematic hero module (+ trailer lifecycle refinement).
  *
- * Owns ONLY the homepage/public hero: state, text, backdrop, trailer, audio.
+ * Owns ONLY the homepage/public hero: state, text, backdrop, trailer countdown,
+ * trailer, audio. The single trailer control lives in the hero actions row next
+ * to "+ My List": countdown ring while waiting, speaker icon while playing.
  * Data comes from the existing flow (list items via components.setHero, detail
  * bundles via GreyboxData for trailer_key). No hardcoding, no new backend,
  * no token handling (trailer_key arrives server-shaped through /api/*).
  *
- * Trailer: official YouTube embed, muted autoplay after TRAILER_DELAY_MS,
- * crossfaded over the still inside #hero. Any failure (no key, fetch error,
- * load timeout, hidden tab, scrolled past, navigation) keeps the animated
- * backdrop — never a broken iframe, black box, or stuck loader. One attempt
- * per hero item, no aggressive retries.
+ * Lifecycle: backdrop → (valid key + visible + tab visible) → 7s countdown →
+ * muted YouTube embed crossfaded over the still. Scrolling away, hiding the
+ * tab, navigating, or any failure tears everything down to the still and the
+ * next return starts a completely fresh sequence. One attempt per sequence,
+ * no aggressive retries, no stale callbacks (generation-guarded).
  */
 (function () {
   'use strict';
@@ -18,14 +20,28 @@
   var TRAILER_DELAY_MS = 7000;
   var TRAILER_LOAD_TIMEOUT_MS = 10000;
 
+  /* SVG progress ring geometry (r=15.5 in a 36x36 viewBox). */
+  var RING_C = 97.4;
+
+  /* "Meaningfully visible" = at least this much of the hero in viewport. */
+  var VISIBLE_RATIO = 0.35;
+
   var YT_KEY = /^[A-Za-z0-9_-]{11}$/;
 
   var cache = {}; // "mt:id" -> trailer key or null (session memo, avoids refetch)
   var gen = 0;    // invalidates timers/fetches/iframes across hero changes + routes
-  var timer = 0;
   var loadTimer = 0;
+  var countdownRaf = 0;
   var current = null;
+  var trailerKey = '';
+  var phase = 'idle'; // idle | resolving | countdown | starting | playing | failed
   var muted = true;
+  var optedOut = false; // user cancelled the pending trailer while staying on the hero
+  var heroOnScreen = true; // corrected by IntersectionObserver as soon as it fires
+  var routeAllowsHero = true; // corrected on every route change (see bind)
+  var observerBound = false;
+  var visBound = false;
+  var lastSecond = -1;
   var actions = {};
 
   function $(id) { return document.getElementById(id); }
@@ -62,23 +78,94 @@
   }
 
   function cancelTimers() {
-    if (timer) { try { clearTimeout(timer); } catch (e) { /* noop */ } timer = 0; }
     if (loadTimer) { try { clearTimeout(loadTimer); } catch (e) { /* noop */ } loadTimer = 0; }
+    cancelCountdown();
   }
 
-  /* Full stop of anything trailer-related. Text/backdrop untouched. */
+  function cancelCountdown() {
+    if (countdownRaf) {
+      try {
+        if (typeof window.cancelAnimationFrame === 'function') window.cancelAnimationFrame(countdownRaf);
+      } catch (e) { /* noop */ }
+      countdownRaf = 0;
+    }
+  }
+
+  /* One element, three looks: countdown ring → muted speaker → waves.
+   * Never two controls at once — this is the only trailer control. */
+  function paintControl() {
+    var b = $('hero-trailer-btn');
+    if (!b) return;
+    b.classList.remove('is-countdown', 'is-muted', 'is-unmuted');
+    if (phase === 'countdown' || phase === 'resolving' || phase === 'starting') {
+      b.classList.remove('hidden');
+      b.classList.add('is-countdown');
+      b.removeAttribute('aria-pressed');
+    } else if (phase === 'playing') {
+      b.classList.remove('hidden');
+      b.classList.add(muted ? 'is-muted' : 'is-unmuted');
+      b.setAttribute('aria-label', muted ? 'Unmute trailer' : 'Mute trailer');
+      b.setAttribute('aria-pressed', muted ? 'false' : 'true');
+      b.removeAttribute('title');
+    } else {
+      b.classList.add('hidden');
+    }
+  }
+
+  function hideControl() {
+    var b = $('hero-trailer-btn');
+    if (b) b.classList.add('hidden');
+  }
+
+  function setRing(p) {
+    try {
+      var b = $('hero-trailer-btn');
+      if (!b) return;
+      var fill = b.querySelector('.gx-ring-fill');
+      if (fill) fill.style.strokeDashoffset = (RING_C * (1 - p)).toFixed(1);
+    } catch (e) { /* noop */ }
+  }
+
+  function countdownLabel(sec) {
+    var b = $('hero-trailer-btn');
+    if (!b) return;
+    if (sec <= 0) b.setAttribute('aria-label', 'Trailer starting');
+    else b.setAttribute('aria-label', 'Trailer starts in ' + sec + ' second' + (sec === 1 ? '' : 's'));
+    b.setAttribute('title', 'Cancel trailer autoplay');
+  }
+
+  /* Backdrop image is never cleared — hiding the trailer reveals the still
+   * underneath (no frozen frame, no black flash). Re-trigger Ken Burns so the
+   * still feels alive again when we return to it. */
+  function restoreBackdrop() {
+    try {
+      var hero = heroEl();
+      if (!hero) return;
+      if (hero.classList.contains('is-ready')) {
+        hero.classList.remove('is-ready');
+        void hero.offsetWidth;
+        hero.classList.add('is-ready');
+      }
+    } catch (e) { /* noop */ }
+  }
+
+  /* Full stop of anything trailer-related. Text/backdrop art untouched. */
   function stopTrailer() {
     gen++;
     cancelTimers();
+    phase = 'idle';
+    trailerKey = '';
+    optedOut = false;
+    muted = true;
+    lastSecond = -1;
+    hideControl();
     try {
       var f = $('hero-trailer');
       if (f) { f.onload = null; f.onerror = null; try { f.removeAttribute('src'); } catch (e) { /* noop */ } }
       var w = $('hero-trailer-wrap');
       if (w) { w.classList.add('hidden'); w.classList.remove('is-visible'); }
-      var m = $('hero-mute');
-      if (m) m.classList.add('hidden');
     } catch (e) { /* noop */ }
-    muted = true;
+    restoreBackdrop();
   }
 
   function reset() { stopTrailer(); }
@@ -214,20 +301,95 @@
     );
   }
 
-  function showMute() {
-    var m = $('hero-mute');
-    if (!m) return;
-    muted = true;
-    m.textContent = '🔇';
-    m.setAttribute('aria-label', 'Unmute trailer');
-    m.setAttribute('aria-pressed', 'false');
-    m.classList.remove('hidden');
+  /* Fresh sequence gate: only when this hero is current, meaningfully visible,
+   * tab visible, no overlay cover, and the user has not opted out while
+   * staying on this hero. */
+  function overlayOpen() {
+    try {
+      if (window.GreyboxComponents && typeof window.GreyboxComponents.isModalOpen === 'function' &&
+        window.GreyboxComponents.isModalOpen()) return true;
+    } catch (e) { /* noop */ }
+    try {
+      if (window.Stream && window.Stream.Player && typeof window.Stream.Player.current === 'function' &&
+        window.Stream.Player.current()) return true;
+    } catch (e) { /* noop */ }
+    return false;
+  }
+
+  function beginSequence() {
+    if (!current || optedOut) return;
+    if (phase === 'countdown' || phase === 'starting' || phase === 'playing' || phase === 'resolving') return;
+    if (!routeAllowsHero) return; // stale hero behind search/modals/etc never self-starts
+    if (overlayOpen()) return; // detail modal / player covers the hero
+    if (document.hidden || !heroOnScreen) return;
+    phase = 'resolving';
+    paintControl();
+    setRing(0);
+    try {
+      var rb = $('hero-trailer-btn');
+      if (rb) { rb.setAttribute('aria-label', 'Trailer starts soon'); rb.setAttribute('title', 'Cancel trailer autoplay'); }
+    } catch (e) { /* noop */ }
+    var myGen = gen;
+    resolveTrailerKey(current).then(function (k) {
+      if (myGen !== gen) return;
+      if (!k) { phase = 'failed'; hideControl(); return; } // no countdown without a trailer
+      if (document.hidden || !heroOnScreen || optedOut) { phase = 'idle'; hideControl(); return; }
+      trailerKey = k;
+      startCountdown(myGen);
+    });
+  }
+
+  function startCountdown(myGen) {
+    phase = 'countdown';
+    paintControl();
+    setRing(0);
+    lastSecond = -1;
+    countdownLabel(Math.ceil(TRAILER_DELAY_MS / 1000));
+    var reduce = false;
+    try { reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { reduce = false; }
+    var t0 = 0;
+    try { t0 = performance.now(); } catch (e) { try { t0 = Date.now(); } catch (ignored) { t0 = 0; } }
+    function frame(now) {
+      if (myGen !== gen || phase !== 'countdown') return;
+      if (document.hidden || !heroOnScreen) { stopTrailer(); return; }
+      var el = now - t0;
+      var p = el >= TRAILER_DELAY_MS ? 1 : el / TRAILER_DELAY_MS;
+      var sec = p >= 1 ? 0 : Math.ceil((TRAILER_DELAY_MS - el) / 1000);
+      if (sec !== lastSecond) {
+        lastSecond = sec;
+        countdownLabel(sec);
+        if (reduce) setRing(p); // coarse steps only under reduced motion
+      }
+      if (!reduce) setRing(p);
+      if (p >= 1) { attemptTrailer(myGen); return; }
+      try { countdownRaf = window.requestAnimationFrame(frame); }
+      catch (e) { stopTrailer(); }
+    }
+    cancelCountdown();
+    try { countdownRaf = window.requestAnimationFrame(frame); }
+    catch (e) { stopTrailer(); }
+  }
+
+  /* User opted out of the pending trailer while staying on the hero:
+   * stay on the still. Leaving + returning starts fresh (optedOut resets). */
+  function cancelPending() {
+    stopTrailer();
+    optedOut = true;
+  }
+
+  function attemptTrailer(myGen) {
+    if (myGen !== gen) return;
+    if (document.hidden || !heroOnScreen || !isHeroVisible()) { phase = 'idle'; hideControl(); return; }
+    if (!trailerKey) { phase = 'failed'; hideControl(); return; }
+    phase = 'starting';
+    paintControl();
+    attachTrailer(trailerKey, myGen);
   }
 
   function attachTrailer(key, myGen) {
     var wrap = $('hero-trailer-wrap');
     var frame = $('hero-trailer');
-    if (!wrap || !frame || !key) return;
+    if (!wrap || !frame || !key) { phase = 'failed'; hideControl(); return; }
     cancelLoadTimer();
     var done = false;
     function cleanup() {
@@ -235,11 +397,11 @@
       done = true;
       cancelLoadTimer();
       if (myGen !== gen) return;
+      phase = 'failed';
+      hideControl();
       try { frame.onload = null; frame.onerror = null; frame.removeAttribute('src'); } catch (e) { /* noop */ }
       wrap.classList.add('hidden');
       wrap.classList.remove('is-visible');
-      var m = $('hero-mute');
-      if (m) m.classList.add('hidden');
     }
     function onFail() { cleanup(); }
     loadTimer = setTimeout(onFail, TRAILER_LOAD_TIMEOUT_MS);
@@ -252,7 +414,10 @@
         wrap.classList.remove('hidden');
         void wrap.offsetWidth;
         wrap.classList.add('is-visible');
-        showMute(); // control appears exactly when the trailer starts playing
+        // Swap countdown → audio control only after a successful start.
+        phase = 'playing';
+        muted = true;
+        paintControl();
       } catch (e) { /* noop */ }
     };
     frame.onerror = onFail;
@@ -263,37 +428,15 @@
     if (loadTimer) { try { clearTimeout(loadTimer); } catch (e) { /* noop */ } loadTimer = 0; }
   }
 
-  function fireTrailer(item, myGen) {
-    timer = 0;
-    if (myGen !== gen) return;
-    if (!isHeroVisible()) return; // hero not on screen — stay on the still
-    var key = '';
-    try {
-      resolveTrailerKey(item).then(function (k) {
-        if (myGen !== gen) return;
-        key = k || '';
-        if (!key) return; // no trailer — beautiful still, no retry
-        if (!isHeroVisible()) return;
-        attachTrailer(key, myGen);
-      });
-    } catch (e) { /* stay on backdrop */ }
-  }
-
-  function scheduleTrailer(item, myGen) {
-    cancelTimers();
-    timer = setTimeout(function () { fireTrailer(item, myGen); }, TRAILER_DELAY_MS);
-  }
-
   /* ---------------- public state ---------------- */
 
   function setHero(item) {
     if (!item) return null;
     stopTrailer();
     current = item;
-    var myGen = gen;
     setText(item);
-    loadBackdrop(item, myGen);
-    scheduleTrailer(item, myGen);
+    loadBackdrop(item, gen);
+    beginSequence();
     try { window.dispatchEvent(new CustomEvent('greybox:hero', { detail: { id: item.id } })); } catch (e) { /* noop */ }
     return item;
   }
@@ -312,8 +455,7 @@
       if (title) title.innerHTML = '<span class="hero-spinner"></span> Fetching trending…';
       if (meta) meta.innerHTML = '';
       if (overview) { overview.style.display = ''; overview.innerHTML = '<span class="skeleton skeleton-line"></span><span class="skeleton skeleton-line short"></span>'; }
-      var m = $('hero-mute');
-      if (m) m.classList.add('hidden');
+      hideControl();
       return;
     }
     if (hero) hero.classList.remove('hero-loading');
@@ -341,17 +483,25 @@
   }
 
   function toggleMute() {
+    if (phase !== 'playing') return;
     var frame = $('hero-trailer');
-    var btn = $('hero-mute');
+    var btn = $('hero-trailer-btn');
     if (!frame || !frame.src || !btn || btn.classList.contains('hidden')) return;
     try {
       var func = muted ? 'unMute' : 'mute';
       frame.contentWindow.postMessage(JSON.stringify({ event: 'command', func: func, args: [] }), '*');
+      // Audio is never remembered: a fresh trailer always starts muted.
       muted = !muted;
-      btn.textContent = muted ? '🔇' : '🔊';
-      btn.setAttribute('aria-label', muted ? 'Unmute trailer' : 'Mute trailer');
-      btn.setAttribute('aria-pressed', muted ? 'false' : 'true');
+      paintControl();
     } catch (e) { /* keep current audio state on failure */ }
+  }
+
+  function controlActivate() {
+    if (phase === 'countdown' || phase === 'resolving' || phase === 'starting') {
+      cancelPending();
+      return;
+    }
+    if (phase === 'playing') toggleMute();
   }
 
   function defaultInfo(item) {
@@ -414,13 +564,60 @@
       refreshListLabel();
       void added;
     });
-    on($('hero-mute'), toggleMute);
+    on($('hero-trailer-btn'), controlActivate);
     // Navigation invalidates any pending trailer — never play across routes.
+    // Auto-restart on return is limited to hero-owning routes so a stale hero
+    // behind search/modals never self-starts a trailer.
     try {
       if (window.Router && typeof window.Router.onChange === 'function') {
-        window.Router.onChange(function () { stopTrailer(); });
+        window.Router.onChange(function (route) {
+          stopTrailer();
+          try {
+            routeAllowsHero = !!route && (route.name === 'home' || route.name === 'movies' ||
+              route.name === 'tv' || route.name === 'anime' || route.name === 'collection');
+          } catch (e) { routeAllowsHero = true; }
+        });
       }
     } catch (e) { /* router optional */ }
+    ensureObserver();
+    ensureTabHandler();
+  }
+
+  /* Single IntersectionObserver (not a scroll listener): leaving the hero
+   * tears down to the still immediately; returning starts a fresh sequence. */
+  function ensureObserver() {
+    if (observerBound) return;
+    observerBound = true;
+    try {
+      if (typeof IntersectionObserver === 'undefined') return; // rect gates still apply
+      var ob = new IntersectionObserver(function (entries) {
+        var vis = false;
+        try {
+          for (var i = 0; i < entries.length; i++) {
+            var en = entries[i];
+            if (en.isIntersecting && en.intersectionRatio >= VISIBLE_RATIO) { vis = true; break; }
+          }
+        } catch (e) { vis = false; }
+        heroOnScreen = vis;
+        if (!vis) { stopTrailer(); return; }
+        if (current && phase === 'idle' && !document.hidden) beginSequence();
+      }, { threshold: [0, VISIBLE_RATIO, 1] });
+      var h = heroEl();
+      if (h) ob.observe(h);
+    } catch (e) { /* rect gates still apply */ }
+  }
+
+  /* Hidden tabs never keep a countdown or playback alive; returning starts
+   * fresh (muted) rather than resuming. */
+  function ensureTabHandler() {
+    if (visBound) return;
+    visBound = true;
+    try {
+      document.addEventListener('visibilitychange', function () {
+        if (document.hidden) { stopTrailer(); return; }
+        if (current && phase === 'idle' && heroOnScreen) beginSequence();
+      });
+    } catch (e) { /* noop */ }
   }
 
   // Bind lazily if app.js never calls bind (legacy callers still render text).
@@ -449,6 +646,7 @@
     showError: showError,
     reset: reset,
     getCurrent: function () { return current; },
+    getPhase: function () { return phase; },
     isMuted: function () { return muted; },
     toggleMute: toggleMute,
     embedUrl: embedUrl,
