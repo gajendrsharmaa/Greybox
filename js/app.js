@@ -37,7 +37,12 @@
   let currentSeasonNum = 1;
   let hasLoadedList = false;
   let lastRouteName = '';
-  let homeGen = 0; // guards async shelf/hero fills against fast navigation
+  // Per-navigation generation: renderRoute() bumps it on EVERY route, and
+  // every async continuation below bails out when its captured generation is
+  // stale — so a late resolve can never overwrite the hero, grid, header, or
+  // modal owned by a newer route. (Previously only home extras were guarded,
+  // and only against home->home navigation.)
+  let routeGen = 0;
 
   /* ---------------- route helpers (state <-> URL, no fetching) ---------------- */
   const kebabToSnake = (s) => String(s || '').split('-').join('_');
@@ -111,12 +116,14 @@
   /* ---------------- list pages: fetch (data.js) -> render (pages.js) ---------------- */
 
   async function loadList() {
+    const myGen = routeGen;
     Pages.renderListLoading(pageNum);
     Pages.renderListChrome(mode, subTab, tabNavigator());
     C.setPageLabel(pageNum);
     highlightNav();
     try {
       const data = await Data.getList(mode, subTab, pageNum);
+      if (myGen !== routeGen) return; // navigated away: a newer route owns the page
       heroItem = Pages.renderList({
         mode, subTab, page: pageNum,
         items: data.results || [],
@@ -126,19 +133,23 @@
       C.setPageLabel(pageNum);
       hasLoadedList = true;
     } catch (e) {
+      if (myGen !== routeGen) return;
       Pages.renderListError(e, pageNum);
     }
   }
 
   async function loadSearchPage() {
+    const myGen = routeGen;
     Pages.renderSearchLoading(searchQuery);
     highlightNav();
     try {
       const d = await Data.getSearchResults(searchQuery, pageNum);
+      if (myGen !== routeGen) return; // navigated away: a newer route owns the page
       Pages.renderSearch({ query: searchQuery, page: pageNum, items: d.results || [], isInList: (id, mt) => Data.isInMyList(id, mt) });
       C.setPageLabel(pageNum);
       hasLoadedList = true;
     } catch (e) {
+      if (myGen !== routeGen) return;
       Pages.renderSearchError(e);
     }
   }
@@ -154,6 +165,7 @@
   // Greybox collection page: config (structure + order) + Greybox API (data).
   // Unknown or hidden slugs render Not found, like any bad route.
   async function loadCollectionPage() {
+    const myGen = routeGen;
     const col = Data.getCollection(collectionSlug);
     if (!col) {
       Pages.renderNotFound('/collection/' + (collectionSlug || ''));
@@ -164,10 +176,12 @@
     highlightNav();
     try {
       const { items } = await Data.resolveCollection(col);
+      if (myGen !== routeGen) return; // navigated away: a newer route owns the page
       Pages.renderCollection({ collection: col, items, isInList: (id, mt) => Data.isInMyList(id, mt) });
       if (R) document.title = `${col.title} — Greybox`;
       hasLoadedList = true;
     } catch (e) {
+      if (myGen !== routeGen) return;
       Pages.renderCollectionError(col, e);
     }
   }
@@ -187,7 +201,7 @@
   // (structure) with items from the Greybox API (data); TMDB never decides
   // what the homepage contains. Any failure leaves the main grid intact.
   async function loadHomeExtras() {
-    const gen = homeGen;
+    const gen = routeGen;
     let cfg;
     try { cfg = Data.getHomeConfig(); }
     catch { Pages.clearHomeSections(); return; }
@@ -195,7 +209,7 @@
     if (cfg.hero && cfg.hero.mode === 'custom') {
       try {
         const item = await Data.getHeroItem(cfg.hero);
-        if (gen !== homeGen) return;
+        if (gen !== routeGen) return;
         if (item) {
           heroItem = item;
           C.setHero(item);
@@ -203,10 +217,10 @@
         }
       } catch { /* keep grid hero */ }
     }
-    if (gen !== homeGen) return;
+    if (gen !== routeGen) return;
     try {
       const resolved = await Data.getHomeSections(cfg.sections);
-      if (gen !== homeGen) return;
+      if (gen !== routeGen) return;
       Pages.renderHomeSections(resolved, (id, mt) => Data.isInMyList(id, mt));
     } catch { /* shelves stay empty, main grid already rendered */ }
   }
@@ -216,6 +230,7 @@
 
   async function openDetail(id, mt) {
     mt = mt === 'tv' ? 'tv' : 'movie';
+    const myGen = routeGen;
     C.setModalActionsVisible(true);
     C.showModal();
     C.showDetailLoading();
@@ -223,6 +238,7 @@
     let d = null;
     try {
       d = mt === 'tv' ? await Data.getTVDetails(id) : await Data.getMovie(id);
+      if (myGen !== routeGen) return; // navigated away: newer route owns the modal
       currentDetail = { ...d, id, media_type: mt, kind: 'title' };
       highlightNav();
       if (R) document.title = `${d.title || d.name || (mt === 'tv' ? 'TV Show' : 'Movie')} (${id}) — Greybox`;
@@ -242,23 +258,27 @@
         else if (!Stream.isConfigured('movie')) C.setStreamMessage('No stream source configured yet. Put your official API streaming link here — open js/stream.js (EMBED.base in js/stream.js), or play the trailer below.');
       }
     } catch (e) {
+      if (myGen !== routeGen) return;
       console.error('[detail] failed for', mt + '/' + id, e);
       C.showDetailError((e && e.message ? e.message : String(e)));
     }
   }
 
   async function openPerson(id) {
+    const myGen = routeGen;
     C.setModalActionsVisible(false);
     C.showModal();
     C.showPersonLoading();
     currentSeasons = []; currentEpisodes = [];
     try {
       const { person, knownFor } = await Data.getPerson(id);
+      if (myGen !== routeGen) return; // navigated away: newer route owns the modal
       currentDetail = { kind: 'person', id, media_type: 'person' };
       highlightNav();
       if (R) document.title = `${person.name || 'Person'} (${id}) — Greybox`;
       Pages.renderPerson({ person, knownFor, onSelect: (pid, mt) => navTo(detailURL(pid, mt)) });
     } catch (e) {
+      if (myGen !== routeGen) return;
       console.error('[person] failed for person/' + id, e);
       C.showPersonError((e && e.message ? e.message : String(e)));
     }
@@ -399,6 +419,7 @@
   /* ---------------- route renderer (single entry for ALL navigation) ---------------- */
   async function renderRoute(route) {
     if (!route) route = R ? R.current() : { name: 'home', tab: 'trending', page: 1, path: '/' };
+    const myGen = ++routeGen; // this navigation invalidates all older async page work
     lastRouteName = route.name;
     if (R) document.title = R.titleFor(route);
     // Keep the header search box in sync with /search?q=... (but never clobber typing elsewhere).
@@ -409,10 +430,10 @@
     if (route.name === 'home') {
       hideModal(); currentDetail = null;
       mode = 'home'; subTab = route.tab || 'trending'; pageNum = route.page || 1;
-      homeGen++;
       window.scrollTo({ top: 0 });
       Pages.clearHomeSections();
       await loadList();
+      if (myGen !== routeGen) return; // navigated away while the grid loaded
       // Config shelves + custom hero live on page 1 only; deeper pages keep
       // the classic single-grid browser.
       if (pageNum === 1) await loadHomeExtras();
@@ -474,6 +495,7 @@
       if (!hasLoadedList) {
         mode = 'home'; subTab = 'trending'; pageNum = 1;
         await loadList();
+        if (myGen !== routeGen) return; // navigated away while booting
       }
       await openDetail(route.id, mt);
       return;
@@ -482,6 +504,7 @@
       if (!hasLoadedList) {
         mode = 'home'; subTab = 'trending'; pageNum = 1;
         await loadList();
+        if (myGen !== routeGen) return; // navigated away while booting
       }
       await openPerson(route.id);
       return;
