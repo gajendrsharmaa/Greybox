@@ -67,7 +67,7 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
       <button class="nav-item is-disabled" data-view="activity" disabled aria-disabled="true" title="Coming soon — Part 1+"><span class="nav-dot" aria-hidden="true"></span>Activity<span class="badge badge-soon">Soon</span></button>
 
       <p class="nav-group">Content</p>
-      <button class="nav-item" data-view="sections"><span class="nav-dot" aria-hidden="true"></span>Home Sections</button>
+      <button class="nav-item" data-view="sections"><span class="nav-dot" aria-hidden="true"></span>Home</button>
       <button class="nav-item is-disabled" data-view="heroes" disabled aria-disabled="true" title="Coming soon — full hero editor is a later increment"><span class="nav-dot" aria-hidden="true"></span>Heroes<span class="badge badge-soon">Soon</span></button>
       <button class="nav-item" data-view="collections"><span class="nav-dot" aria-hidden="true"></span>Collections</button>
       <button class="nav-item" data-view="overrides"><span class="nav-dot" aria-hidden="true"></span>Overrides</button>
@@ -156,24 +156,37 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
         </div>
       </section>
 
-      <!-- SECTIONS -->
+      <!-- HOME (hero + sections workspace) -->
       <section id="view-sections" class="admin-view hidden" aria-labelledby="sec-title">
         <div class="page-head">
           <div>
-            <h1 id="sec-title" class="page-title">Home Sections</h1>
-            <p class="page-desc">Shelves on the homepage, in display order. Editing never destroys list context — it opens an editor drawer.</p>
+            <h1 id="sec-title" class="page-title">Home</h1>
+            <p class="page-desc">Homepage configuration and section ordering.</p>
           </div>
           <div class="page-actions">
             <button id="sec-new" class="btn btn-primary btn-sm">+ New Section</button>
             <button id="sec-refresh" class="btn btn-secondary btn-sm">Refresh</button>
           </div>
         </div>
+        <div class="panel hero-strip" aria-live="polite">
+          <div class="hero-strip-body">
+            <div class="hero-strip-text">
+              <p class="hero-eyebrow">Home Hero</p>
+              <p id="home-hero-summary" class="muted text-sm">Loading hero configuration…</p>
+            </div>
+            <button class="btn btn-secondary btn-sm" data-goto="settings">Configure</button>
+          </div>
+        </div>
+        <h2 class="section-subhead">Home Sections</h2>
         <div class="toolbar" role="search">
           <input id="sec-search" class="input" type="search" placeholder="Search sections…" aria-label="Search sections" autocomplete="off" />
           <select id="sec-filter" class="input input-select" aria-label="Filter sections by visibility">
             <option value="all">All statuses</option>
             <option value="visible">Visible</option>
             <option value="hidden">Hidden</option>
+          </select>
+          <select id="sec-source" class="input input-select" aria-label="Filter sections by source type">
+            <option value="all">All sources</option>
           </select>
         </div>
         <div id="sec-list" class="row-list"></div>
@@ -267,7 +280,7 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
       <!-- PLACEHOLDER for disabled/soon views (never linked from enabled nav) -->
       <section id="view-soon" class="admin-view hidden" aria-labelledby="soon-title">
         <div class="page-head"><div><h1 id="soon-title" class="page-title">Coming soon</h1><p class="page-desc">This area is scaffolded for a later increment. No placeholder controls were added on purpose.</p></div></div>
-        <div class="empty"><p class="empty-title">Not built yet</p><p class="empty-desc">Part 0 only ships Dashboard, Home Sections, Collections, Overrides, Greybox Picks, TMDB Search and General Settings.</p><button class="btn btn-secondary btn-sm" data-goto="dashboard">Back to Dashboard</button></div>
+        <div class="empty"><p class="empty-title">Not built yet</p><p class="empty-desc">This area is reserved for a later increment. Dashboard, Home, Collections, Overrides, Greybox Picks, TMDB Search and General Settings are live.</p><button class="btn btn-secondary btn-sm" data-goto="dashboard">Back to Dashboard</button></div>
       </section>
     </main>
 
@@ -299,6 +312,6 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
 
 <div id="toast-root" class="toast-root" aria-live="polite" aria-atomic="false"></div>
 
-<script src="/js/admin.js?v=3"></script>
+<script src="/js/admin.js?v=4"></script>
 </body>
 </html>

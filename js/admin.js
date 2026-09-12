@@ -15,9 +15,9 @@
  * SQL. After every mutation it re-reads from the API instead of assuming
  * success.
  *
- * PART 0 shell: sidebar navigation, dashboard, editor drawer, compact rows,
- * toasts + confirm dialog primitives. All CRUD/validation logic below is
- * preserved from the previous panel — only presentation moved.
+ * PART 1 — Dashboard + Home control: Home workspace (hero strip + sections),
+ * scannable dashboard config, source-type filter, grouped section editor,
+ * saving states. CRUD/validation/endpoints unchanged.
  */
 (function () {
   'use strict';
@@ -191,7 +191,7 @@
   /* ---------------- navigation / views ---------------- */
   const VIEWS = {
     dashboard: { title: 'Dashboard', sub: 'Overview' },
-    sections: { title: 'Home Sections', sub: 'Content' },
+    sections: { title: 'Home', sub: 'Content' },
     collections: { title: 'Collections', sub: 'Content' },
     overrides: { title: 'Overrides', sub: 'Content' },
     picks: { title: 'Greybox Picks', sub: 'Content' },
@@ -219,7 +219,7 @@
     closeMobileNav();
     if (!ADMIN_TOKEN) return;
     if (key === 'dashboard') loadDashboard();
-    if (key === 'sections') loadSections();
+    if (key === 'sections') { loadHomeHero(); loadSections(); }
     if (key === 'collections') loadCollections();
     if (key === 'overrides') loadOverrides();
     if (key === 'picks') loadPicks();
@@ -453,20 +453,51 @@
 
   function statusBadge(item) {
     const hidden = item && item.visible === false;
-    const b = el('span', 'badge ' + (hidden ? 'badge-hidden' : 'badge-live'), hidden ? 'Hidden' : 'Live');
+    const b = el('span', 'badge ' + (hidden ? 'badge-hidden' : 'badge-live'), hidden ? 'Hidden' : 'Visible');
     return b;
   }
 
   function rowButtons(defs) {
     const wrap = el('div', 'row-actions');
-    for (const [label, kind, fn, title] of defs) {
+    for (const [label, kind, fn, title, disabled] of defs) {
       const b = el('button', 'rowbtn ' + (kind || ''), label);
       b.type = 'button';
       if (title) b.title = title;
-      b.addEventListener('click', fn);
+      if (disabled) { b.disabled = true; b.setAttribute('aria-disabled', 'true'); }
+      else b.addEventListener('click', fn);
       wrap.appendChild(b);
     }
     return wrap;
+  }
+
+  // Visual grouping inside editor drawers (presentation only — all fields preserved).
+  function groupBox(title, nodes) {
+    const g = el('div', 'editor-group');
+    g.appendChild(el('span', 'editor-group-title', title));
+    (nodes || []).forEach((n) => { if (n) g.appendChild(n); });
+    return g;
+  }
+
+  // Saving state: disables every button in the editor form (+ drawer savebar),
+  // relabels submit controls to "Saving…", restores everything in `finally`.
+  // Validation errors thrown before the API call still restore via finally.
+  function setFormSaving(form, on) {
+    const btns = [];
+    try {
+      if (form && form.querySelectorAll) Array.prototype.push.apply(btns, form.querySelectorAll('button'));
+    } catch { /* noop */ }
+    const ds = $('drawer-save');
+    if (ds) btns.push(ds);
+    btns.forEach((b) => {
+      if (on) {
+        if (b.dataset._label === undefined) b.dataset._label = b.textContent;
+        b.disabled = true;
+        if (b.type === 'submit' || b.id === 'drawer-save') b.textContent = 'Saving…';
+      } else {
+        b.disabled = false;
+        if (b.dataset._label !== undefined) { b.textContent = b.dataset._label; delete b.dataset._label; }
+      }
+    });
   }
 
   function stateBox(host, kind, title, desc) {
@@ -719,6 +750,33 @@
     return src;
   }
 
+  /* ================= HOME HERO strip (summary only — editing stays in General Settings) ================= */
+  function heroSummaryText(hero) {
+    if (!hero || typeof hero !== 'object') return 'Hero settings unavailable.';
+    const mode = hero.mode === 'custom' ? 'Custom spotlight' : 'Follow-grid';
+    const bits = [mode];
+    if (hero.mode === 'custom') {
+      if (hero.badge) bits.push('“' + hero.badge + '”');
+      bits.push('pick ' + (hero.pick != null ? hero.pick : 0));
+      if (hero.source) bits.push(summarizeSource(hero.source));
+    } else {
+      bits.push('banner follows the grid');
+    }
+    return bits.join(' · ');
+  }
+
+  async function loadHomeHero() {
+    const target = $('home-hero-summary');
+    if (!target) return;
+    target.textContent = 'Loading hero configuration…';
+    try {
+      const hero = await api(API.hero);
+      target.textContent = heroSummaryText(hero);
+    } catch (e) {
+      target.textContent = 'Hero settings unavailable — ' + (e.message || e);
+    }
+  }
+
   /* ================= HOME SECTIONS ================= */
   let secEditing = null; // id being edited, or null for create
   let secCache = [];
@@ -728,20 +786,24 @@
     f.id = 'sec-form';
     f.autocomplete = 'off';
     f.style.cssText = 'display:grid;gap:.8rem';
-    f.appendChild(fieldRow('ID (lowercase letters/numbers/hyphens; set once)', textInput('s-id', item ? item.id : '', 'editors-picks')));
-    f.appendChild(fieldRow('Title', textInput('s-title', item ? item.title || '' : '', 'Editor’s Picks')));
-    f.appendChild(fieldRow('Description (optional)', textInput('s-desc', item ? item.description || '' : '', '')));
-    f.appendChild(checkInput('s-visible', item ? item.visible !== false : true, 'Visible'));
-    f.appendChild(fieldRow('Limit (1–24)', numInput('s-limit', item && item.limit != null ? item.limit : 12, '12')));
-    f.appendChild(fieldRow('Sort order (optional, blank = keep/append)', numInput('s-sort', '', '')));
+    f.appendChild(groupBox('Identity', [
+      fieldRow('ID (lowercase letters/numbers/hyphens; set once)', textInput('s-id', item ? item.id : '', 'editors-picks')),
+      fieldRow('Title', textInput('s-title', item ? item.title || '' : '', 'Editor’s Picks')),
+      fieldRow('Description (optional)', textInput('s-desc', item ? item.description || '' : '', '')),
+    ]));
     const srcHost = el('div', '');
     srcHost.style.cssText = 'display:grid;gap:.7rem';
     srcHost.id = 's-source';
     const srcLabel = el('div', '');
     srcLabel.appendChild(el('span', 'flabel', 'Rule source'));
     srcLabel.appendChild(srcHost);
-    f.appendChild(srcLabel);
+    f.appendChild(groupBox('Content source', [srcLabel]));
     renderSourceFields(srcHost, 's-src', HOME_SOURCE_TYPES, item ? item.source : null);
+    f.appendChild(groupBox('Display', [
+      checkInput('s-visible', item ? item.visible !== false : true, 'Visible on homepage'),
+      fieldRow('Limit (1–24)', numInput('s-limit', item && item.limit != null ? item.limit : 12, '12')),
+      fieldRow('Sort order (optional, blank = keep/append)', numInput('s-sort', '', '')),
+    ]));
     const row = el('div', '');
     row.style.cssText = 'display:flex;gap:.5rem;flex-wrap:wrap';
     const save = el('button', 'btn btn-primary btn-sm', item ? 'Save Changes' : 'Create section');
@@ -760,7 +822,7 @@
     secEditing = item ? item.id : null;
     const node = sectionEditorNode(item);
     openDrawer({
-      kicker: 'Home Sections',
+      kicker: 'Home',
       title: item ? 'Edit section' : 'New section',
       sub: item ? String(item.id) : 'Shelves render on the homepage in display order.',
       node,
@@ -822,9 +884,11 @@
   function filteredSections() {
     const q = String(($('sec-search') && $('sec-search').value) || '').trim().toLowerCase();
     const f = ($('sec-filter') && $('sec-filter').value) || 'all';
+    const src = ($('sec-source') && $('sec-source').value) || 'all';
     return secCache.filter((s) => {
       if (f === 'visible' && s.visible === false) return false;
       if (f === 'hidden' && s.visible !== false) return false;
+      if (src !== 'all' && (!s.source || s.source.type !== src)) return false;
       if (!q) return true;
       const hay = (s.id + ' ' + (s.title || '') + ' ' + (s.description || '') + ' ' + summarizeSource(s.source)).toLowerCase();
       return hay.indexOf(q) >= 0;
@@ -859,23 +923,25 @@
       return;
     }
     if (!list.length) {
-      stateBox(host, 'empty', 'No matches', 'Try a different search or status filter.');
+      stateBox(host, 'empty', 'No matches', 'Try a different search or filter.');
       return;
     }
+    const lastIdx = secCache.length - 1;
     list.forEach((s) => {
       const idx = secCache.indexOf(s);
       const card = el('div', 'data-row');
       const head = el('div', 'row-top');
+      head.appendChild(el('span', 'row-mono muted', String(idx + 1) + '.'));
       head.appendChild(el('span', 'row-title', s.title || s.id));
       head.appendChild(statusBadge(s));
-      head.appendChild(el('span', 'row-mono muted', '#' + (idx + 1) + ' · ' + s.id + ' · limit ' + (s.limit != null ? s.limit : '?')));
+      head.appendChild(el('span', 'row-mono muted', s.id + ' · limit ' + (s.limit != null ? s.limit : '?')));
       card.appendChild(head);
       card.appendChild(el('p', 'row-meta', summarizeSource(s.source) + (s.description ? ' — ' + s.description : '')));
       card.appendChild(rowButtons([
         ['Edit', 'go', () => openSectionEditor(s)],
-        [s.visible === false ? 'Show' : 'Hide', '', () => toggleSection(s), s.visible === false ? 'Make visible' : 'Hide from homepage'],
-        ['↑ Up', '', () => moveSection(secCache, idx, -1), 'Move up'],
-        ['↓ Down', '', () => moveSection(secCache, idx, 1), 'Move down'],
+        [s.visible === false ? 'Show' : 'Hide', '', () => toggleSection(s), s.visible === false ? 'Make visible on homepage' : 'Hide from homepage'],
+        ['↑ Up', '', () => moveSection(secCache, idx, -1), idx === 0 ? 'Already first' : 'Move up', idx === 0],
+        ['↓ Down', '', () => moveSection(secCache, idx, 1), idx === lastIdx ? 'Already last' : 'Move down', idx === lastIdx],
         ['Delete', 'danger', () => deleteSection(s), 'Delete section'],
       ]));
       host.appendChild(card);
@@ -883,6 +949,8 @@
   }
 
   async function saveSection() {
+    const form = $('sec-form');
+    setFormSaving(form, true);
     try {
       const body = readSectionForm();
       if (secEditing) {
@@ -898,6 +966,8 @@
       if (currentView === 'dashboard') loadDashboard();
     } catch (e) {
       notice('err', (e.message || e));
+    } finally {
+      setFormSaving(form, false);
     }
   }
 
@@ -1245,6 +1315,8 @@
   }
 
   async function saveCollection() {
+    const form = $('col-form');
+    setFormSaving(form, true);
     try {
       const body = readCollectionForm();
       if (colEditing) {
@@ -1260,6 +1332,8 @@
       if (currentView === 'dashboard') loadDashboard();
     } catch (e) {
       notice('err', (e.message || e));
+    } finally {
+      setFormSaving(form, false);
     }
   }
 
@@ -1491,6 +1565,8 @@
   }
 
   async function saveOverride() {
+    const form = $('ov-form');
+    setFormSaving(form, true);
     try {
       const { media, tmdb_id, fields } = readOverrideForm();
       if (ovEditing) {
@@ -1506,6 +1582,8 @@
       if (currentView === 'dashboard' || currentView === 'picks') loadDashboard();
     } catch (e) {
       notice('err', (e.message || e));
+    } finally {
+      setFormSaving(form, false);
     }
   }
 
@@ -1863,6 +1941,8 @@
   }
 
   async function saveHero() {
+    const form = $('hero-form');
+    setFormSaving(form, true);
     try {
       const body = readHeroForm();
       const saved = await api(API.hero, { method: 'PUT', body });
@@ -1871,10 +1951,38 @@
       notice('ok', 'Hero settings saved.');
     } catch (e) {
       notice('err', (e.message || e));
+    } finally {
+      setFormSaving(form, false);
     }
   }
 
   /* ================= DASHBOARD ================= */
+  function dashSkeletonRows(host, n) {
+    host.innerHTML = '';
+    for (let i = 0; i < (n || 3); i++) {
+      const sk = el('div', 'skel');
+      sk.style.minHeight = '2.4rem';
+      host.appendChild(sk);
+    }
+  }
+
+  // Scannable config row: NAME / detail / [Open|Configure|action].
+  function dashRow(host, name, detail, actionLabel, onAction) {
+    const row = el('div', 'cfg-row');
+    const main = el('div', 'cfg-main');
+    main.appendChild(el('span', 'cfg-name', name));
+    main.appendChild(el('span', 'cfg-detail', detail || '—'));
+    row.appendChild(main);
+    if (onAction) {
+      const b = el('button', 'rowbtn', actionLabel || 'Open');
+      b.type = 'button';
+      b.addEventListener('click', onAction);
+      row.appendChild(b);
+    }
+    host.appendChild(row);
+    return row;
+  }
+
   async function loadDashboard() {
     const cards = $('dash-cards');
     const cfg = $('dash-config');
@@ -1884,7 +1992,7 @@
       const sk = el('div', 'skel');
       cards.appendChild(sk);
     }
-    cfg.innerHTML = '<p class="muted text-sm">Loading live configuration…</p>';
+    dashSkeletonRows(cfg, 4);
     const [secRes, colRes, ovRes, heroRes] = await Promise.allSettled([
       api(API.homeSections),
       api(API.collections),
@@ -1923,34 +2031,34 @@
     });
 
     cfg.innerHTML = '';
-    if (!secs && !cols && !ovs) {
-      cfg.appendChild(el('p', 'muted text-sm', 'Configuration is unavailable — the management API could not be reached. Check the connection and retry.'));
+    if (!secs && !cols && !ovs && !hero) {
+      const box = stateBox(cfg, 'error', 'Configuration unavailable', 'The management API could not be reached. Check the connection and retry.');
+      const retry = el('button', 'btn btn-secondary btn-sm', 'Retry');
+      retry.type = 'button';
+      retry.addEventListener('click', loadDashboard);
+      box.appendChild(retry);
       return;
     }
-    const addRow = (label, detail, view) => {
-      const row = el('div', 'cfg-row');
-      row.appendChild(el('span', 'grow', label + (detail ? ' — ' + detail : '')));
-      if (view) {
-        const b = el('button', 'rowbtn', 'Open');
-        b.type = 'button';
-        b.addEventListener('click', () => showView(view));
-        row.appendChild(b);
-      }
-      cfg.appendChild(row);
-    };
     if (secs) {
-      const names = secs.slice(0, 4).map((s) => s.title || s.id).join(', ') || '—';
-      addRow(secs.length + ' sections', names + (secs.length > 4 ? ' (+' + (secs.length - 4) + ' more)' : ''), 'sections');
+      if (!secs.length) {
+        const row = dashRow(cfg, 'Home', 'No Home sections configured.', '+ Create your first section', () => openSectionEditor(null));
+        void row;
+      } else {
+        const v = visCount(secs);
+        dashRow(cfg, 'Home', v + ' active section' + (v === 1 ? '' : 's') + (secs.length - v ? ' · ' + (secs.length - v) + ' hidden' : ''), 'Open', () => showView('sections'));
+      }
     }
     if (cols) {
-      const names = cols.slice(0, 4).map((c) => c.slug).join(', ') || '—';
-      addRow(cols.length + ' collections', names + (cols.length > 4 ? ' (+' + (cols.length - 4) + ' more)' : ''), 'collections');
+      const v = visCount(cols);
+      dashRow(cfg, 'Collections', cols.length ? v + ' published' + (cols.length - v ? ' · ' + (cols.length - v) + ' hidden' : '') : 'None yet', 'Open', () => showView('collections'));
     }
     if (ovs) {
-      addRow(ovs.length + ' overrides', picks + ' marked as Greybox Picks', 'overrides');
+      dashRow(cfg, 'Overrides', ovs.length ? ovs.length + ' configured · ' + picks + ' ★ picks' : 'None yet', 'Open', () => showView('overrides'));
     }
     if (hero) {
-      addRow('Hero: ' + (hero.mode || 'follow-grid'), hero.mode === 'custom' ? summarizeSource(hero.source) : 'banner follows the grid', 'settings');
+      dashRow(cfg, 'Hero', heroSummaryText(hero), 'Configure', () => showView('settings'));
+    } else if (heroRes.status === 'rejected') {
+      dashRow(cfg, 'Hero', 'Unavailable', 'Configure', () => showView('settings'));
     }
   }
 
@@ -1995,6 +2103,17 @@
     if (ss) ss.addEventListener('input', renderSections);
     const sf = $('sec-filter');
     if (sf) sf.addEventListener('change', renderSections);
+    const ssrc = $('sec-source');
+    if (ssrc) {
+      // Source-type options mirror the supported HOME_SOURCE_TYPES exactly,
+      // so the filter can never offer a type the editor cannot produce.
+      HOME_SOURCE_TYPES.forEach((t) => {
+        const o = document.createElement('option');
+        o.value = t; o.textContent = t;
+        ssrc.appendChild(o);
+      });
+      ssrc.addEventListener('change', renderSections);
+    }
     const cs = $('col-search');
     if (cs) cs.addEventListener('input', renderCollections);
     const cf = $('col-filter');
@@ -2087,7 +2206,7 @@
     window.GreyboxAdminTest = window.GreyboxAdminTest || {};
     Object.assign(window.GreyboxAdminTest, {
       esc, vSlug, vReqStr: vReqStr, vInt, vTmdbId, vSource,
-      parseEntryLines, parseMetaText, summarizeSource,
+      parseEntryLines, parseMetaText, summarizeSource, heroSummaryText,
       fillSectionForm, readSectionForm,
       fillCollectionForm, readCollectionForm,
       fillOverrideForm, readOverrideForm, readHeroForm,

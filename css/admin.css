@@ -113,6 +113,17 @@ textarea.input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; re
 .toolbar .input[type="search"] { flex: 1; min-width: 12rem; }
 .toolbar .input-select { width: auto; min-width: 10rem; flex: none; }
 
+/* ---------- home workspace ---------- */
+.hero-strip { margin-bottom: 1.1rem; }
+.hero-strip-body { display: flex; align-items: center; gap: .9rem; }
+.hero-strip-text { flex: 1; min-width: 0; }
+.hero-eyebrow { font-size: .66rem; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; color: var(--gx-accent-strong); margin-bottom: .15rem; }
+.section-subhead { font-size: .8rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--gx-text-dim); margin: 0 0 .6rem .1rem; }
+
+/* ---------- editor groups (identity / source / display) ---------- */
+.editor-group { border: 1px solid var(--gx-border); border-radius: .7rem; padding: .8rem .85rem; display: grid; gap: .7rem; background: rgba(255,255,255,.015); }
+.editor-group > legend, .editor-group-title { font-size: .66rem; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; color: var(--gx-text-faint); padding: 0 .3rem; }
+
 /* ---------- panels / stats ---------- */
 .panel { background: var(--gx-surface); border: 1px solid var(--gx-border); border-radius: .9rem; padding: 1rem 1.1rem; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: .75rem; }
@@ -129,9 +140,12 @@ textarea.input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; re
 .quick-card:hover { border-color: var(--gx-accent-border); background: var(--gx-accent-soft); }
 .quick-card strong { font-size: .85rem; }
 .quick-card span { font-size: .75rem; color: var(--gx-text-dim); }
-.cfg-row { display: flex; align-items: center; gap: .6rem; padding: .5rem 0; border-top: 1px solid var(--gx-border-faint); font-size: .82rem; min-width: 0; }
+.cfg-row { display: flex; align-items: center; gap: .6rem; padding: .55rem 0; border-top: 1px solid var(--gx-border-faint); font-size: .82rem; min-width: 0; }
 .cfg-row:first-of-type { border-top: 0; }
 .cfg-row .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cfg-main { flex: 1; min-width: 0; display: grid; gap: .1rem; }
+.cfg-name { font-weight: 800; font-size: .74rem; letter-spacing: .08em; text-transform: uppercase; }
+.cfg-detail { font-size: .78rem; color: var(--gx-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- data rows ---------- */
 .row-list { display: grid; gap: .6rem; }
