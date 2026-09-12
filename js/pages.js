@@ -432,9 +432,12 @@
     $('grid').innerHTML = c.cardsHTML(shown, ctx.isInList) ||
       `<div class="gx-empty col-span-full">${c.escapeHtml(COLLECTION_FILTER_EMPTY[filter] || 'No titles available in this collection right now.')}</div>`;
     clearCollectionMore();
-    // Hero text + artwork come from this same object (single identity). An
-    // empty filtered set leaves the previous hero untouched (no split state);
-    // the return value lets the controller bind hero actions to it.
+    // Hero text + artwork come from this same object (single identity). A
+    // configured collection hero override (ctx.heroItem, resolved by the
+    // controller to ONE item) replaces the default first-item hero; an
+    // empty filtered set leaves the previous hero untouched (no split
+    // state); the return value lets the controller bind hero actions to it.
+    if (ctx.heroItem) { c.setHero(ctx.heroItem); return ctx.heroItem; }
     if (shown[0]) { c.setHero(shown[0]); return shown[0]; }
     return null;
   }

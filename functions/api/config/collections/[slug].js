@@ -3,7 +3,8 @@
  * One collection from D1. Unknown slugs AND hidden collections are 404,
  * mirroring the local-config behavior in js/data.js getCollection().
  */
-import { getDb, readCollection } from '../../../lib/db.js';
+import { getDb, readCollection, readSetting } from '../../../lib/db.js';
+import { sanitizeCollectionHero } from '../../../lib/validate.js';
 
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -22,7 +23,17 @@ export async function onRequest(context) {
 
     const col = await readCollection(db, slug);
     if (!col || col.visible === false) return json({ error: 'Collection not found' }, 404);
-    return json(col, 200);
+    // Collection hero override (null = default behavior: first shown item).
+    // Re-sanitized on every read so a stale/hand-edited map can never break
+    // public rendering. Additive field — existing clients ignore it.
+    let hero = null;
+    try {
+      const heroes = await readSetting(db, 'collection_heroes');
+      hero = sanitizeCollectionHero(heroes, slug);
+    } catch {
+      hero = null;
+    }
+    return json({ ...col, hero }, 200);
   } catch (e) {
     return json({ error: e && e.message ? e.message : String(e) }, (e && e.status) || 500);
   }

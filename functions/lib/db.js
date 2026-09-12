@@ -75,12 +75,26 @@ export async function readHomeConfig(db) {
         'FROM home_sections ORDER BY sort_order ASC, id ASC',
     )
     .all();
+  // New hero keys (heroItem/artwork/trailer) pass through only when they
+  // look structurally sound; the renderer + validateHero own strictness.
+  // Old rows without them behave exactly as before (defaults apply).
+  const heroItemRaw = heroRaw.heroItem;
+  const heroItem = (heroItemRaw && typeof heroItemRaw === 'object' && !Array.isArray(heroItemRaw) &&
+    (heroItemRaw.media === 'movie' || heroItemRaw.media === 'tv') &&
+    Number.isInteger(heroItemRaw.id) && heroItemRaw.id > 0)
+    ? { media: heroItemRaw.media, id: heroItemRaw.id }
+    : null;
+  const artworkRaw = (heroRaw.artwork && typeof heroRaw.artwork === 'object' && !Array.isArray(heroRaw.artwork)) ? heroRaw.artwork : null;
+  const trailerRaw = (heroRaw.trailer && typeof heroRaw.trailer === 'object' && !Array.isArray(heroRaw.trailer)) ? heroRaw.trailer : null;
   return {
     hero: {
-      mode: heroRaw.mode === 'custom' ? 'custom' : 'follow-grid',
+      mode: heroRaw.mode === 'custom' ? 'custom' : (heroRaw.mode === 'spotlight' ? 'spotlight' : 'follow-grid'),
       badge: typeof heroRaw.badge === 'string' ? heroRaw.badge : '',
       pick: Math.max(0, parseInt(heroRaw.pick, 10) || 0),
       source: heroRaw.source && typeof heroRaw.source === 'object' ? heroRaw.source : undefined,
+      heroItem,
+      artwork: artworkRaw,
+      trailer: trailerRaw,
     },
     sections: (results || []).map(rowToHomeSection),
   };

@@ -149,8 +149,20 @@
 
   /* ---------------- list pages: fetch (data.js) -> render (pages.js) ---------------- */
 
+  // Route hero presentation (Part 2): the hero module is a singleton, so
+  // every route sets its own presentation BEFORE any setHero on that route.
+  // undefined = defaults (pre-Part-2 behavior). Never rejects.
+  function configureHeroPresentation(pres) {
+    try {
+      if (window.GreyboxHero && typeof window.GreyboxHero.configureHero === 'function') {
+        window.GreyboxHero.configureHero(pres);
+      }
+    } catch { /* hero optional */ }
+  }
+
   async function loadList() {
     const myGen = routeGen;
+    configureHeroPresentation(undefined); // list pages always use default hero behavior
     Pages.setHomeDiscoverMode(false);
     Pages.renderListLoading(pageNum);
     Pages.renderListChrome(mode, subTab, tabNavigator());
@@ -292,14 +304,34 @@
     // when the filtered set is empty and the previous hero stays). Binding
     // heroItem to it keeps hero Watch/Info/List actions on the displayed
     // media identity instead of a stale previous card.
-    const hero = Pages.renderCollection({
+    //
+    // Collection hero override (Part 2) upgrades the hero asynchronously:
+    // the default first-item hero paints immediately (existing timing), and
+    // a configured custom title replaces it once resolved to ONE item
+    // object (single media identity, same as the shown[0] path) with its
+    // own presentation. Stale-gated: a newer route/view wins at every step.
+    configureHeroPresentation(undefined);
+    const ctx = {
       collection: view.col, items: view.items, filter: view.filter,
       onFilter: collectionFilterNav,
       isInList: (id, mt) => Data.isInMyList(id, mt),
-    });
+    };
+    const hero = Pages.renderCollection(ctx);
     if (hero) heroItem = hero;
     if (R) document.title = `${view.col.title} — Greybox`;
     hasLoadedList = true;
+    (async () => {
+      const myGen = routeGen;
+      let heroOverride = null;
+      try { heroOverride = await Data.getCollectionHeroConfig(view.slug); } catch { heroOverride = null; }
+      if (!heroOverride || myGen !== routeGen || colView !== view) return;
+      let customItem = null;
+      try { customItem = await Data.getCollectionHeroItem(heroOverride); } catch { customItem = null; }
+      if (!customItem || myGen !== routeGen || colView !== view) return;
+      configureHeroPresentation({ artwork: heroOverride.artwork, trailer: heroOverride.trailer });
+      const upgraded = Pages.renderCollection({ ...ctx, heroItem: customItem });
+      if (upgraded) heroItem = upgraded;
+    })();
   }
 
   function collectionShownCount(view) {
@@ -411,6 +443,13 @@
   // shelf is skipped and never breaks the page (see getHomeSections).
   async function loadHomeDiscover() {
     const gen = routeGen;
+    // Home hero presentation (artwork/trailer/logo) applies to BOTH the
+    // follow-grid hero below and the custom/spotlight override in
+    // loadHomeExtras — configured before any setHero on this route.
+    try {
+      const hc = Data.getHomeConfig();
+      configureHeroPresentation({ artwork: hc.hero.artwork, trailer: hc.hero.trailer });
+    } catch { /* defaults stand */ }
     Pages.setHomeDiscoverMode(true);
     Pages.clearHomeSections();
     C.setNotice('');
@@ -442,8 +481,8 @@
     let cfg;
     try { cfg = Data.getHomeConfig(); }
     catch { Pages.clearHomeSections(); return; }
-    // Custom hero (optional spotlight); failure keeps the grid hero.
-    if (cfg.hero && cfg.hero.mode === 'custom') {
+    // Custom/spotlight hero (optional); failure keeps the grid hero.
+    if (cfg.hero && (cfg.hero.mode === 'custom' || cfg.hero.mode === 'spotlight')) {
       try {
         const item = await Data.getHeroItem(cfg.hero);
         if (gen !== routeGen) return;

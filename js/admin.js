@@ -37,6 +37,7 @@
     collections: '/api/admin/collections',
     overrides: '/api/admin/overrides',
     hero: '/api/admin/settings/home-hero',
+    colHeroes: '/api/admin/settings/collection-heroes',
   };
 
   async function api(path, opts) {
@@ -179,6 +180,7 @@
     document.body.style.overflow = '';
     setDrawerDirty(false);
     drawerForm = null;
+    previewReader = null;
     try { if (drawerPrevFocus && drawerPrevFocus.focus) drawerPrevFocus.focus(); } catch { /* noop */ }
     drawerPrevFocus = null;
   }
@@ -192,6 +194,7 @@
   const VIEWS = {
     dashboard: { title: 'Dashboard', sub: 'Overview' },
     sections: { title: 'Home', sub: 'Content' },
+    heroes: { title: 'Heroes', sub: 'Content' },
     collections: { title: 'Collections', sub: 'Content' },
     overrides: { title: 'Overrides', sub: 'Content' },
     picks: { title: 'Greybox Picks', sub: 'Content' },
@@ -220,6 +223,7 @@
     if (!ADMIN_TOKEN) return;
     if (key === 'dashboard') loadDashboard();
     if (key === 'sections') { loadHomeHero(); loadSections(); }
+    if (key === 'heroes') loadHeroes();
     if (key === 'collections') loadCollections();
     if (key === 'overrides') loadOverrides();
     if (key === 'picks') loadPicks();
@@ -753,15 +757,26 @@
   /* ================= HOME HERO strip (summary only — editing stays in General Settings) ================= */
   function heroSummaryText(hero) {
     if (!hero || typeof hero !== 'object') return 'Hero settings unavailable.';
-    const mode = hero.mode === 'custom' ? 'Custom spotlight' : 'Follow-grid';
+    const mode = hero.mode === 'custom' ? 'Custom spotlight' : (hero.mode === 'spotlight' ? 'Spotlight title' : 'Follow-grid');
     const bits = [mode];
-    if (hero.mode === 'custom') {
+    if (hero.mode === 'spotlight') {
+      if (hero.heroItem) bits.push(hero.heroItem.media + ':' + hero.heroItem.id);
+    } else if (hero.mode === 'custom') {
       if (hero.badge) bits.push('“' + hero.badge + '”');
       bits.push('pick ' + (hero.pick != null ? hero.pick : 0));
       if (hero.source) bits.push(summarizeSource(hero.source));
+      if (hero.heroItem) bits.push('pinned ' + hero.heroItem.media + ':' + hero.heroItem.id);
     } else {
       bits.push('banner follows the grid');
     }
+    const pres = heroPresentationOf(hero);
+    if (pres.trailer.source === 'off') bits.push('trailer off');
+    else if (pres.trailer.source === 'custom') bits.push('trailer ' + (pres.trailer.key || 'custom'));
+    else if (pres.trailer.activation !== 'delayed' || pres.trailer.delaySec !== 7) {
+      bits.push('trailer ' + pres.trailer.activation + ' ' + pres.trailer.delaySec + 's');
+    }
+    if (pres.artwork.backdrop === 'custom') bits.push('custom backdrop');
+    if (pres.artwork.logo !== 'text') bits.push('logo ' + pres.artwork.logo);
     return bits.join(' · ');
   }
 
@@ -1644,6 +1659,599 @@
     });
   }
 
+  /* ================= HERO CONTROL CENTER (Part 2) ================= */
+  // Pure helpers mirror functions/lib/validate.js (client-side first pass;
+  // the server re-validates everything — a failed save is never shown as ok).
+
+  var YT_KEY_RE = /^[A-Za-z0-9_-]{11}$/;
+
+  // Bare YouTube key or full YouTube URL → normalized key. Throws {message}.
+  function parseYoutubeKey(v) {
+    const s = String(v == null ? '' : v).trim();
+    if (!s) return '';
+    if (YT_KEY_RE.test(s)) return s;
+    let u = null;
+    try { u = new URL(s); }
+    catch { throw { message: 'Trailer must be a YouTube key or YouTube URL (other hosts are not supported).' }; }
+    const host = String(u.hostname || '').toLowerCase().replace(/^www\./, '');
+    let key = '';
+    if (host === 'youtu.be') {
+      key = String(u.pathname || '').split('/').filter(Boolean)[0] || '';
+    } else if (host === 'youtube.com' || host === 'm.youtube.com' || host === 'music.youtube.com') {
+      const path = String(u.pathname || '');
+      if (path === '/watch') { try { key = u.searchParams.get('v') || ''; } catch { key = ''; } }
+      else {
+        const m = /^\/(?:embed|shorts|live|v)\/([^/?#]+)/.exec(path);
+        if (m) key = m[1];
+      }
+    }
+    if (key && YT_KEY_RE.test(key)) return key;
+    throw { message: 'Trailer must be a YouTube key or YouTube URL (other hosts are not supported).' };
+  }
+
+  // Lenient client-side view of a hero presentation (defaults for anything
+  // absent; the renderer + server own strictness).
+  function heroPresentationOf(hero) {
+    const h = (hero && typeof hero === 'object') ? hero : {};
+    const a = (h.artwork && typeof h.artwork === 'object') ? h.artwork : {};
+    const t = (h.trailer && typeof h.trailer === 'object') ? h.trailer : {};
+    let delay = parseInt(t.delaySec, 10);
+    if (!Number.isInteger(delay) || delay < 0) delay = 7;
+    if (delay > 120) delay = 120;
+    return {
+      artwork: {
+        backdrop: a.backdrop === 'custom' ? 'custom' : 'auto',
+        backdropUrl: typeof a.backdropUrl === 'string' ? a.backdropUrl.trim() : '',
+        logo: a.logo === 'tmdb' ? 'tmdb' : (a.logo === 'custom' ? 'custom' : 'text'),
+        logoUrl: typeof a.logoUrl === 'string' ? a.logoUrl.trim() : '',
+      },
+      trailer: {
+        source: t.source === 'custom' ? 'custom' : (t.source === 'off' ? 'off' : 'auto'),
+        key: typeof t.key === 'string' ? t.key.trim() : '',
+        activation: t.activation === 'immediate' ? 'immediate' : (t.activation === 'wait-once' ? 'wait-once' : 'delayed'),
+        delaySec: delay,
+        muted: t.muted !== false,
+        loop: t.loop !== false,
+      },
+    };
+  }
+
+  function describeTrailer(pres) {
+    const t = (pres && pres.trailer) || {};
+    if (t.source === 'off') return 'Trailer disabled';
+    const bits = [];
+    bits.push(t.source === 'custom' ? ('Custom ' + (t.key || '(unset)')) : 'Automatic (TMDB)');
+    if (t.activation === 'immediate') bits.push('starts immediately');
+    else if (t.activation === 'wait-once') bits.push('wait-once ' + t.delaySec + 's');
+    else bits.push('delayed ' + t.delaySec + 's');
+    bits.push(t.muted === false ? 'unmuted' : 'muted');
+    if (t.loop === false) bits.push('no loop');
+    return bits.join(' · ');
+  }
+
+  function describeArtwork(pres) {
+    const a = (pres && pres.artwork) || {};
+    const bits = [];
+    bits.push(a.backdrop === 'custom' ? 'Custom backdrop' : 'TMDB backdrop');
+    bits.push(a.logo === 'tmdb' ? 'TMDB logo' : (a.logo === 'custom' ? 'Custom logo' : 'Text title'));
+    return bits.join(' · ');
+  }
+
+  let previewReader = null; // () => { target, pres, note } for the open hero editor
+
+  async function loadHeroes() {
+    const homeHost = $('heroes-home');
+    const colHost = $('heroes-collections');
+    if (homeHost) stateBox(homeHost, 'loading', 'Loading home hero…');
+    if (colHost) stateBox(colHost, 'loading', 'Loading collections…');
+    try {
+      const [heroRes, colRes, mapRes] = await Promise.allSettled([
+        api(API.hero), api(API.collections), api(API.colHeroes),
+      ]);
+      if (heroRes.status === 'rejected') throw heroRes.reason;
+      if (colRes.status === 'rejected') throw colRes.reason;
+      const hero = heroRes.value || { mode: 'follow-grid' };
+      const cols = Array.isArray(colRes.value) ? colRes.value : [];
+      const map = (mapRes.status === 'fulfilled' && mapRes.value && typeof mapRes.value === 'object' && !Array.isArray(mapRes.value))
+        ? mapRes.value : {};
+      colCache = cols;
+      renderHeroesHome(hero);
+      renderHeroesCollections(cols, map);
+    } catch (e) {
+      if (homeHost) { homeHost.innerHTML = ''; stateBox(homeHost, 'error', 'Home hero unavailable', (e && e.message) || String(e)); }
+      if (colHost) { colHost.innerHTML = ''; stateBox(colHost, 'error', 'Collections unavailable', (e && e.message) || String(e)); }
+      notice('err', 'Heroes failed to load: ' + ((e && e.message) || e));
+    }
+  }
+
+  function renderHeroesHome(hero) {
+    const host = $('heroes-home');
+    if (!host) return;
+    host.innerHTML = '';
+    const pres = heroPresentationOf(hero);
+    const card = el('div', 'data-row');
+    const head = el('div', 'row-top');
+    head.appendChild(el('span', 'row-title', 'Home Hero'));
+    head.appendChild(el('span', 'badge badge-live', 'Live'));
+    head.appendChild(el('span', 'row-mono muted', hero.mode || 'follow-grid'));
+    card.appendChild(head);
+    const lines = [];
+    if (hero.mode === 'spotlight' && hero.heroItem) lines.push('Title: ' + hero.heroItem.media + ':' + hero.heroItem.id);
+    else if (hero.mode === 'custom') lines.push('Source: ' + summarizeSource(hero.source) + ' · pick ' + (hero.pick != null ? hero.pick : 0));
+    else lines.push('Follows the homepage grid');
+    if (hero.badge) lines.push('Badge: ' + hero.badge);
+    lines.push(describeArtwork(pres));
+    lines.push(describeTrailer(pres));
+    lines.forEach((ln) => card.appendChild(el('p', 'row-meta', ln)));
+    card.appendChild(rowButtons([
+      ['Edit home hero', 'go', () => openHomeHeroEditor(hero), 'Edit home hero content, artwork and trailer'],
+      ['Open homepage ↗', '', () => { try { window.open('/', '_blank', 'noopener'); } catch { /* noop */ } }, 'Verify on the public site'],
+    ]));
+    host.appendChild(card);
+  }
+
+  function renderHeroesCollections(cols, map) {
+    const host = $('heroes-collections');
+    if (!host) return;
+    host.innerHTML = '';
+    if (!cols.length) {
+      stateBox(host, 'empty', 'No collections', 'Create a collection first — heroes attach to real collections only.');
+      return;
+    }
+    cols.forEach((c) => {
+      const entry = (map && map[c.slug] && typeof map[c.slug] === 'object') ? map[c.slug] : null;
+      const custom = !!(entry && entry.mode === 'custom' && entry.heroItem);
+      const card = el('div', 'data-row');
+      const head = el('div', 'row-top');
+      head.appendChild(el('span', 'row-title', c.title || c.slug));
+      head.appendChild(el('span', 'badge ' + (custom ? 'badge-pick' : ''), custom ? 'Custom hero' : 'Default hero'));
+      head.appendChild(el('span', 'row-mono muted', '/collection/' + c.slug));
+      card.appendChild(head);
+      if (custom) {
+        const pres = heroPresentationOf(entry);
+        card.appendChild(el('p', 'row-meta', 'Title: ' + entry.heroItem.media + ':' + entry.heroItem.id));
+        card.appendChild(el('p', 'row-meta', describeArtwork(pres) + ' · ' + describeTrailer(pres)));
+      } else {
+        card.appendChild(el('p', 'row-meta', 'First title drives the hero. Configure a custom hero to pin a different title.'));
+      }
+      card.appendChild(rowButtons([
+        ['Configure', custom ? 'go' : '', () => openCollectionHeroEditor(c, custom ? entry : null), 'Configure hero for /collection/' + c.slug],
+        ['Open ↗', '', () => { try { window.open('/collection/' + c.slug, '_blank', 'noopener'); } catch { /* noop */ } }, 'Verify on the public site'],
+      ]));
+      host.appendChild(card);
+    });
+  }
+
+  /* ---------- shared hero editor pieces (home + collection reuse them) ---------- */
+
+  // Title picker: explicit media + TMDB id with TMDB search assistance.
+  // The search uses the existing server-side proxy — no key in the browser.
+  // Selecting a result populates media + id (one identity, never mixed).
+  function heroItemPickerNode(prefix, item) {
+    const wrap = el('div', '');
+    wrap.style.cssText = 'display:grid;gap:.7rem';
+    wrap.appendChild(fieldRow('Media', selectInput(prefix + '-media', [['movie', 'Movie'], ['tv', 'TV show']], item ? item.media : 'movie')));
+    wrap.appendChild(fieldRow('TMDB ID', numInput(prefix + '-id', item ? item.id : '', '550')));
+    const searchRow = el('div', '');
+    searchRow.style.cssText = 'display:flex;gap:.5rem';
+    const q = textInput(prefix + '-q', '', 'Fight Club');
+    q.setAttribute('aria-label', 'Search TMDB titles');
+    const go = el('button', 'btn btn-secondary btn-sm', 'Search TMDB');
+    go.type = 'button';
+    searchRow.appendChild(q);
+    searchRow.appendChild(go);
+    wrap.appendChild(searchRow);
+    const res = el('div', 'hero-pick-results');
+    res.id = prefix + '-results';
+    wrap.appendChild(res);
+    const run = () => heroItemSearch(prefix);
+    go.addEventListener('click', run);
+    q.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); run(); } });
+    return wrap;
+  }
+
+  async function heroItemSearch(prefix) {
+    const host = document.getElementById(prefix + '-results');
+    const qEl = document.getElementById(prefix + '-q');
+    const q = qEl ? String(qEl.value || '').trim() : '';
+    if (!q) { if (host) host.innerHTML = '<p class="muted text-sm">Type a title first.</p>'; return; }
+    if (q.length > 120) { if (host) host.innerHTML = '<p class="muted text-sm">Query must be at most 120 characters.</p>'; return; }
+    if (host) host.innerHTML = '<p class="muted text-sm">Searching TMDB…</p>';
+    try {
+      const raw = await tmdbSearchFetch(q);
+      const rows = normalizeTmdbSearchResults(raw).slice(0, 8);
+      if (!host) return;
+      host.innerHTML = '';
+      if (!rows.length) { host.innerHTML = '<p class="muted text-sm">No matches. Try another spelling.</p>'; return; }
+      rows.forEach((r) => {
+        const row = el('div', 'hero-pick-result');
+        const img = document.createElement('img');
+        const posterUrl = tmdbPosterUrl(r.poster);
+        img.loading = 'lazy';
+        img.alt = '';
+        img.src = posterUrl || 'https://via.placeholder.com/48x72?text=?';
+        row.appendChild(img);
+        const body = el('div', '');
+        body.style.cssText = 'min-width:0;flex:1';
+        body.appendChild(el('p', 'row-title', r.title));
+        body.appendChild(el('p', 'muted text-sm', (r.media === 'tv' ? 'TV' : 'Movie') + ' · ' + (r.year || '—') + ' · TMDB ' + r.media + ':' + r.id));
+        row.appendChild(body);
+        const sel = el('button', 'rowbtn go', 'Select');
+        sel.type = 'button';
+        sel.setAttribute('aria-label', 'Select ' + r.title + ' (' + r.media + ':' + r.id + ')');
+        sel.addEventListener('click', () => {
+          const mEl = document.getElementById(prefix + '-media');
+          const idEl = document.getElementById(prefix + '-id');
+          if (mEl) mEl.value = r.media;
+          if (idEl) idEl.value = String(r.id);
+          setDrawerDirty(true);
+          host.innerHTML = '<p class="muted text-sm">Selected ' + r.media + ':' + r.id + ' — refresh the preview below.</p>';
+          refreshHeroPreview();
+        });
+        row.appendChild(sel);
+        host.appendChild(row);
+      });
+    } catch (e) {
+      if (host) host.innerHTML = '<p class="muted text-sm">Search failed: ' + esc((e && e.message) || e) + '</p>';
+    }
+  }
+
+  function readHeroItem(prefix) {
+    const mEl = document.getElementById(prefix + '-media');
+    const idEl = document.getElementById(prefix + '-id');
+    const media = mEl ? mEl.value : 'movie';
+    if (media !== 'movie' && media !== 'tv') throw { message: "Media must be 'movie' or 'tv'." };
+    const id = idEl ? parseInt(idEl.value, 10) : NaN;
+    if (!Number.isInteger(id) || id < 1 || id > 2147483647) throw { message: 'TMDB ID must be a positive integer.' };
+    return { media, id };
+  }
+
+  function artworkFieldsNode(prefix, art) {
+    const a = (art && typeof art === 'object') ? art : {};
+    const wrap = el('div', '');
+    wrap.style.cssText = 'display:grid;gap:.7rem';
+    wrap.appendChild(fieldRow('Backdrop', selectInput(prefix + '-backdrop', [['auto', 'Automatic (TMDB)'], ['custom', 'Custom URL']], a.backdrop === 'custom' ? 'custom' : 'auto')));
+    wrap.appendChild(fieldRow('Custom backdrop URL (https://…)', textInput(prefix + '-backdropUrl', a.backdropUrl || '', 'https://…')));
+    wrap.appendChild(fieldRow('Title / logo', selectInput(prefix + '-logo', [['text', 'Text title (fallback)'], ['tmdb', 'TMDB logo (automatic)'], ['custom', 'Custom logo URL']], a.logo === 'tmdb' ? 'tmdb' : (a.logo === 'custom' ? 'custom' : 'text'))));
+    wrap.appendChild(fieldRow('Custom logo URL (https://…)', textInput(prefix + '-logoUrl', a.logoUrl || '', 'https://…')));
+    return wrap;
+  }
+
+  function readArtwork(prefix) {
+    const v = (id) => { const n = document.getElementById(id); return n ? n.value : ''; };
+    const backdrop = v(prefix + '-backdrop') === 'custom' ? 'custom' : 'auto';
+    const backdropUrl = String(v(prefix + '-backdropUrl') || '').trim();
+    const logoRaw = v(prefix + '-logo');
+    const logo = logoRaw === 'tmdb' ? 'tmdb' : (logoRaw === 'custom' ? 'custom' : 'text');
+    const logoUrl = String(v(prefix + '-logoUrl') || '').trim();
+    if (backdrop === 'custom') {
+      if (!backdropUrl) throw { message: 'Custom backdrop URL is required.' };
+      if (!/^https?:\/\//i.test(backdropUrl)) throw { message: 'Custom backdrop must be an http(s) URL.' };
+      if (backdropUrl.length > 500) throw { message: 'Custom backdrop URL must be at most 500 characters.' };
+    }
+    if (logo === 'custom') {
+      if (!logoUrl) throw { message: 'Custom logo URL is required.' };
+      if (!/^https?:\/\//i.test(logoUrl)) throw { message: 'Custom logo must be an http(s) URL.' };
+      if (logoUrl.length > 500) throw { message: 'Custom logo URL must be at most 500 characters.' };
+    }
+    return { backdrop, backdropUrl, logo, logoUrl };
+  }
+
+  function trailerFieldsNode(prefix, tr) {
+    const t = (tr && typeof tr === 'object') ? tr : {};
+    const wrap = el('div', '');
+    wrap.style.cssText = 'display:grid;gap:.7rem';
+    wrap.appendChild(fieldRow('Source', selectInput(prefix + '-source',
+      [['auto', 'Automatic (TMDB)'], ['custom', 'Custom YouTube trailer'], ['off', 'Disabled (still image only)']],
+      t.source === 'custom' ? 'custom' : (t.source === 'off' ? 'off' : 'auto'))));
+    wrap.appendChild(fieldRow('Custom trailer (YouTube key or URL)', textInput(prefix + '-key', t.key || '', 'dQw4w9WgXcQ or https://youtu.be/…')));
+    wrap.appendChild(fieldRow('Activation', selectInput(prefix + '-activation',
+      [['delayed', 'Delayed — wait N seconds every time'], ['immediate', 'Immediate — start at once'], ['wait-once', 'Wait once — delay only the first time']],
+      t.activation === 'immediate' ? 'immediate' : (t.activation === 'wait-once' ? 'wait-once' : 'delayed'))));
+    wrap.appendChild(fieldRow('Delay (seconds, 0–120)', numInput(prefix + '-delay', (t.delaySec != null ? t.delaySec : 7), '7')));
+    wrap.appendChild(checkInput(prefix + '-muted', t.muted !== false, 'Muted autoplay (required by most browsers)'));
+    wrap.appendChild(checkInput(prefix + '-loop', t.loop !== false, 'Loop trailer'));
+    wrap.appendChild(el('p', 'muted text-sm', 'Autoplay is never guaranteed: browsers may block it, in which case the hero keeps its still image. Only YouTube sources are supported.'));
+    return wrap;
+  }
+
+  function readTrailer(prefix) {
+    const v = (id) => { const n = document.getElementById(id); return n ? n.value : ''; };
+    const srcRaw = v(prefix + '-source');
+    const source = srcRaw === 'custom' ? 'custom' : (srcRaw === 'off' ? 'off' : 'auto');
+    let key = '';
+    if (source === 'custom') {
+      key = parseYoutubeKey(v(prefix + '-key'));
+      if (!key) throw { message: 'Custom trailer needs a YouTube key or URL.' };
+    }
+    const actRaw = v(prefix + '-activation');
+    const activation = actRaw === 'immediate' ? 'immediate' : (actRaw === 'wait-once' ? 'wait-once' : 'delayed');
+    const delaySec = parseInt(v(prefix + '-delay'), 10);
+    if (!Number.isInteger(delaySec) || delaySec < 0 || delaySec > 120) throw { message: 'Delay must be 0–120 seconds.' };
+    const mutedEl = document.getElementById(prefix + '-muted');
+    const loopEl = document.getElementById(prefix + '-loop');
+    return { source, key, activation, delaySec, muted: mutedEl ? !!mutedEl.checked : true, loop: loopEl ? !!loopEl.checked : true };
+  }
+
+  /* ---------- hero preview (read-only: never saves, never mutates state) ---------- */
+
+  function heroPreviewNode() {
+    const wrap = el('div', 'hero-preview');
+    const bar = el('div', 'hero-preview-bar');
+    bar.appendChild(el('span', 'badge badge-soon', 'Preview'));
+    bar.appendChild(el('span', 'muted text-sm', 'Unsaved — save to make live.'));
+    const refresh = el('button', 'btn btn-ghost btn-sm', 'Refresh preview');
+    refresh.type = 'button';
+    refresh.addEventListener('click', () => refreshHeroPreview());
+    bar.appendChild(refresh);
+    wrap.appendChild(bar);
+    const body = el('div', 'hero-preview-body');
+    body.id = 'hero-preview-body';
+    body.innerHTML = '<p class="muted text-sm">Select a title, then Refresh preview.</p>';
+    wrap.appendChild(body);
+    return wrap;
+  }
+
+  function previewTargetFromReader() {
+    try {
+      if (typeof previewReader !== 'function') return { target: null, pres: heroPresentationOf(null), note: '' };
+      const r = previewReader() || {};
+      return { target: r.target || null, pres: heroPresentationOf(r.pres), note: r.note || '' };
+    } catch (e) {
+      return { target: null, pres: heroPresentationOf(null), note: (e && e.message) || String(e) };
+    }
+  }
+
+  async function refreshHeroPreview() {
+    const body = document.getElementById('hero-preview-body');
+    if (!body) return;
+    const { target, pres, note } = previewTargetFromReader();
+    if (note) { body.innerHTML = ''; body.appendChild(el('p', 'muted text-sm', note)); return; }
+    if (!target) { body.innerHTML = ''; body.appendChild(el('p', 'muted text-sm', 'No fixed title to preview (rule-based sources resolve at runtime).')); return; }
+    body.innerHTML = '<p class="muted text-sm">Loading preview…</p>';
+    try {
+      const res = await fetch('/api/' + target.media + '/' + target.id, { headers: { accept: 'application/json' } });
+      if (!res.ok) throw new Error('Title not found (' + res.status + ').');
+      const d = await res.json();
+      body.innerHTML = '';
+      const art = el('div', 'hero-preview-art');
+      let artUrl = '';
+      if (pres.artwork.backdrop === 'custom' && pres.artwork.backdropUrl) artUrl = pres.artwork.backdropUrl;
+      else if (d.backdrop_path) artUrl = 'https://image.tmdb.org/t/p/w1280' + d.backdrop_path;
+      else if (d.poster_path) artUrl = 'https://image.tmdb.org/t/p/w500' + d.poster_path;
+      if (artUrl) {
+        const img = document.createElement('img');
+        img.alt = '';
+        img.loading = 'lazy';
+        img.src = artUrl;
+        img.onerror = function () { try { img.remove(); } catch (e) { /* noop */ } };
+        art.appendChild(img);
+      } else {
+        art.appendChild(el('p', 'muted text-sm', '(no artwork available)'));
+      }
+      body.appendChild(art);
+      const title = d.title || d.name || 'Untitled';
+      if (pres.artwork.logo === 'custom' && pres.artwork.logoUrl) {
+        const li = document.createElement('img');
+        li.alt = title;
+        li.className = 'hero-preview-logo';
+        li.loading = 'lazy';
+        li.src = pres.artwork.logoUrl;
+        body.appendChild(li);
+      } else if (pres.artwork.logo === 'tmdb') {
+        const lz = el('p', 'muted text-sm', 'Logo: TMDB (resolved on the public page)');
+        body.appendChild(lz);
+        body.appendChild(el('p', 'hero-preview-title', title));
+      } else {
+        body.appendChild(el('p', 'hero-preview-title', title));
+      }
+      const date = String(d.release_date || d.first_air_date || '').slice(0, 4);
+      body.appendChild(el('p', 'muted text-sm', [(date || '—'), target.media === 'tv' ? 'TV' : 'Movie', 'TMDB ' + target.media + ':' + target.id].join(' · ')));
+      if (d.overview) body.appendChild(el('p', 'muted text-sm', String(d.overview).slice(0, 220)));
+      const ov = findCachedOverride(target.media, target.id);
+      if (ov) body.appendChild(el('p', 'muted text-sm', 'Metadata override active (' + Object.keys(ov).filter((k) => k !== 'media' && k !== 'tmdb_id').join(', ') + ').'));
+      body.appendChild(el('p', 'muted text-sm', describeTrailer(pres)));
+    } catch (e) {
+      body.innerHTML = '';
+      body.appendChild(el('p', 'muted text-sm', 'Preview failed: ' + ((e && e.message) || e)));
+    }
+  }
+
+  /* ---------- home hero editor ---------- */
+
+  function openHomeHeroEditor(hero) {
+    const h = (hero && typeof hero === 'object') ? hero : { mode: 'follow-grid' };
+    const pres = heroPresentationOf(h);
+    const f = document.createElement('form');
+    f.id = 'hh-form';
+    f.autocomplete = 'off';
+    f.style.cssText = 'display:grid;gap:.8rem';
+    f.appendChild(heroPreviewNode());
+    f.appendChild(groupBox('Content', [
+      fieldRow('Mode', selectInput('hh-mode',
+        [['follow-grid', 'Follow-grid (banner follows the grid)'], ['custom', 'Custom (rule source + pick)'], ['spotlight', 'Spotlight (one explicit title)']],
+        h.mode === 'custom' ? 'custom' : (h.mode === 'spotlight' ? 'spotlight' : 'follow-grid'))),
+      (() => {
+        const w = el('div', '');
+        w.appendChild(el('span', 'flabel', 'Spotlight title (explicit media identity)'));
+        w.appendChild(heroItemPickerNode('hhi', h.heroItem || null));
+        return w;
+      })(),
+      fieldRow('Badge (custom/spotlight label, optional)', textInput('hh-badge', h.badge || '', 'Greybox Spotlight')),
+      fieldRow('Pick (custom mode item index)', numInput('hh-pick', (h.pick != null ? h.pick : 0), '0')),
+      (() => {
+        const srcHost = el('div', '');
+        srcHost.style.cssText = 'display:grid;gap:.7rem';
+        srcHost.id = 'hh-source';
+        const w = el('div', '');
+        w.appendChild(el('span', 'flabel', 'Rule source (custom mode)'));
+        w.appendChild(srcHost);
+        renderSourceFields(srcHost, 'hh-src', HOME_SOURCE_TYPES, h.source || null);
+        return w;
+      })(),
+    ]));
+    f.appendChild(groupBox('Artwork', [artworkFieldsNode('hha', pres.artwork)]));
+    f.appendChild(groupBox('Trailer', [trailerFieldsNode('hht', pres.trailer)]));
+    const row = el('div', '');
+    row.style.cssText = 'display:flex;gap:.5rem;flex-wrap:wrap';
+    const save = el('button', 'btn btn-primary btn-sm', 'Save Changes');
+    save.type = 'submit';
+    const cancel = el('button', 'btn btn-ghost btn-sm', 'Discard');
+    cancel.type = 'button';
+    cancel.addEventListener('click', closeDrawer);
+    row.appendChild(save);
+    row.appendChild(cancel);
+    f.appendChild(row);
+    f.addEventListener('submit', (e) => { e.preventDefault(); saveHomeHero(); });
+    openDrawer({ kicker: 'Heroes', title: 'Edit home hero', sub: 'Content, artwork and trailer. Preview above is unsaved.', node: f, form: f });
+    previewReader = () => {
+      const modeEl = document.getElementById('hh-mode');
+      const mode = modeEl ? modeEl.value : 'follow-grid';
+      if (mode === 'spotlight') return { target: readHeroItem('hhi'), pres: { artwork: readArtwork('hha'), trailer: readTrailer('hht') } };
+      if (mode === 'custom') {
+        try {
+          const src = readSource('hh-src');
+          if (src && src.type === 'ids' && Array.isArray(src.items) && src.items[0]) {
+            return { target: src.items[0], pres: { artwork: readArtwork('hha'), trailer: readTrailer('hht') } };
+          }
+        } catch (e) { return { target: null, pres: null, note: e && e.message ? e.message : String(e) }; }
+        return { target: null, pres: null, note: '' };
+      }
+      return { target: null, pres: null, note: 'Follows the homepage grid — no fixed title to preview.' };
+    };
+    refreshHeroPreview();
+  }
+
+  function readHomeHeroForm() {
+    const modeEl = $('hh-mode');
+    const modeRaw = modeEl ? modeEl.value : 'follow-grid';
+    const mode = modeRaw === 'custom' ? 'custom' : (modeRaw === 'spotlight' ? 'spotlight' : 'follow-grid');
+    const badge = ($('hh-badge') ? $('hh-badge').value : '').trim();
+    if (badge.length > 120) throw { message: 'Badge must be at most 120 characters.' };
+    const pick = parseInt($('hh-pick') ? $('hh-pick').value : '0', 10);
+    if (!Number.isInteger(pick) || pick < 0 || pick > 100) throw { message: 'Pick must be 0–100.' };
+    let heroItem = null;
+    if (mode === 'spotlight') heroItem = readHeroItem('hhi');
+    else {
+      try { heroItem = readHeroItem('hhi'); } catch { heroItem = null; }
+    }
+    const body = { mode, badge, pick, heroItem, artwork: readArtwork('hha'), trailer: readTrailer('hht') };
+    if (mode === 'custom') {
+      body.source = readSource('hh-src');
+      const srcErr = vSource(body.source, HOME_SOURCE_TYPES);
+      if (srcErr) throw { message: srcErr };
+    }
+    return body;
+  }
+
+  async function saveHomeHero() {
+    const form = $('hh-form');
+    setFormSaving(form, true);
+    try {
+      const body = readHomeHeroForm();
+      await api(API.hero, { method: 'PUT', body });
+      notice('ok', 'Home hero saved.');
+      previewReader = null;
+      closeDrawer();
+      await loadHeroes();
+      await loadHero(); // keep General Settings in sync (same endpoint)
+      if (currentView === 'dashboard') loadDashboard();
+    } catch (e) {
+      notice('err', (e.message || e));
+    } finally {
+      setFormSaving(form, false);
+    }
+  }
+
+  /* ---------- collection hero editor ---------- */
+
+  function openCollectionHeroEditor(col, entry) {
+    const custom = !!(entry && entry.mode === 'custom');
+    const pres = heroPresentationOf(entry);
+    const f = document.createElement('form');
+    f.id = 'ch-form';
+    f.autocomplete = 'off';
+    f.style.cssText = 'display:grid;gap:.8rem';
+    f.appendChild(heroPreviewNode());
+    f.appendChild(groupBox('Behavior', [
+      fieldRow('Hero for /collection/' + col.slug, selectInput('ch-mode',
+        [['default', 'Default (first title drives the hero)'], ['custom', 'Custom (pin one explicit title)']],
+        custom ? 'custom' : 'default')),
+      el('p', 'muted text-sm', 'A custom hero never changes the collection’s titles — only which title the hero presents.'),
+    ]));
+    f.appendChild(groupBox('Content', [heroItemPickerNode('chi', (entry && entry.heroItem) || null)]));
+    f.appendChild(groupBox('Artwork', [artworkFieldsNode('cha', pres.artwork)]));
+    f.appendChild(groupBox('Trailer', [trailerFieldsNode('cht', pres.trailer)]));
+    const row = el('div', '');
+    row.style.cssText = 'display:flex;gap:.5rem;flex-wrap:wrap';
+    const save = el('button', 'btn btn-primary btn-sm', 'Save Changes');
+    save.type = 'submit';
+    const reset = el('button', 'btn btn-ghost btn-sm', 'Reset to default');
+    reset.type = 'button';
+    reset.addEventListener('click', () => resetCollectionHero(col));
+    const cancel = el('button', 'btn btn-ghost btn-sm', 'Discard');
+    cancel.type = 'button';
+    cancel.addEventListener('click', closeDrawer);
+    row.appendChild(save);
+    row.appendChild(reset);
+    row.appendChild(cancel);
+    f.appendChild(row);
+    f.addEventListener('submit', (e) => { e.preventDefault(); saveCollectionHero(col); });
+    openDrawer({ kicker: 'Heroes', title: 'Hero — ' + (col.title || col.slug), sub: '/collection/' + col.slug, node: f, form: f });
+    previewReader = () => {
+      const mEl = document.getElementById('ch-mode');
+      if (!mEl || mEl.value !== 'custom') return { target: null, pres: null, note: 'Default hero — the collection’s first title drives it.' };
+      return { target: readHeroItem('chi'), pres: { artwork: readArtwork('cha'), trailer: readTrailer('cht') } };
+    };
+    refreshHeroPreview();
+  }
+
+  async function saveCollectionHero(col) {
+    const form = $('ch-form');
+    setFormSaving(form, true);
+    try {
+      const modeEl = $('ch-mode');
+      const custom = !!modeEl && modeEl.value === 'custom';
+      const map = await api(API.colHeroes);
+      const next = (map && typeof map === 'object' && !Array.isArray(map)) ? { ...map } : {};
+      if (custom) {
+        // Read-modify-write on a fresh GET so concurrent edits to OTHER
+        // collections are never clobbered (single-operator tool).
+        next[col.slug] = { mode: 'custom', heroItem: readHeroItem('chi'), artwork: readArtwork('cha'), trailer: readTrailer('cht') };
+      } else {
+        // Default behavior is the ABSENCE of an entry — the map holds
+        // custom heroes only, so it can never go stale.
+        delete next[col.slug];
+      }
+      await api(API.colHeroes, { method: 'PUT', body: next });
+      notice('ok', custom ? 'Custom hero saved for /collection/' + col.slug + '.' : 'Default hero restored for /collection/' + col.slug + '.');
+      previewReader = null;
+      closeDrawer();
+      await loadHeroes();
+    } catch (e) {
+      notice('err', (e.message || e));
+    } finally {
+      setFormSaving(form, false);
+    }
+  }
+
+  async function resetCollectionHero(col) {
+    const ok = await confirmDialog({ title: 'Reset hero?', message: 'Remove the custom hero for /collection/' + col.slug + '? The first title will drive the hero again.', okLabel: 'Reset' });
+    if (!ok) return;
+    try {
+      const map = await api(API.colHeroes);
+      const next = (map && typeof map === 'object' && !Array.isArray(map)) ? { ...map } : {};
+      delete next[col.slug];
+      await api(API.colHeroes, { method: 'PUT', body: next });
+      notice('ok', 'Hero reset to default for /collection/' + col.slug + '.');
+      previewReader = null;
+      closeDrawer();
+      await loadHeroes();
+    } catch (e) {
+      notice('err', (e.message || e));
+    }
+  }
+
   /* ================= TMDB SEARCH (admin helper, existing systems only) ================= */
   const EDITOR_PICKS_SLUG = 'editor-picks';
   const TMDB_IMG = 'https://image.tmdb.org/t/p/w500';
@@ -1884,11 +2492,15 @@
   }
 
   /* ================= SETTINGS (hero — existing controls preserved) ================= */
+  let settingsHeroCache = null; // last hero read (preserves artwork/trailer cn save)
+
   function buildHeroForm() {
     const f = $('hero-form');
     if (!f) return;
     f.innerHTML = '';
-    f.appendChild(fieldRow('Mode', selectInput('h-mode', [['follow-grid', 'follow-grid (banner follows the grid)'], ['custom', 'custom (fixed spotlight)']], 'follow-grid')));
+    f.appendChild(fieldRow('Mode', selectInput('h-mode', [['follow-grid', 'follow-grid (banner follows the grid)'], ['custom', 'custom (fixed spotlight)'], ['spotlight', 'spotlight (one explicit title)']], 'follow-grid')));
+    f.appendChild(fieldRow('Spotlight title media', selectInput('h-heroItem-media', [['movie', 'movie'], ['tv', 'tv']], 'movie')));
+    f.appendChild(fieldRow('Spotlight TMDB ID (spotlight mode)', numInput('h-heroItem-id', '', '550')));
     f.appendChild(fieldRow('Badge (custom mode label, optional)', textInput('h-badge', '', 'Greybox Spotlight')));
     f.appendChild(fieldRow('Pick (custom mode item index)', numInput('h-pick', '0', '0')));
     const srcHost = el('div', '');
@@ -1915,8 +2527,11 @@
   async function loadHero() {
     try {
       const hero = await api(API.hero);
+      settingsHeroCache = (hero && typeof hero === 'object') ? hero : null;
       if (!$('h-mode')) return;
-      $('h-mode').value = hero && hero.mode === 'custom' ? 'custom' : 'follow-grid';
+      $('h-mode').value = hero && hero.mode === 'custom' ? 'custom' : (hero && hero.mode === 'spotlight' ? 'spotlight' : 'follow-grid');
+      $('h-heroItem-media').value = (hero && hero.heroItem && hero.heroItem.media) || 'movie';
+      $('h-heroItem-id').value = (hero && hero.heroItem && hero.heroItem.id != null) ? hero.heroItem.id : '';
       $('h-badge').value = (hero && hero.badge) || '';
       $('h-pick').value = (hero && hero.pick != null) ? hero.pick : 0;
       renderSourceFields($('h-source'), 'h-src', HOME_SOURCE_TYPES, hero && hero.source);
@@ -1926,17 +2541,33 @@
   }
 
   function readHeroForm() {
-    const mode = $('h-mode').value;
+    const modeRaw = $('h-mode').value;
+    const mode = modeRaw === 'custom' ? 'custom' : (modeRaw === 'spotlight' ? 'spotlight' : 'follow-grid');
     const badge = $('h-badge').value.trim();
     if (badge.length > 120) throw { message: 'Badge must be at most 120 characters.' };
     const pick = parseInt($('h-pick').value, 10);
     if (!Number.isInteger(pick) || pick < 0 || pick > 100) throw { message: 'Pick must be 0–100.' };
-    const body = { mode, badge, pick };
+    const himRaw = $('h-heroItem-media') ? $('h-heroItem-media').value : 'movie';
+    const him = himRaw === 'tv' ? 'tv' : 'movie';
+    const hii = $('h-heroItem-id') ? parseInt($('h-heroItem-id').value, 10) : NaN;
+    let heroItem = null;
+    if (mode === 'spotlight') {
+      if (!Number.isInteger(hii) || hii < 1 || hii > 2147483647) throw { message: 'Spotlight hero needs a TMDB ID (positive integer).' };
+      heroItem = { media: him, id: hii };
+    } else if (Number.isInteger(hii) && hii >= 1 && hii <= 2147483647) {
+      heroItem = { media: him, id: hii };
+    }
+    const body = { mode, badge, pick, heroItem };
     if (mode === 'custom') {
       body.source = readSource('h-src');
       const srcErr = vSource(body.source, HOME_SOURCE_TYPES);
       if (srcErr) throw { message: srcErr };
     }
+    // This form does not edit artwork/trailer (see Heroes) — carry the last
+    // loaded values through so saving here never wipes them.
+    const cached = (settingsHeroCache && typeof settingsHeroCache === 'object') ? settingsHeroCache : {};
+    if (cached.artwork && typeof cached.artwork === 'object') body.artwork = cached.artwork;
+    if (cached.trailer && typeof cached.trailer === 'object') body.trailer = cached.trailer;
     return body;
   }
 
@@ -1946,8 +2577,11 @@
     try {
       const body = readHeroForm();
       const saved = await api(API.hero, { method: 'PUT', body });
+      settingsHeroCache = (saved && typeof saved === 'object') ? saved : null;
       $('h-badge').value = saved.badge || '';
       $('h-pick').value = saved.pick != null ? saved.pick : 0;
+      if ($('h-heroItem-media')) $('h-heroItem-media').value = (saved.heroItem && saved.heroItem.media) || 'movie';
+      if ($('h-heroItem-id')) $('h-heroItem-id').value = (saved.heroItem && saved.heroItem.id != null) ? saved.heroItem.id : '';
       notice('ok', 'Hero settings saved.');
     } catch (e) {
       notice('err', (e.message || e));
@@ -2016,7 +2650,7 @@
       { label: 'Home Sections', n: fmt(count(secs)), sub: secs ? visCount(secs) + ' visible · ' + (secs.length - visCount(secs)) + ' hidden' : 'Unavailable', view: 'sections' },
       { label: 'Collections', n: fmt(count(cols)), sub: cols ? visCount(cols) + ' visible · ' + (cols.length - visCount(cols)) + ' hidden' : 'Unavailable', view: 'collections' },
       { label: 'Overrides', n: fmt(count(ovs)), sub: ovs ? picks + ' ★ picks' : 'Unavailable', view: 'overrides' },
-      { label: 'Hero Mode', n: hero && hero.mode ? hero.mode : '—', sub: hero ? 'pick ' + (hero.pick != null ? hero.pick : 0) + (hero.badge ? ' · ' + hero.badge : '') : 'Unavailable', view: 'settings' },
+      { label: 'Hero Mode', n: hero && hero.mode ? hero.mode : '—', sub: hero ? 'pick ' + (hero.pick != null ? hero.pick : 0) + (hero.badge ? ' · ' + hero.badge : '') : 'Unavailable', view: 'heroes' },
     ];
     cards.innerHTML = '';
     stats.forEach((s) => {
@@ -2056,9 +2690,9 @@
       dashRow(cfg, 'Overrides', ovs.length ? ovs.length + ' configured · ' + picks + ' ★ picks' : 'None yet', 'Open', () => showView('overrides'));
     }
     if (hero) {
-      dashRow(cfg, 'Hero', heroSummaryText(hero), 'Configure', () => showView('settings'));
+      dashRow(cfg, 'Hero', heroSummaryText(hero), 'Configure', () => showView('heroes'));
     } else if (heroRes.status === 'rejected') {
-      dashRow(cfg, 'Hero', 'Unavailable', 'Configure', () => showView('settings'));
+      dashRow(cfg, 'Hero', 'Unavailable', 'Configure', () => showView('heroes'));
     }
   }
 
@@ -2099,6 +2733,8 @@
     if (orr) orr.addEventListener('click', loadOverrides);
     const dr = $('dash-refresh');
     if (dr) dr.addEventListener('click', loadDashboard);
+    const hr = $('heroes-refresh');
+    if (hr) hr.addEventListener('click', loadHeroes);
     const ss = $('sec-search');
     if (ss) ss.addEventListener('input', renderSections);
     const sf = $('sec-filter');
@@ -2207,6 +2843,7 @@
     Object.assign(window.GreyboxAdminTest, {
       esc, vSlug, vReqStr: vReqStr, vInt, vTmdbId, vSource,
       parseEntryLines, parseMetaText, summarizeSource, heroSummaryText,
+      parseYoutubeKey, heroPresentationOf, describeTrailer, describeArtwork,
       fillSectionForm, readSectionForm,
       fillCollectionForm, readCollectionForm,
       fillOverrideForm, readOverrideForm, readHeroForm,

@@ -357,12 +357,23 @@
     const sections = raw && Array.isArray(raw.sections)
       ? raw.sections.map(normalizeHomeSection).filter(Boolean)
       : [];
+    // New hero keys pass through structurally (renderer + server own
+    // strictness); older rows simply lack them and defaults apply.
+    const heroItemRaw = hero.heroItem;
+    const heroItem = (heroItemRaw && typeof heroItemRaw === 'object' && !Array.isArray(heroItemRaw) &&
+      (heroItemRaw.media === 'movie' || heroItemRaw.media === 'tv') &&
+      parseId(heroItemRaw.id))
+      ? { media: heroItemRaw.media, id: parseId(heroItemRaw.id) }
+      : null;
     return {
       hero: {
-        mode: hero.mode === 'custom' ? 'custom' : 'follow-grid',
+        mode: hero.mode === 'custom' ? 'custom' : (hero.mode === 'spotlight' ? 'spotlight' : 'follow-grid'),
         badge: typeof hero.badge === 'string' ? hero.badge : '',
         pick: Math.max(0, parseInt(hero.pick, 10) || 0),
         source: hero.source,
+        heroItem,
+        artwork: (hero.artwork && typeof hero.artwork === 'object' && !Array.isArray(hero.artwork)) ? hero.artwork : null,
+        trailer: (hero.trailer && typeof hero.trailer === 'object' && !Array.isArray(hero.trailer)) ? hero.trailer : null,
       },
       sections,
     };
@@ -426,12 +437,62 @@
 
   // Custom hero item, or null to keep the grid hero. Never rejects.
   function getHeroItem(heroCfg) {
-    if (!heroCfg || heroCfg.mode !== 'custom' || !heroCfg.source) return Promise.resolve(null);
+    if (!heroCfg || (heroCfg.mode !== 'custom' && heroCfg.mode !== 'spotlight')) return Promise.resolve(null);
+    // Spotlight: one explicit title by media identity (admin-picked). The
+    // detail bundle carries trailer_key, so no extra lookup is needed later.
+    if (heroCfg.mode === 'spotlight') {
+      const hi = heroCfg.heroItem;
+      if (!hi || (hi.media !== 'movie' && hi.media !== 'tv') || !parseId(hi.id)) return Promise.resolve(null);
+      const get = hi.media === 'tv' ? getTVDetails(hi.id) : getMovie(hi.id);
+      return get.then(
+        (d) => (d && (d.poster_path || d.backdrop_path)) ? { ...d, media_type: hi.media } : null,
+        () => null
+      );
+    }
+    if (!heroCfg.source) return Promise.resolve(null);
     const pick = Math.max(0, parseInt(heroCfg.pick, 10) || 0);
     const probe = normalizeHomeSection({ id: '__hero__', title: '__hero__', limit: pick + 1, source: heroCfg.source });
     if (!probe) return Promise.resolve(null);
     return resolveHomeSection(probe).then(
       (r) => r.items[pick] || r.items[0] || null,
+      () => null
+    );
+  }
+
+  /* ---------------- hero presentation helpers (Part 2) ---------------- */
+
+  const collectionHeroCache = {}; // slug -> hero override|null (page lifetime)
+
+  // Collection hero override from the public single-collection config
+  // (server re-sanitizes on every read). Null = default hero behavior.
+  // Never rejects; a page never breaks on hero-config trouble.
+  function getCollectionHeroConfig(slug) {
+    const s = normalizeSlug(slug);
+    if (!s) return Promise.resolve(null);
+    if (Object.prototype.hasOwnProperty.call(collectionHeroCache, s)) {
+      return Promise.resolve(collectionHeroCache[s]);
+    }
+    return fetchJsonTimeout('/api/config/collections/' + encodeURIComponent(s), 8000).then(
+      (d) => {
+        const h = d && d.hero && typeof d.hero === 'object' && !Array.isArray(d.hero) ? d.hero : null;
+        const out = (h && h.mode === 'custom' && h.heroItem && typeof h.heroItem === 'object') ? h : null;
+        collectionHeroCache[s] = out;
+        return out;
+      },
+      () => { collectionHeroCache[s] = null; return null; }
+    );
+  }
+
+  // Resolve a collection hero override to a renderable item (single media
+  // identity, detail bundle with trailer_key) or null to keep the default
+  // first-item hero. Never rejects.
+  function getCollectionHeroItem(heroCfg) {
+    if (!heroCfg || heroCfg.mode !== 'custom') return Promise.resolve(null);
+    const hi = heroCfg.heroItem;
+    if (!hi || (hi.media !== 'movie' && hi.media !== 'tv') || !parseId(hi.id)) return Promise.resolve(null);
+    const get = hi.media === 'tv' ? getTVDetails(hi.id) : getMovie(hi.id);
+    return get.then(
+      (d) => (d && (d.poster_path || d.backdrop_path)) ? { ...d, media_type: hi.media } : null,
       () => null
     );
   }
@@ -1002,6 +1063,8 @@
     resolveHomeSection,
     getHomeSections,
     getHeroItem,
+    getCollectionHeroConfig,
+    getCollectionHeroItem,
     normalizeSlug,
     normalizeCollection,
     getCollections,

@@ -368,21 +368,179 @@ export function validateOverrideFields(raw) {
 }
 
 /**
- * Validate the home hero setting: { mode, badge, pick, source|null }.
+ * Validate the home hero setting.
+ *
+ * Shape (all newer keys optional — a Part 0/1 era
+ * { mode, badge, pick, source } validates identically):
+ *   {
+ *     mode: 'follow-grid' | 'custom' | 'spotlight',
+ *     badge, pick, source,                       // existing (custom-mode) keys
+ *     heroItem: { media, id } | null,            // explicit title (spotlight)
+ *     artwork: { backdrop, backdropUrl, logo, logoUrl },
+ *     trailer: { source, key, activation, delaySec, muted, loop },
+ *   }
  */
 export function validateHero(raw) {
   if (!isObj(raw)) fail('hero must be a JSON object');
-  const mode = raw.mode === 'custom' ? 'custom' : 'follow-grid';
+  const mode = raw.mode === 'custom' ? 'custom' : (raw.mode === 'spotlight' ? 'spotlight' : 'follow-grid');
   const out = {
     mode,
     badge: typeof raw.badge === 'string' ? raw.badge.trim().slice(0, 120) : '',
     pick: Math.max(0, parseInt(raw.pick, 10) || 0),
     source: undefined,
+    heroItem: null,
+    artwork: validateArtwork(raw.artwork),
+    trailer: validateTrailer(raw.trailer),
   };
   if (out.pick > 100) fail('pick must be at most 100');
   if (mode === 'custom') {
     if (!isObj(raw.source)) fail('custom hero needs a source object');
     out.source = validateHomeSource(raw.source);
   }
+  if (raw.heroItem !== undefined && raw.heroItem !== null) {
+    out.heroItem = validateHeroItem(raw.heroItem);
+  }
+  if (mode === 'spotlight' && !out.heroItem) {
+    fail('spotlight hero needs heroItem { media, id }');
+  }
   return out;
+}
+
+/* ---------------- hero control center (Part 2) ---------------- */
+
+const YT_KEY_RE = /^[A-Za-z0-9_-]{11}$/;
+
+/**
+ * Accept a bare 11-char YouTube key or a full YouTube watch / youtu.be /
+ * embed / shorts / live URL and return the normalized key. Returns '' for
+ * empty input (caller decides whether empty is allowed); throws on
+ * non-YouTube or unparseable values. Pure — mirrored in js/admin.js.
+ */
+export function parseYoutubeKey(v) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s) return '';
+  if (YT_KEY_RE.test(s)) return s;
+  let u = null;
+  try {
+    u = new URL(s);
+  } catch {
+    fail('trailer must be a YouTube key or YouTube URL');
+  }
+  const host = String(u.hostname || '').toLowerCase().replace(/^www\./, '');
+  let key = '';
+  if (host === 'youtu.be') {
+    key = String(u.pathname || '').split('/').filter(Boolean)[0] || '';
+  } else if (host === 'youtube.com' || host === 'm.youtube.com' || host === 'music.youtube.com') {
+    const path = String(u.pathname || '');
+    if (path === '/watch') key = u.searchParams.get('v') || '';
+    else {
+      const m = /^\/(?:embed|shorts|live|v)\/([^/?#]+)/.exec(path);
+      if (m) key = m[1];
+    }
+  }
+  if (key && YT_KEY_RE.test(key)) return key;
+  fail('trailer must be a YouTube key or YouTube URL (other hosts are not supported)');
+}
+
+function validateHttpUrl(v, field, max = 500) {
+  if (v === undefined || v === null) return '';
+  if (typeof v !== 'string') fail(`${field} must be a string`);
+  const s = v.trim();
+  if (!s) return '';
+  if (s.length > max) fail(`${field} must be at most ${max} characters`);
+  if (!/^https?:\/\//i.test(s)) fail(`${field} must be an http(s) URL`);
+  return s;
+}
+
+/** Explicit hero title identity: strict { media, id } (no bare-number leniency). */
+export function validateHeroItem(v) {
+  if (!isObj(v)) fail('heroItem must be { media, id }');
+  return { media: reqMedia(v.media), id: reqTmdbId(v.id) };
+}
+
+function validateArtwork(raw) {
+  const v = isObj(raw) ? raw : {};
+  const backdrop = v.backdrop === 'custom' ? 'custom' : 'auto';
+  const logo = v.logo === 'tmdb' ? 'tmdb' : (v.logo === 'custom' ? 'custom' : 'text');
+  const out = {
+    backdrop,
+    backdropUrl: validateHttpUrl(v.backdropUrl, 'artwork.backdropUrl'),
+    logo,
+    logoUrl: validateHttpUrl(v.logoUrl, 'artwork.logoUrl'),
+  };
+  if (backdrop === 'custom' && !out.backdropUrl) fail('artwork.backdropUrl is required for custom backdrops');
+  if (logo === 'custom' && !out.logoUrl) fail('artwork.logoUrl is required for custom logos');
+  return out;
+}
+
+function validateTrailer(raw) {
+  const v = isObj(raw) ? raw : {};
+  const source = v.source === 'custom' ? 'custom' : (v.source === 'off' ? 'off' : 'auto');
+  const activation = v.activation === 'immediate' ? 'immediate' : (v.activation === 'wait-once' ? 'wait-once' : 'delayed');
+  const out = {
+    source,
+    key: '',
+    activation,
+    delaySec: v.delaySec === undefined || v.delaySec === null ? 7 : reqInt(v.delaySec, 'trailer.delaySec', { min: 0, max: 120 }),
+    muted: v.muted === undefined ? true : reqBool(v.muted, 'trailer.muted'),
+    loop: v.loop === undefined ? true : reqBool(v.loop, 'trailer.loop'),
+  };
+  if (source === 'custom') {
+    const key = parseYoutubeKey(v.key);
+    if (!key) fail('trailer.key is required for custom trailers');
+    out.key = key;
+  }
+  return out;
+}
+
+/**
+ * Validate the collection_heroes settings map:
+ *   { [slug]: { mode: 'default'|'custom', heroItem?, artwork?, trailer? } }
+ * Shape-only (existence is render-time, like section collection slugs, so
+ * create order stays flexible). Unknown keys inside entries are dropped.
+ */
+export function validateCollectionHeroes(raw) {
+  if (raw === undefined || raw === null) return {};
+  if (!isObj(raw)) fail('collection heroes must be an object');
+  const entries = Object.entries(raw);
+  if (entries.length > 200) fail('at most 200 collection heroes allowed');
+  const out = {};
+  for (const [slugRaw, entry] of entries) {
+    const slug = validateSlug(slugRaw);
+    if (!isObj(entry)) fail(`hero for "${slug}" must be an object`);
+    const mode = entry.mode === 'custom' ? 'custom' : 'default';
+    const clean = {
+      mode,
+      heroItem: null,
+      artwork: validateArtwork(entry.artwork),
+      trailer: validateTrailer(entry.trailer),
+    };
+    if (entry.heroItem !== undefined && entry.heroItem !== null) {
+      clean.heroItem = validateHeroItem(entry.heroItem);
+    }
+    if (mode === 'custom' && !clean.heroItem) {
+      fail(`hero for "${slug}": custom mode needs heroItem { media, id }`);
+    }
+    out[slug] = clean;
+  }
+  return out;
+}
+
+/**
+ * Public-safe collection hero for one slug (or null = default behavior).
+ * Re-validates stored data so a hand-edited or older row can never break
+ * public rendering; malformed entries fall back to null (page survives).
+ */
+export function sanitizeCollectionHero(map, slug) {
+  try {
+    const s = String(slug || '').trim().toLowerCase();
+    if (!s || !isObj(map)) return null;
+    const entry = map[s];
+    if (!entry || !isObj(entry)) return null;
+    if (entry.mode !== 'custom') return null;
+    const clean = validateCollectionHeroes({ [s]: entry });
+    return clean[s] || null;
+  } catch {
+    return null;
+  }
 }

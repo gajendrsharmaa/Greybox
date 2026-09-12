@@ -1,4 +1,5 @@
-/* Greybox Phase 2 — cinematic hero module (+ Phase 3 seamless trailer).
+/* Greybox Phase 2 — cinematic hero module (+ Phase 3 seamless trailer,
+ * + Part 2 Hero Control Center presentation layer).
  *
  * Owns ONLY the homepage/public hero: state, text, backdrop, trailer, audio.
  * No countdown ring, no loading indicator — the poster is authoritative until
@@ -7,12 +8,25 @@
  * trailer_key). No hardcoding, no new backend, no token handling
  * (trailer_key arrives server-shaped through /api/*).
  *
+ * Presentation (artwork/trailer/logo) arrives per hero via setHero(item,
+ * presentation) or configureHero(presentation) — both sanitized here, so a
+ * hand-edited or older config can never break rendering; unknown values
+ * fall back to the pre-Part-2 behavior (TMDB art, text title, 7s delayed
+ * auto trailer). Admin writes the config through /api/admin/*; the public
+ * page only ever reads it.
+ *
  * Lifecycle: poster → (valid key + visible + tab visible) → iframe buffers
- * invisibly while the 7s delay runs → YouTube API confirms PLAYING →
+ * invisibly while the delay runs → YouTube API confirms PLAYING →
  * crossfade above the poster. Any failure, scroll-away, tab-hide, or route
  * change tears down to the still; returning starts a completely fresh
  * sequence. One attempt per sequence, no repeated retries, no stale
  * callbacks (generation-guarded), one iframe element reused throughout.
+ *
+ * Wait-once activation is the deliberate exception to "fresh sequence":
+ * the delay is skipped on return for an identity whose wait already started
+ * (page-lifetime, per media identity — see waitStarted/waitDone). Timers and
+ * iframes are still torn down on leave (no background playback); only the
+ * logical "wait already began" survives, so the timer is never restarted.
  */
 (function () {
   'use strict';
@@ -21,6 +35,73 @@
   var TRAILER_DELAY_MS = 7000;
   /* Outer bound from buffering start: no usable playback by then → poster. */
   var TRAILER_READY_TIMEOUT_MS = 15000;
+
+  /* ---------------- Part 2 presentation (sanitized, additive) ---------------- */
+
+  function defaultPresentation() {
+    return {
+      artwork: { backdrop: 'auto', backdropUrl: '', logo: 'text', logoUrl: '' },
+      trailer: { source: 'auto', key: '', activation: 'delayed', delaySec: 7, muted: true, loop: true },
+    };
+  }
+
+  // Sanitize anything the config layer hands over (admin-saved, hand-edited,
+  // or older rows). Unknown values fall back to pre-Part-2 behavior.
+  function sanitizePresentation(p) {
+    var out = defaultPresentation();
+    try {
+      var raw = (p && typeof p === 'object' && !Array.isArray(p)) ? p : {};
+      var a = (raw.artwork && typeof raw.artwork === 'object' && !Array.isArray(raw.artwork)) ? raw.artwork : {};
+      var t = (raw.trailer && typeof raw.trailer === 'object' && !Array.isArray(raw.trailer)) ? raw.trailer : {};
+      out.artwork.backdrop = a.backdrop === 'custom' ? 'custom' : 'auto';
+      out.artwork.backdropUrl = (typeof a.backdropUrl === 'string' && /^https?:\/\//i.test(a.backdropUrl.trim())) ? a.backdropUrl.trim().slice(0, 500) : '';
+      if (out.artwork.backdrop === 'custom' && !out.artwork.backdropUrl) out.artwork.backdrop = 'auto';
+      out.artwork.logo = a.logo === 'tmdb' ? 'tmdb' : (a.logo === 'custom' ? 'custom' : 'text');
+      out.artwork.logoUrl = (typeof a.logoUrl === 'string' && /^https?:\/\//i.test(a.logoUrl.trim())) ? a.logoUrl.trim().slice(0, 500) : '';
+      if (out.artwork.logo === 'custom' && !out.artwork.logoUrl) out.artwork.logo = 'text';
+      out.trailer.source = t.source === 'custom' ? 'custom' : (t.source === 'off' ? 'off' : 'auto');
+      out.trailer.key = validKey(t.key);
+      if (out.trailer.source === 'custom' && !out.trailer.key) out.trailer.source = 'auto';
+      out.trailer.activation = t.activation === 'immediate' ? 'immediate' : (t.activation === 'wait-once' ? 'wait-once' : 'delayed');
+      var ds = parseInt(t.delaySec, 10);
+      out.trailer.delaySec = (isFinite(ds) && ds >= 0 && ds <= 120) ? ds : 7;
+      out.trailer.muted = t.muted !== false;
+      out.trailer.loop = t.loop !== false;
+    } catch (e) { /* fall back to defaults on anything unexpected */ }
+    return out;
+  }
+
+  // Active presentation for the current hero. Set per setHero(item,
+  // presentation) so routes/collections can never leak config into each
+  // other; configureHero() only changes the default for bare setHero calls.
+  var presentation = defaultPresentation();
+
+  function configureHero(p) {
+    presentation = sanitizePresentation(p);
+    return presentation;
+  }
+
+  // Wait-once progress: page-lifetime, keyed by media identity ("mt:id").
+  // Scope rationale: the module already memos trailer keys per identity for
+  // the page lifetime (`cache`); identity+page matches the "established
+  // state" requirement without localStorage (no cross-load persistence is
+  // needed — a reload is a genuinely new visit and browsers block
+  // autoplay-before-interaction anyway). Timers/iframes are still torn down
+  // on leave; only "the wait already began / the trailer already played"
+  // survives, so the delay is skipped — never restarted — on return.
+  var waitStarted = {}; // identity -> true once its wait-once delay has begun
+  var waitDone = {}; // identity -> true once its trailer has revealed
+
+  function trailerDelayMs(pres, identity) {
+    var t = (pres && pres.trailer) || {};
+    if (t.source === 'off') return -1; // no trailer at all
+    if (t.activation === 'immediate') return 0;
+    if (t.activation === 'wait-once' && identity && (waitStarted[identity] || waitDone[identity])) return 0;
+    var ds = parseInt(t.delaySec, 10);
+    if (!isFinite(ds) || ds < 0) ds = 7;
+    if (ds > 120) ds = 120;
+    return ds * 1000;
+  }
 
   /* "Meaningfully visible" = at least this much of the hero in viewport. */
   var VISIBLE_RATIO = 0.35;
@@ -97,10 +178,16 @@
   }
 
   function embedUrl(key) {
-    return 'https://www.youtube.com/embed/' + key +
-      '?autoplay=1&mute=1&controls=0&rel=0&playsinline=1' +
-      '&loop=1&playlist=' + key +
+    var mutedParam = !(presentation.trailer && presentation.trailer.muted === false);
+    var loopParam = !(presentation.trailer && presentation.trailer.loop === false);
+    // Unmuted autoplay is offered but never guaranteed: if the browser
+    // blocks it, the failure path below keeps the still (honest fallback).
+    var url = 'https://www.youtube.com/embed/' + key +
+      '?autoplay=1&controls=0&rel=0&playsinline=1' +
+      (mutedParam ? '&mute=1' : '') +
+      (loopParam ? '&loop=1&playlist=' + key : '') +
       '&modestbranding=1&iv_load_policy=3&disablekb=1&enablejsapi=1';
+    return url;
   }
 
   function cancelDelay() {
@@ -267,6 +354,94 @@
     if (title) title.textContent = item.title || item.name || 'Untitled';
     if (meta) meta.innerHTML = metaHTML(item);
     refreshListLabel();
+    paintLogo(item, gen, currentIdentity);
+  }
+
+  /* Title/logo layer: text is always set (screen readers, no-logo fallback).
+   * A resolved logo image replaces it visually; any logo failure falls back
+   * to the text — never a broken icon, never another title's asset. */
+  var logoCache = {}; // identity -> logo URL ('' = none known)
+
+  function clearLogo() {
+    try {
+      var title = $('hero-title');
+      var logo = $('hero-logo');
+      if (logo) { try { logo.removeAttribute('src'); } catch (e) { /* noop */ } logo.classList.add('hidden'); }
+      if (title) title.classList.remove('has-logo');
+    } catch (e) { /* noop */ }
+  }
+
+  function applyLogo(url, myGen, expectedIdentity) {
+    if (myGen !== gen) return;
+    if (expectedIdentity == null || currentIdentity !== expectedIdentity) return;
+    var title = $('hero-title');
+    var logo = $('hero-logo');
+    if (!logo || !url) { clearLogo(); return; }
+    try {
+      logo.onerror = function () {
+        if (myGen !== gen) return;
+        if (expectedIdentity == null || currentIdentity !== expectedIdentity) return;
+        clearLogo(); // broken logo URL → text title, never a broken icon
+      };
+      logo.alt = '';
+      logo.src = url;
+      logo.classList.remove('hidden');
+      if (title) title.classList.add('has-logo');
+    } catch (e) { clearLogo(); }
+  }
+
+  function pickLogoUrl(data) {
+    try {
+      var logos = (data && Array.isArray(data.logos)) ? data.logos : [];
+      if (!logos.length) return '';
+      var en = null, any = null;
+      for (var i = 0; i < logos.length; i++) {
+        var l = logos[i];
+        if (!l || typeof l.file_path !== 'string' || !l.file_path) continue;
+        if (!any) any = l.file_path;
+        if (l.iso_639_1 === 'en') { en = l.file_path; break; }
+      }
+      var picked = en || any || '';
+      if (!picked || picked.indexOf('..') >= 0 || !/^\/[A-Za-z0-9/_\-.]+$/.test(picked)) return '';
+      return 'https://image.tmdb.org/t/p/w500' + picked;
+    } catch (e) { return ''; }
+  }
+
+  function paintLogo(item, myGen, expectedIdentity) {
+    var art = (presentation.artwork) || {};
+    if (art.logo === 'custom' && typeof art.logoUrl === 'string' && /^https?:\/\//i.test(art.logoUrl.trim())) {
+      applyLogo(art.logoUrl.trim(), myGen, expectedIdentity);
+      return;
+    }
+    if (art.logo !== 'tmdb') { clearLogo(); return; }
+    // TMDB logo via the existing server-side proxy (secret stays
+    // server-side). Cached per identity; guarded like all hero async work.
+    var mt = mediaOf(item);
+    var id = 0;
+    try { id = parseInt(String(item && item.id), 10) || 0; } catch (e) { id = 0; }
+    var identity = mt + ':' + id;
+    if (!id) { clearLogo(); return; }
+    if (Object.prototype.hasOwnProperty.call(logoCache, identity)) {
+      if (logoCache[identity]) applyLogo(logoCache[identity], myGen, expectedIdentity);
+      else clearLogo();
+      return;
+    }
+    var url = '/api/tmdb/' + mt + '/' + id + '/images?language=en-US&include_image_language=en,null';
+    var p;
+    try { p = fetch(url, { headers: { accept: 'application/json' } }); }
+    catch (e) { logoCache[identity] = ''; clearLogo(); return; }
+    p.then(function (r) {
+      if (!r.ok) throw new Error('logo fetch failed');
+      return r.json();
+    }).then(function (d) {
+      var picked = pickLogoUrl(d);
+      logoCache[identity] = picked;
+      if (picked) applyLogo(picked, myGen, expectedIdentity);
+      else clearLogo();
+    }, function () {
+      logoCache[identity] = '';
+      if (myGen === gen && (expectedIdentity == null || currentIdentity === expectedIdentity)) clearLogo();
+    });
   }
 
   function loadBackdrop(item, myGen, expectedIdentity) {
@@ -275,10 +450,17 @@
     var ambient = $('hero-ambient');
     var url = '';
     try {
-      var IMG_BIG = (window.GreyboxComponents && window.GreyboxComponents.IMG_BIG) || 'https://image.tmdb.org/t/p/original';
-      var IMG = (window.GreyboxComponents && window.GreyboxComponents.IMG) || 'https://image.tmdb.org/t/p/w500';
-      if (item.backdrop_path) url = IMG_BIG + item.backdrop_path;
-      else if (item.poster_path) url = IMG + item.poster_path;
+      // Custom artwork (admin-configured) wins over TMDB when set; the same
+      // identity+generation guards below keep it bound to this title.
+      var art = (presentation.artwork) || {};
+      if (art.backdrop === 'custom' && typeof art.backdropUrl === 'string' && /^https?:\/\//i.test(art.backdropUrl.trim())) {
+        url = art.backdropUrl.trim();
+      } else {
+        var IMG_BIG = (window.GreyboxComponents && window.GreyboxComponents.IMG_BIG) || 'https://image.tmdb.org/t/p/original';
+        var IMG = (window.GreyboxComponents && window.GreyboxComponents.IMG) || 'https://image.tmdb.org/t/p/w500';
+        if (item.backdrop_path) url = IMG_BIG + item.backdrop_path;
+        else if (item.poster_path) url = IMG + item.poster_path;
+      }
     } catch (e) { url = ''; }
     if (!url || !img) {
       if (hero) hero.classList.remove('hero-loading');
@@ -323,6 +505,16 @@
     if (Object.prototype.hasOwnProperty.call(cache, ck)) {
       return Promise.resolve(cache[ck] || '');
     }
+    var tsrc = ((presentation.trailer) || {}).source || 'auto';
+    if (tsrc === 'off') { cache[ck] = ''; return Promise.resolve(''); }
+    if (tsrc === 'custom') {
+      // Admin-configured key (validated at save, re-validated at use): no
+      // detail fetch needed, and the key stays bound to this identity via
+      // the same cache key as automatic resolution.
+      var custom = validKey(presentation.trailer && presentation.trailer.key);
+      cache[ck] = custom;
+      return Promise.resolve(custom);
+    }
     var direct = validKey(item && item.trailer_key);
     if (direct) { cache[ck] = direct; return Promise.resolve(direct); }
     // List items carry no trailer_key — one detail fetch through the existing
@@ -365,6 +557,7 @@
     if (!routeAllowsHero) return; // stale hero behind search/modals/etc never self-starts
     if (overlayOpen()) return; // detail modal / player covers the hero
     if (document.hidden || !heroOnScreen) return;
+    if (((presentation.trailer) || {}).source === 'off') { phase = 'idle'; hideControl(); return; } // trailer disabled → still
     phase = 'resolving';
     var myGen = gen;
     var expectedIdentity = currentIdentity;
@@ -375,21 +568,28 @@
       if (document.hidden || !heroOnScreen || overlayOpen()) { phase = 'idle'; hideControl(); return; }
       trailerKey = k;
       bufferTrailer(k, myGen); // iframe loads invisibly right away…
-      startDelay(myGen); // …while the exact 7s delay runs concurrently
+      startDelay(myGen, expectedIdentity); // …while the configured delay runs concurrently
     });
   }
 
-  /* Silent 7s delay (no ring, no spinner, no label — pure timing). Doubles as
-   * a visibility watchdog so leaving mid-delay tears down immediately. */
-  function startDelay(myGen) {
+  /* Configured delay (silent — no ring, no spinner, no label; pure timing).
+   * Doubles as a visibility watchdog so leaving mid-delay tears down
+   * immediately. Wait-once skips the wait for identities that already began
+   * it (see waitStarted/waitDone): the timer is never restarted on return. */
+  function startDelay(myGen, expectedIdentity) {
     phase = 'delay';
+    var ms = trailerDelayMs(presentation, expectedIdentity);
+    var act = ((presentation.trailer) || {}).activation || 'delayed';
+    if (act === 'wait-once' && expectedIdentity && !waitStarted[expectedIdentity]) {
+      waitStarted[expectedIdentity] = true;
+    }
     var t0 = 0;
     try { t0 = performance.now(); } catch (e) { try { t0 = Date.now(); } catch (ignored) { t0 = 0; } }
     function frame(now) {
       if (myGen !== gen || phase !== 'delay') return;
       // Rect check backs up the observer on browsers without IntersectionObserver.
       if (document.hidden || !heroOnScreen || !isHeroVisible()) { onHeroHidden(); return; }
-      if (now - t0 >= TRAILER_DELAY_MS) {
+      if (now - t0 >= ms) {
         delayElapsed = true;
         maybeReveal(myGen);
         return;
@@ -424,6 +624,7 @@
       wrap.classList.add('is-visible');
       phase = 'playing';
       muted = true;
+      if (currentIdentity) waitDone[currentIdentity] = true;
       paintControl(); // mute control appears only now
       dbg('trailer revealed');
     } catch (e) { failTrailer(); }
@@ -546,9 +747,13 @@
 
   /* ---------------- public state ---------------- */
 
-  function setHero(item) {
+  function setHero(item, pres) {
     if (!item) return null;
     stopTrailer();
+    // Per-hero presentation travels with the item (routes/collections can
+    // never leak config into each other). Bare calls keep the configured
+    // default. Sanitized: unknown values → pre-Part-2 behavior.
+    if (pres !== undefined) presentation = sanitizePresentation(pres);
     current = item;
     // Capture this item's identity synchronously with its text: every async
     // artwork/trailer completion below must still match it before painting.
@@ -777,13 +982,20 @@
     TRAILER_READY_TIMEOUT_MS: TRAILER_READY_TIMEOUT_MS,
     configure: function (opts) {
       try {
+        // Legacy entry: delay-only. Maps onto the presentation layer so old
+        // and new configuration share one code path.
         var d = opts && opts.delayMs != null ? parseInt(opts.delayMs, 10) : NaN;
         if (isFinite(d) && d >= 0 && d <= 60000) {
           TRAILER_DELAY_MS = d;
           window.GreyboxHero.TRAILER_DELAY_MS = d;
+          presentation.trailer.activation = 'delayed';
+          presentation.trailer.delaySec = Math.min(120, Math.max(0, Math.round(d / 1000)));
         }
+        if (opts && opts.presentation !== undefined) configureHero(opts.presentation);
       } catch (e) { /* noop */ }
     },
+    configureHero: configureHero,
+    getPresentation: function () { return sanitizePresentation(presentation); },
     bind: bind,
     setHero: setHero,
     setLoading: setLoading,
@@ -795,7 +1007,12 @@
     debug: function () {
       return { phase: phase, apiReady: apiReady, hasPlayed: hasPlayed,
         delayElapsed: delayElapsed, asks: asks, loads: loads,
-        muted: muted, hasCurrent: !!current, identity: currentIdentity };
+        muted: muted, hasCurrent: !!current, identity: currentIdentity,
+        trailerSource: (presentation.trailer || {}).source || 'auto',
+        activation: (presentation.trailer || {}).activation || 'delayed',
+        delaySec: (presentation.trailer || {}).delaySec,
+        waitStarted: !!currentIdentity && !!waitStarted[currentIdentity],
+        waitDone: !!currentIdentity && !!waitDone[currentIdentity] };
     },
     getIdentity: function () { return currentIdentity; },
     isMuted: function () { return muted; },

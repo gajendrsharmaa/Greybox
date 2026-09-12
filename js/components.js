@@ -150,9 +150,9 @@
     if (heroEl) heroEl.classList.remove('hero-loading');
   }
 
-  function setHero(item) {
+  function setHero(item, presentation) {
     const H = hero();
-    if (H && typeof H.setHero === 'function') return H.setHero(item);
+    if (H && typeof H.setHero === 'function') return H.setHero(item, presentation);
     clearHeroLoading();
     if ($('hero-badge')) $('hero-badge').textContent = '#1 Trending';
     $('hero-title').textContent = item.title || item.name;

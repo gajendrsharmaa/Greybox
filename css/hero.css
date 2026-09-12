@@ -143,6 +143,32 @@
   text-wrap: balance;
 }
 
+/* Title/logo layer (Part 2): a resolved logo replaces the text visually;
+ * the h1 text stays in the DOM for screen readers. */
+.gx-hero-logo {
+  display: block;
+  max-width: min(26rem, 72%);
+  max-height: 7.5rem;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  object-position: left bottom;
+  margin-bottom: 0.35rem;
+  filter: drop-shadow(0 6px 24px rgba(0, 0, 0, 0.55));
+}
+.gx-hero-logo.hidden { display: none; }
+.gx-hero-title.has-logo {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .gx-hero-meta {
   margin-top: 10px;
   font-size: 13.5px;
