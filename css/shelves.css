@@ -1,0 +1,411 @@
+/* Greybox Phase 4 — homepage shelves + content cards.
+ * Consumes Phase 1 tokens (css/tokens.css). No red, no neon, no clutter.
+ * Amber accent used sparingly (rating star, in-list state, focus ring via
+ * the global :focus-visible rule). Vanilla CSS, no library. */
+
+#grid .card { width: 100%; }
+
+/* ---------------- section header ---------------- */
+
+.gx-shelf { margin-top: 2.75rem; min-width: 0; }
+.gx-shelf:first-child { margin-top: 2rem; }
+
+.gx-shelf-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.9rem;
+  min-width: 0;
+}
+
+.gx-shelf-titles { min-width: 0; }
+
+.gx-shelf-title,
+#section-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--gx-text);
+  margin: 0;
+}
+
+.gx-shelf-desc {
+  margin: 0.25rem 0 0;
+  font-size: 0.83rem;
+  color: var(--gx-text-dim);
+  max-width: 46rem;
+}
+
+.gx-viewall {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.83rem;
+  font-weight: 600;
+  color: var(--gx-text-dim);
+  text-decoration: none;
+  white-space: nowrap;
+  padding: 0.25rem 0;
+  transition: color var(--gx-transition);
+}
+
+.gx-viewall .gx-viewall-arrow {
+  display: inline-block;
+  transition: transform var(--gx-transition);
+}
+
+.gx-viewall:hover { color: var(--gx-text); }
+.gx-viewall:hover .gx-viewall-arrow { transform: translateX(3px); }
+
+/* ---------------- shelf carousel ---------------- */
+
+.gx-shelf-viewport {
+  position: relative;
+  margin: 0;
+  min-width: 0;
+}
+
+.gx-shelf-track {
+  display: flex;
+  gap: 0.9rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.35rem 0.15rem 0.9rem;
+  margin: 0 -0.15rem;
+  scroll-behavior: smooth;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  overscroll-behavior-x: contain;
+}
+
+.gx-shelf-track::-webkit-scrollbar { display: none; }
+
+.gx-shelf-track > .card {
+  flex: 0 0 auto;
+  width: clamp(132px, 24vw, 184px);
+}
+
+/* Whisper-quiet edge fades, only while there is more to see */
+.gx-shelf-viewport::before,
+.gx-shelf-viewport::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0.9rem;
+  width: 2.2rem;
+  z-index: 2;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--gx-transition);
+}
+
+.gx-shelf-viewport::before {
+  left: 0;
+  background: linear-gradient(to right, rgba(7, 7, 12, 0.65), transparent);
+}
+
+.gx-shelf-viewport::after {
+  right: 0;
+  background: linear-gradient(to left, rgba(7, 7, 12, 0.65), transparent);
+}
+
+.gx-shelf-viewport[data-overflow="true"]:not([data-at-start="true"])::before { opacity: 1; }
+.gx-shelf-viewport[data-overflow="true"]:not([data-at-end="true"])::after { opacity: 1; }
+
+/* Unobtrusive arrow controls: hover/focus only, never huge, never on touch */
+.gx-shelf-btn {
+  position: absolute;
+  top: 38%;
+  z-index: 3;
+  width: 2.25rem;
+  height: 2.25rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  color: var(--gx-text);
+  background: rgba(12, 12, 18, 0.72);
+  border: 1px solid var(--gx-border-strong);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: var(--gx-shadow-soft);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--gx-transition), background var(--gx-transition);
+}
+
+.gx-shelf-btn svg { width: 1rem; height: 1rem; }
+
+.gx-shelf-btn[data-dir="prev"] { left: 0.25rem; }
+.gx-shelf-btn[data-dir="next"] { right: 0.25rem; }
+
+.gx-shelf-btn:hover { background: rgba(255, 255, 255, 0.14); }
+
+.gx-shelf-btn:disabled { opacity: 0.25; cursor: default; }
+
+.gx-shelf-viewport:hover .gx-shelf-btn,
+.gx-shelf-viewport:focus-within .gx-shelf-btn {
+  opacity: 1;
+}
+
+.gx-shelf-viewport:hover .gx-shelf-btn:disabled,
+.gx-shelf-viewport:focus-within .gx-shelf-btn:disabled {
+  opacity: 0.25;
+}
+
+.gx-shelf-viewport[data-overflow="false"] .gx-shelf-btn { display: none; }
+
+@media (hover: none) {
+  .gx-shelf-viewport .gx-shelf-btn { display: none; }
+}
+
+/* ---------------- cards ---------------- */
+
+.gx-card {
+  background: transparent;
+  border: 0;
+  border-radius: 0.8rem;
+  cursor: pointer;
+  min-width: 0;
+  transition: transform 160ms ease;
+}
+
+.gx-card:hover { transform: translateY(-3px); }
+
+.gx-card:focus-visible {
+  outline: 2px solid var(--gx-accent);
+  outline-offset: 3px;
+}
+
+.gx-card-media {
+  position: relative;
+  aspect-ratio: 2/3;
+  overflow: hidden;
+  border-radius: 0.8rem;
+  background: var(--gx-surface);
+  border: 1px solid var(--gx-border-faint);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  transition: box-shadow 160ms ease, border-color 160ms ease;
+}
+
+.gx-card:hover .gx-card-media {
+  border-color: var(--gx-border);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55);
+}
+
+.gx-card-media img {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: 2/3;
+  object-fit: cover;
+  display: block;
+  transition: transform 220ms ease;
+}
+
+.gx-card:hover .gx-card-media img { transform: scale(1.045); }
+
+.gx-card-shade {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.42), transparent 32%);
+}
+
+.gx-card-rating {
+  position: absolute;
+  left: 0.5rem;
+  bottom: 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--gx-text);
+  background: rgba(8, 8, 13, 0.68);
+  border: 1px solid var(--gx-border-faint);
+  border-radius: 999px;
+  padding: 0.12rem 0.5rem;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.gx-card-rating .gx-star { color: var(--gx-accent-strong); }
+
+.gx-card-badge {
+  position: absolute;
+  left: 0.5rem;
+  top: 0.5rem;
+  max-width: calc(100% - 3.25rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--gx-accent-strong);
+  background: rgba(10, 10, 14, 0.66);
+  border: 1px solid var(--gx-accent-border);
+  border-radius: 999px;
+  padding: 0.14rem 0.55rem;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.gx-card-list {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.45rem;
+  width: 2rem;
+  height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.95rem;
+  line-height: 1;
+  color: var(--gx-text-dim);
+  background: rgba(8, 8, 13, 0.62);
+  border: 1px solid var(--gx-border-faint);
+  border-radius: 999px;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: color var(--gx-transition), border-color var(--gx-transition), background var(--gx-transition);
+}
+
+.gx-card-list:hover {
+  color: var(--gx-text);
+  border-color: var(--gx-border-strong);
+}
+
+.gx-card-list.is-in-list {
+  color: var(--gx-accent-strong);
+  border-color: var(--gx-accent-border);
+}
+
+.gx-card-body { padding: 0.55rem 0.15rem 0; min-width: 0; }
+
+.gx-card-title {
+  font-size: 0.83rem;
+  color: var(--gx-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gx-card-sub {
+  margin-top: 0.15rem;
+  font-size: 0.72rem;
+  color: var(--gx-text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------- tabs (replaces old red tab styling) ---------------- */
+
+#tabs { gap: 0.4rem; flex-wrap: wrap; justify-content: flex-end; }
+
+.gx-tab {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--gx-text-dim);
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 0.4rem 0.9rem;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--gx-transition), color var(--gx-transition), border-color var(--gx-transition);
+}
+
+.gx-tab:hover { color: var(--gx-text); background: rgba(255, 255, 255, 0.1); }
+
+.gx-tab.active {
+  color: var(--gx-text);
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.11);
+  border-color: var(--gx-border);
+}
+
+/* ---------------- skeletons (dark/glass, no red) ---------------- */
+
+.gx-sk { min-width: 0; }
+
+.gx-shelf-track > .gx-sk { flex: 0 0 auto; width: clamp(132px, 24vw, 184px); }
+
+.gx-sk-media {
+  aspect-ratio: 2/3;
+  border-radius: 0.8rem;
+  background: var(--gx-surface);
+  border: 1px solid var(--gx-border-faint);
+}
+
+.gx-sk-bar {
+  height: 0.65rem;
+  border-radius: 999px;
+  background: var(--gx-surface-2);
+  margin: 0.6rem 0.15rem 0;
+}
+
+.gx-sk-bar.short { width: 45%; }
+
+.gx-sk-media,
+.gx-sk-bar {
+  position: relative;
+  overflow: hidden;
+}
+
+.gx-sk-media::after,
+.gx-sk-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.07), transparent);
+  animation: gx-sk-shimmer 1.6s infinite;
+}
+
+@keyframes gx-sk-shimmer { 100% { transform: translateX(100%); } }
+
+/* ---------------- empty states ---------------- */
+
+.gx-empty {
+  color: var(--gx-text-dim);
+  font-size: 0.9rem;
+  padding: 2.5rem 1rem;
+  text-align: center;
+}
+
+/* ---------------- mobile ---------------- */
+
+@media (max-width: 640px) {
+  .gx-shelf { margin-top: 2.25rem; }
+  .gx-shelf-track { gap: 0.7rem; }
+  .gx-shelf-title,
+  #section-title { font-size: 1.1rem; }
+  .gx-viewall { font-size: 0.78rem; }
+}
+
+/* ---------------- reduced motion ---------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .gx-card,
+  .gx-card-media,
+  .gx-card-media img,
+  .gx-viewall,
+  .gx-viewall .gx-viewall-arrow,
+  .gx-tab,
+  .gx-card-list,
+  .gx-shelf-btn,
+  .gx-shelf-viewport::before,
+  .gx-shelf-viewport::after {
+    transition: none;
+  }
+
+  .gx-card:hover { transform: none; }
+  .gx-card:hover .gx-card-media img { transform: none; }
+  .gx-shelf-track { scroll-behavior: auto; }
+
+  .gx-sk-media::after,
+  .gx-sk-bar::after { animation: none; }
+}

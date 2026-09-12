@@ -53,7 +53,7 @@
     c.setPageLabel(ctx.page);
     c.renderTabs(TABS[ctx.mode] || [], ctx.subTab, ctx.onTab);
     const items = Array.isArray(ctx.items) ? ctx.items : [];
-    $('grid').innerHTML = c.cardsHTML(items, ctx.isInList) || '<div class="text-zinc-500">No results.</div>';
+    $('grid').innerHTML = c.cardsHTML(items, ctx.isInList) || '<div class="gx-empty">No results.</div>';
     if (ctx.page === 1 && items[0]) {
       c.setHero(items[0]);
       return items[0];
@@ -99,7 +99,7 @@
       return;
     }
     const items = Array.isArray(ctx.items) ? ctx.items : [];
-    $('grid').innerHTML = c.cardsHTML(items, ctx.isInList) || '<div class="text-zinc-500">No matches.</div>';
+    $('grid').innerHTML = c.cardsHTML(items, ctx.isInList) || '<div class="gx-empty">No matches.</div>';
   }
 
   function renderSearchLoading(query) {
@@ -128,14 +128,15 @@
     const list = Array.isArray(items) ? items : [];
     $('grid').innerHTML = list.length
       ? c.cardsHTML(list, isInList)
-      : '<div class="text-zinc-500 col-span-full">Empty. Hover a poster and hit ☆, or open details → + My List. Stored locally in your browser.</div>';
+      : '<div class="gx-empty col-span-full">Empty. Hover a poster and hit ☆, or open details → + My List. Stored locally in your browser.</div>';
     c.clearHeroLoading();
   }
 
-  /* ---------------- homepage shelves (config-driven, same card style) ---------------- */
+  /* ---------------- homepage shelves (config-driven carousel shelves) ---------------- */
 
-  // Renders resolved config sections below the main grid. Same heading sizes,
-  // same .card grid as the main section — the style is reused, not redesigned.
+  // Renders resolved config sections as horizontal shelves (see css/shelves.css
+  // + js/shelves.js for the carousel behavior). Same card markup as the main
+  // grid — only the shelf shell differs.
   // resolved: [{ section: {id,title,description}, items, collection? }] in
   // config order. Empty shelves render nothing (a bad query shouldn't leave
   // holes). Sections with source { type: 'collection', slug } get an optional
@@ -170,14 +171,19 @@
         const s = r.section;
         const domId = 'home-section-' + String(s.id).replace(/[^a-z0-9-_]/gi, '-');
         const href = homeSectionHref(r);
+        const safeTitle = c.escapeHtml(s.title);
         const viewAll = href
-          ? `<a href="${c.escapeHtml(href)}" class="text-sm text-zinc-400 hover:text-white shrink-0 ml-4 whitespace-nowrap">View All →</a>`
+          ? `<a href="${c.escapeHtml(href)}" class="gx-viewall">View All <span class="gx-viewall-arrow" aria-hidden="true">→</span></a>`
           : '';
-        return `<section class="mt-8" id="${c.escapeHtml(domId)}">` +
-          `<div class="flex items-end justify-between mb-3"><h2 class="text-xl font-bold">${c.escapeHtml(s.title)}</h2>${viewAll}</div>` +
-          (s.description ? `<p class="text-sm text-zinc-400 -mt-1 mb-3">${c.escapeHtml(s.description)}</p>` : '') +
-          `<div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">${c.cardsHTML(r.items, isInList)}</div>` +
-          `</section>`;
+        return `<section class="gx-shelf" id="${c.escapeHtml(domId)}" aria-label="${safeTitle}">` +
+          `<div class="gx-shelf-head"><div class="gx-shelf-titles"><h2 class="gx-shelf-title">${safeTitle}</h2>` +
+          (s.description ? `<p class="gx-shelf-desc">${c.escapeHtml(s.description)}</p>` : '') +
+          `</div>${viewAll}</div>` +
+          `<div class="gx-shelf-viewport" data-overflow="false" data-at-start="true" data-at-end="true">` +
+          `<div class="gx-shelf-track" role="region" aria-label="${safeTitle} titles">${c.cardsHTML(r.items, isInList)}</div>` +
+          `<button class="gx-shelf-btn" data-dir="prev" aria-label="Scroll ${safeTitle} back"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 3 5 8l5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>` +
+          `<button class="gx-shelf-btn" data-dir="next" aria-label="Scroll ${safeTitle} forward"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>` +
+          `</div></section>`;
       }).join('');
   }
 
@@ -237,7 +243,7 @@
     if (metaBits.length) {
       head += `<p class="col-span-full text-xs text-zinc-500">${c.escapeHtml(metaBits.join(' · '))}</p>`;
     }
-    $('grid').innerHTML = head + (c.cardsHTML(items, ctx.isInList) || '<div class="text-zinc-500 col-span-full">No titles available in this collection right now.</div>');
+    $('grid').innerHTML = head + (c.cardsHTML(items, ctx.isInList) || '<div class="gx-empty col-span-full">No titles available in this collection right now.</div>');
     if (items[0]) c.setHero(items[0]);
   }
 

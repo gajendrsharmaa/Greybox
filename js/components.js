@@ -20,18 +20,25 @@
 
   // Pure: `inList` flag comes from the caller (GreyboxData.isInMyList),
   // so this helper never touches storage itself.
+  // Preserved hooks (js/app.js depends on them): .card, data-id, data-type,
+  // img, .font-semibold (title lookup), .list-btn + its data attrs (the star
+  // character stays the button's sole content so the toggle keeps working).
   function card(item, inList) {
     const mt = item.media_type || (item.title ? 'movie' : 'tv');
     const title = item.title || item.name || 'Untitled';
     const date = item.release_date || item.first_air_date || '';
+    const year = date ? date.slice(0, 4) : '';
     const poster = item.poster_path ? IMG + item.poster_path : 'https://via.placeholder.com/500x750?text=No+Image';
     const star = inList ? '★' : '☆';
-    return `<div class="card bg-white/5 rounded-xl overflow-hidden border border-white/10" data-id="${item.id}" data-type="${mt}">
-      <div class="relative"><img loading="lazy" src="${poster}" alt="${escapeHtml(title)}"/>
-      <button class="absolute top-2 right-2 bg-black/70 rounded-full w-8 h-8 list-btn" data-id="${item.id}" data-type="${mt}" title="My List">${star}</button>
-      ${item.vote_average ? `<span class="absolute bottom-2 left-2 text-xs bg-black/75 px-2 py-0.5 rounded">⭐ ${Number(item.vote_average).toFixed(1)}</span>` : ''}${item.custom_badge ? `<span class="absolute top-2 left-2 text-xs bg-red-600 px-2 py-0.5 rounded font-bold">${escapeHtml(item.custom_badge)}</span>` : ''}</div>
-      <div class="p-2.5"><div class="text-sm font-semibold truncate">${escapeHtml(title)}</div>
-      <div class="text-xs text-zinc-500">${date ? date.slice(0, 4) : ''} · ${mt === 'movie' ? 'Movie' : 'TV'}</div></div></div>`;
+    const label = `${title}${year ? ' (' + year + ')' : ''}`;
+    return `<div class="card gx-card" data-id="${item.id}" data-type="${mt}" tabindex="0" role="button" aria-label="${escapeHtml(label)}">` +
+      `<div class="gx-card-media"><img loading="lazy" decoding="async" src="${poster}" alt="${escapeHtml(title)}"/>` +
+      `<div class="gx-card-shade" aria-hidden="true"></div>` +
+      (item.custom_badge ? `<span class="gx-card-badge">${escapeHtml(item.custom_badge)}</span>` : '') +
+      `<button class="list-btn gx-card-list${inList ? ' is-in-list' : ''}" data-id="${item.id}" data-type="${mt}" title="My List" aria-label="Toggle My List">${star}</button>` +
+      (item.vote_average ? `<span class="gx-card-rating"><span class="gx-star" aria-hidden="true">★</span> ${Number(item.vote_average).toFixed(1)}</span>` : '') +
+      `</div><div class="gx-card-body"><div class="font-semibold gx-card-title">${escapeHtml(title)}</div>` +
+      `<div class="gx-card-sub">${year ? year + ' · ' : ''}${mt === 'movie' ? 'Movie' : 'TV'}</div></div></div>`;
   }
 
   function cardsHTML(items, isInList) {
@@ -44,10 +51,8 @@
     let h = '';
     const count = n > 0 ? n : 12;
     for (let i = 0; i < count; i++) {
-      h += `<div class="rounded-xl overflow-hidden border border-white/10 bg-white/5">
-        <div class="skeleton aspect-[2/3]"></div>
-        <div class="p-2.5"><div class="skeleton h-3 rounded w-3/4"></div>
-        <div class="skeleton h-2.5 rounded w-1/3 mt-2"></div></div></div>`;
+      h += `<div class="gx-sk" aria-hidden="true"><div class="gx-sk-media"></div>` +
+        `<div class="gx-sk-bar"></div><div class="gx-sk-bar short"></div></div>`;
     }
     return h;
   }
@@ -57,7 +62,7 @@
   }
 
   function showGridEmpty(text) {
-    $('grid').innerHTML = `<div class="text-zinc-500">${text || 'No results.'}</div>`;
+    $('grid').innerHTML = `<div class="gx-empty">${escapeHtml(text || 'No results.')}</div>`;
   }
 
   function inlineLoader(text) {
@@ -86,7 +91,9 @@
     t.innerHTML = '';
     for (const [k, label] of (tabs || [])) {
       const b = document.createElement('button');
-      b.className = 'px-3 py-1.5 rounded-lg ' + (active === k ? 'bg-red-600 font-bold' : 'bg-white/10');
+      const isActive = active === k;
+      b.className = 'gx-tab' + (isActive ? ' active' : '');
+      if (isActive) b.setAttribute('aria-current', 'true');
       b.textContent = label;
       b.onclick = () => { if (typeof onSelect === 'function') onSelect(k); };
       t.appendChild(b);
