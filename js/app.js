@@ -590,7 +590,7 @@
   // iframe may be cross-origin, so this only guards our own page/container —
   // it never touches the iframe's internal document. ----
   (function protect() {
-    const inSearch = (el) => !!(el && el.closest && el.closest('#search'));
+    const inSearch = (el) => !!(el && el.closest && el.closest('#search, #collections-search'));
     const inField = (el) => !!(el && el.closest && el.closest('input,textarea,select,[contenteditable="true"]'));
     // right-click / long-press menu: blocked everywhere except search (so mouse-paste works there)
     document.addEventListener('contextmenu', (e) => {
