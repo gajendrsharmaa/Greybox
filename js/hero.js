@@ -36,7 +36,7 @@
   var listenTimer = 0;
   var current = null;
   var trailerKey = '';
-  var phase = 'idle'; // idle | resolving | delay | awaiting | playing | failed
+  var phase = 'idle'; // idle | resolving | delay | playing | failed
   var delayElapsed = false;
   var hasPlayed = false;
   var apiReady = false;
@@ -46,6 +46,8 @@
   var routeAllowsHero = true; // corrected on every route change (see bind)
   var observerBound = false;
   var visBound = false;
+  var asks = 0; // `listening` handshakes sent this lifecycle (diagnostics)
+  var loads = 0; // iframe load events this lifecycle (diagnostics)
   var actions = {};
 
   function $(id) { return document.getElementById(id); }
@@ -62,6 +64,18 @@
   }
 
   function heroEl() { return $('hero'); }
+
+  /* Dev-only diagnostics: silent unless explicitly enabled in this browser via
+   * localStorage `greybox:hero-debug = 1` (plus `GreyboxHero.debug()` below).
+   * Never logs in production by default. */
+  function dbg() {
+    try {
+      if (window.localStorage && window.localStorage.getItem('greybox:hero-debug') === '1' &&
+        window.console && typeof window.console.debug === 'function') {
+        window.console.debug.apply(window.console, ['[hero]'].concat(Array.prototype.slice.call(arguments)));
+      }
+    } catch (e) { /* diagnostics never break playback */ }
+  }
 
   function mediaOf(item) {
     if (!item) return 'movie';
@@ -92,7 +106,7 @@
 
   function cancelReady() {
     if (readyTimer) { try { clearTimeout(readyTimer); } catch (e) { /* noop */ } readyTimer = 0; }
-    if (listenTimer) { try { clearTimeout(listenTimer); } catch (e) { /* noop */ } listenTimer = 0; }
+    cancelListenPoll();
   }
 
   function cancelFade() {
@@ -338,7 +352,7 @@
 
   function beginSequence() {
     if (!current) return;
-    if (phase === 'delay' || phase === 'awaiting' || phase === 'playing' || phase === 'resolving') return;
+    if (phase === 'delay' || phase === 'playing' || phase === 'resolving') return;
     if (!routeAllowsHero) return; // stale hero behind search/modals/etc never self-starts
     if (overlayOpen()) return; // detail modal / player covers the hero
     if (document.hidden || !heroOnScreen) return;
@@ -377,11 +391,13 @@
     catch (e) { stopTrailer(); }
   }
 
-  /* Reveal only when the delay has elapsed AND playback is confirmed. */
+  /* Reveal only when the delay has elapsed AND playback is confirmed.
+   * The delay loop keeps running to expiry even if PLAYING arrives early;
+   * a late PLAYING completes via the player event itself. */
   function maybeReveal(myGen) {
     if (myGen !== gen) return;
-    if (!delayElapsed || !hasPlayed) { if (phase === 'delay') phase = 'awaiting'; return; }
-    if (phase !== 'delay' && phase !== 'awaiting') return;
+    if (!delayElapsed || !hasPlayed) return;
+    if (phase !== 'delay') return;
     if (document.hidden || !heroOnScreen || overlayOpen()) { phase = 'idle'; hideControl(); return; }
     revealTrailer(myGen);
   }
@@ -398,11 +414,13 @@
       phase = 'playing';
       muted = true;
       paintControl(); // mute control appears only now
+      dbg('trailer revealed');
     } catch (e) { failTrailer(); }
   }
 
   /* Any failure lands here: still image, no control, no message, no retry. */
-  function failTrailer() {
+  function failTrailer(why) {
+    dbg('trailer failed:', why || 'unknown');
     phase = 'failed';
     hideControl();
     detachTrailer();
@@ -419,6 +437,9 @@
     delayElapsed = false;
     hasPlayed = false;
     apiReady = false;
+    asks = 0;
+    loads = 0;
+    dbg('buffering new trailer');
     try {
       wrap.classList.remove('hidden');
       wrap.classList.remove('is-visible');
@@ -426,21 +447,20 @@
     } catch (e) { failTrailer(); return; }
     frame.onload = function () {
       if (myGen !== gen) return;
+      loads++;
+      dbg('iframe load, polling for player');
       sendListening();
-      // One bounded handshake re-send: if the player missed the first one,
-      // this still cannot loop (single timer, generation-guarded).
-      cancelListenRetry();
-      listenTimer = setTimeout(function () {
-        if (myGen !== gen || playerGen !== gen) return;
-        if (!apiReady && (phase === 'delay' || phase === 'awaiting')) sendListening();
-      }, 2500);
+      // Keep asking until the player answers: the embed drops `listening`
+      // sent before its own script runs (YouTube's own widget polls uncapped).
+      // Bounded by apiReady + the single readiness deadline - never infinite.
+      startListenPoll(myGen);
     };
     frame.onerror = function () { if (myGen === gen) failTrailer(); };
     try { frame.src = embedUrl(key); } catch (e) { failTrailer(); return; }
     cancelReadyTimer();
     readyTimer = setTimeout(function () {
       if (myGen !== gen || playerGen !== gen) return;
-      if (phase !== 'playing') failTrailer(); // never usable - poster, no retry
+      if (phase !== 'playing') failTrailer('ready-timeout'); // never usable - poster, no retry
     }, TRAILER_READY_TIMEOUT_MS);
   }
 
@@ -448,15 +468,27 @@
     if (readyTimer) { try { clearTimeout(readyTimer); } catch (e) { /* noop */ } readyTimer = 0; }
   }
 
-  function cancelListenRetry() {
-    if (listenTimer) { try { clearTimeout(listenTimer); } catch (e) { /* noop */ } listenTimer = 0; }
+  function cancelListenPoll() {
+    if (listenTimer) { try { clearInterval(listenTimer); } catch (e) { /* noop */ } listenTimer = 0; }
+  }
+
+  function startListenPoll(myGen) {
+    cancelListenPoll();
+    listenTimer = setInterval(function () {
+      if (myGen !== gen || playerGen !== gen) { cancelListenPoll(); return; }
+      if (apiReady || phase !== 'delay') { cancelListenPoll(); return; }
+      sendListening();
+    }, 500);
   }
 
   function sendListening() {
     try {
       var frame = $('hero-trailer');
       if (frame && frame.contentWindow) {
-        frame.contentWindow.postMessage(JSON.stringify({ event: 'listening', id: 1 }), '*');
+        frame.contentWindow.postMessage(JSON.stringify({
+          event: 'listening', id: frame.id || 'hero-trailer', channel: 'widget',
+        }), '*');
+        asks++;
       }
     } catch (e) { /* player not reachable - readiness timeout covers us */ }
   }
@@ -474,13 +506,19 @@
         try { d = JSON.parse(d); } catch (e) { return; }
       }
       if (!d || typeof d !== 'object' || playerGen !== gen) return;
+      // Any accepted message proves the bridge is up - stop asking.
+      apiReady = true;
+      cancelListenPoll();
       if (d.event === 'onReady') {
-        apiReady = true;
-        cancelListenRetry();
+        dbg('player ready');
       } else if (d.event === 'onStateChange') {
         onPlayerState(Number(d.info));
+      } else if (d.event === 'infoDelivery' || d.event === 'info') {
+        // Full/patch state push: catches "already playing" with no later change.
+        var pst = d.info && typeof d.info === 'object' ? Number(d.info.playerState) : NaN;
+        if (pst === 1) onPlayerState(1);
       } else if (d.event === 'onError') {
-        if (phase === 'delay' || phase === 'awaiting' || phase === 'playing') failTrailer();
+        if (phase === 'delay' || phase === 'playing') failTrailer('yt-error');
       }
     } catch (e) { /* ignore malformed player chatter */ }
   }
@@ -489,7 +527,7 @@
     if (playerGen !== gen) return;
     if (info === 1) { // actually playing - the only proof we accept
       hasPlayed = true;
-      if (phase === 'awaiting' || phase === 'delay') maybeReveal(gen);
+      if (phase === 'delay') maybeReveal(gen);
     }
     // Every other state (unstarted cued buffering paused ended) means "not
     // demonstrably playing" - the readiness timeout bounds the wait.
@@ -691,14 +729,17 @@
   }
 
   /* Hidden tabs never keep a countdown or playback alive; returning starts
-   * fresh (muted) rather than resuming. */
+   * fresh (muted) rather than resuming. heroOnScreen is restored optimistically
+   * here - nothing can scroll while hidden, and the delay watchdog plus the
+   * observer correct it within a frame if it ever went stale. */
   function ensureTabHandler() {
     if (visBound) return;
     visBound = true;
     try {
       document.addEventListener('visibilitychange', function () {
         if (document.hidden) { stopTrailer(); return; }
-        if (current && phase === 'idle' && heroOnScreen) beginSequence();
+        heroOnScreen = true;
+        if (current && phase === 'idle') beginSequence();
       });
     } catch (e) { /* noop */ }
   }
@@ -730,6 +771,11 @@
     reset: reset,
     getCurrent: function () { return current; },
     getPhase: function () { return phase; },
+    debug: function () {
+      return { phase: phase, apiReady: apiReady, hasPlayed: hasPlayed,
+        delayElapsed: delayElapsed, asks: asks, loads: loads,
+        muted: muted, hasCurrent: !!current };
+    },
     isMuted: function () { return muted; },
     toggleMute: toggleMute,
     embedUrl: embedUrl,
