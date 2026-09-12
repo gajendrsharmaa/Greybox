@@ -53,14 +53,30 @@
   // and only against home->home navigation.)
   let routeGen = 0;
   // Overlay-modal generation: bumped on every modal open AND every modal
-  // close (hide-only). Card clicks open the modal as an OVERLAY with NO
-  // history entry and NO routeGen bump, so the underlying page instance
+  // close. Card clicks open the modal as an OVERLAY with URL change but NO
+  // route render and NO routeGen bump, so the underlying page instance
   // (DOM, scroll, shelves, filter) survives untouched. Dual-check
   // (routeGen + modalGen) guarantees: a real navigation aborts in-flight
   // overlay work via routeGen, and opening another card aborts the previous
   // card's fetch via modalGen — no stale detail data. NEVER weakened:
   // routeGen protection stays exactly as before.
   let modalGen = 0;
+  // Modal URL/history tracking for URL-change-without-render architecture:
+  // - modalParentURL: exact parent URL (pathname+search+hash) underneath.
+  // - modalDetailURL: real detail URL currently in the address bar (/movie/:id|/tv/:id).
+  // - modalParentTitle: document.title of the parent, restored on close.
+  // - currentAppURL: last URL renderRoute() rendered (prev tracking for standalone).
+  // Card overlay sets parent/detail explicitly via push/replace WITHOUT emit.
+  // Standalone (small link/direct/Forward) sets them via renderRoute prev logic.
+  // Popstate to parent consumes the modal (hide, no renderRoute).
+  let modalParentURL = null;
+  let modalDetailURL = null;
+  let modalParentTitle = null;
+  let currentAppURL = null;
+  function currentURL() {
+    try { return window.location.pathname + window.location.search + window.location.hash; }
+    catch { return ''; }
+  }
 
   /* ---------------- route helpers (state <-> URL, no fetching) ---------------- */
   const kebabToSnake = (s) => String(s || '').split('-').join('_');
@@ -439,26 +455,29 @@
     } catch { /* shelves stay empty, main grid already rendered */ }
   }
 
-  /* ---------------- detail modal (OVERLAY, never a navigation) ----------------
-   * Architecture (restored):
-   *   CURRENT PAGE + MODAL ABOVE IT, not CURRENT -> DETAIL ROUTE -> BACK.
-   * - Card click -> openDetailModal(id, mt): NO pushState/replaceState, NO
-   *   navigate(), NO renderRoute(), NO window.location, NO scroll reset, NO
-   *   grid/home-sections touch. Underlying DOM/page instance survives.
-   * - Close (X/backdrop/Escape/m-back) -> closeDetailModal(): hide only,
-   *   NEVER navigate/render/refetch/reconstruct. Scroll + shelf + filter stay.
+  /* ---------------- detail modal (URL change WITHOUT route render) ----------------
+   * Architecture (corrected):
+   *   PARENT PAGE + URL STATE FOR OPEN DETAIL + MODAL OVERLAY,
+   *   not PARENT -> ROUTE TO DETAIL -> ROUTE BACK.
+   * - Card click -> pushState(existing real detail URL, e.g. /movie/:id) WITHOUT
+   *   emit, then openDetailModal(id, mt): NO navigate(), NO renderRoute(), NO
+   *   window.location, NO scroll reset, NO grid/home-sections touch. URL shows
+   *   the real detail URL while the SAME collection DOM stays mounted underneath.
+   * - Close (X/backdrop/Escape/m-back/Back) -> history.back() to the saved
+   *   parent URL, consumed by the popstate wrapper WITHOUT renderRoute().
+   *   Underlying DOM (scroll, shelf, filter, progressive state) untouched.
    * - Standalone detail URLs (/movie/:id, /tv/:id, /person/:id) still exist
    *   as real router navigation (small "Details" link, deep links, hero,
    *   suggestions). renderRoute() for those boots a background list if needed
-   *   then calls the SAME openDetail() below — the modal DOM is identical,
-   *   only the URL differs because a real navigation happened first.
-   * - No history entry is created for overlay opens (cleanest, per spec), so
-   *   Back/Forward keep working for real routes only and never rebuild on
-   *   modal close. popstate -> renderRoute stays untouched in router.js.
+   *   then calls the SAME openDetail() below — the modal DOM is identical.
+   *   Their Back-to-parent is also consumed without rebuild via saved parent.
+   * - popstate to the saved parent URL closes the modal and returns WITHOUT
+   *   renderRoute(). All other popstates render normally. Router.js untouched
+   *   except via the onChange wrapper below.
    */
 
-  // Overlay open: card -> modal above the SAME page. No history, no routeGen
-  // bump, no scroll/DOM touch outside the modal shell.
+  // Overlay fetch+render: modal above the SAME page. No history, no routeGen
+  // bump, no scroll/DOM touch outside the modal shell. Callers own URL/history.
   async function openDetailModal(id, mt) {
     mt = mt === 'tv' ? 'tv' : 'movie';
     const myModal = ++modalGen;
@@ -519,7 +538,7 @@
       currentDetail = { kind: 'person', id, media_type: 'person' };
       highlightNav();
       if (R) document.title = `${person.name || 'Person'} (${id}) — Greybox`;
-      Pages.renderPerson({ person, knownFor, onSelect: (pid, mt) => navTo(detailURL(pid, mt)) });
+      Pages.renderPerson({ person, knownFor, onSelect: (pid, mt) => openTitleFromModal(pid, mt) });
     } catch (e) {
       if (myModal !== modalGen || myRoute !== routeGen) return;
       console.error('[person] failed for person/' + id, e);
@@ -534,25 +553,118 @@
   function hideModal() { C.hideModal(); }
   // Player paths hide the modal to open the player engine (unchanged); they
   // keep currentDetail/currentEpisodes for Prev/Next and never navigate.
+  // NOTE: player open must NOT clear modalParentURL — Back after player?
+  // Player is a separate fullscreen overlay; modal history entry (detail URL)
+  // stays underneath. Closing the player reveals the modal again (URL still
+  // detail). The modal's parent entry is still intact for later close.
   function closeDetail() { hideModal(); }
 
-  // User-facing close: X / backdrop / Escape / m-back. Hide ONLY — never
-  // navigate(), never renderRoute(), never history.back(), never
-  // window.location, never reload, never refetch/reconstruct the parent.
-  // Bumps modalGen so a late in-flight fetch cannot repaint/reopen the modal
-  // after the user dismissed it. Restores the title for the CURRENT route
-  // (overlay: parent title; standalone URL: detail title stays, URL untouched).
+  // Card overlay open with URL change but NO router render:
+  //   parent URL (e.g. /collection/horror) -> pushState(real detail URL,
+  //   e.g. /movie/123) -> openDetailModal() directly.
+  // Uses the EXISTING detailURL() format (/movie/:id, /tv/:id). Never calls
+  // navigate()/renderRoute(), so the parent DOM stays mounted. Second open
+  // while a modal is already open uses replaceState (single modal entry).
+  function openOverlay(id, mt) {
+    mt = mt === 'tv' ? 'tv' : 'movie';
+    const to = detailURL(id, mt);
+    const parent = currentURL();
+    if (to && parent && to !== parent) {
+      if (modalParentURL) {
+        try { window.history.replaceState({ greyboxModal: true, parentURL: modalParentURL }, '', to); } catch {}
+        modalDetailURL = to;
+      } else {
+        try {
+          window.history.pushState({ greyboxModal: true, parentURL: parent }, '', to);
+          modalParentURL = parent;
+          modalDetailURL = to;
+          try { modalParentTitle = document.title; } catch { modalParentTitle = null; }
+        } catch {
+          modalParentURL = null; modalDetailURL = null; modalParentTitle = null;
+        }
+      }
+    }
+    return openDetailModal(id, mt);
+  }
+
+  // In-modal title switch (e.g. person known-for -> title): same URL-change-
+  // without-render when an overlay parent exists (replace, keep single entry);
+  // otherwise fall back to normal navigation (direct-load chain, Back reopens).
+  function openTitleFromModal(id, mt) {
+    mt = mt === 'tv' ? 'tv' : 'movie';
+    if (modalParentURL) {
+      const to = detailURL(id, mt);
+      if (to) {
+        try { window.history.replaceState({ greyboxModal: true, parentURL: modalParentURL }, '', to); } catch {}
+        modalDetailURL = to;
+      }
+      return openDetailModal(id, mt);
+    }
+    return navTo(detailURL(id, mt));
+  }
+
+  // User-facing close: X / backdrop / Escape / m-back / Back.
+  // Overlay (saved parent): hide now, then history.back() to the EXACT parent
+  // URL. The popstate wrapper consumes that entry WITHOUT renderRoute(),
+  // revealing the SAME underlying DOM (no refetch/reconstruct/reload).
+  // Route modal without parent (direct load): hide only, no URL/history touch.
+  // Never calls navigate()/renderRoute() directly. Bumps modalGen so late
+  // fetches cannot repaint/reopen after dismiss.
   function closeDetailModal() {
+    try {
+      if (!C.isModalOpen()) return;
+    } catch { /* fall through */ }
     modalGen++;
+    if (modalParentURL) {
+      const parent = modalParentURL;
+      hideModal();
+      try {
+        if (modalParentTitle) document.title = modalParentTitle;
+        else if (R) document.title = R.titleFor(R.current());
+      } catch {}
+      try { window.history.back(); return; }
+      catch {
+        try { window.history.replaceState({ greybox: true }, '', parent); } catch {}
+        modalParentURL = null; modalDetailURL = null; modalParentTitle = null;
+        return;
+      }
+    }
     hideModal();
     try {
       if (R) document.title = R.titleFor(R.current());
     } catch { /* title restore optional */ }
   }
 
-  // Legacy name kept as a pure alias (no navigation) for any existing wiring.
+  // Legacy name kept as a pure alias for any existing wiring.
   function userCloseDetail() {
     closeDetailModal();
+  }
+
+  // Popstate consumer: Back/Forward to the saved parent URL while an overlay
+  // is tracked closes the modal WITHOUT rebuilding the parent. Returns true
+  // when consumed (caller must NOT renderRoute). All other popstates render.
+  function consumeModalPopstate() {
+    try {
+      if (!modalParentURL) return false;
+      const cur = currentURL();
+      if (cur !== modalParentURL) return false;
+      modalGen++;
+      hideModal();
+      try {
+        if (modalParentTitle) document.title = modalParentTitle;
+        else if (R) document.title = R.titleFor(R.current());
+      } catch {}
+      modalParentURL = null; modalDetailURL = null; modalParentTitle = null;
+      try { currentAppURL = cur; } catch {}
+      return true;
+    } catch { return false; }
+  }
+
+  // Real navigation to a list page leaves the modal behind: hide + drop any
+  // saved modal parent (new page owns the URL now). Called by every non-detail
+  // renderRoute branch. Does NOT touch history (caller already navigated).
+  function clearModalHistoryForList() {
+    modalParentURL = null; modalDetailURL = null; modalParentTitle = null;
   }
 
   /* ---------------- watch / episodes (player engine untouched) ---------------- */
@@ -686,10 +798,21 @@
   }
   function closePlayer() { Stream.Player.close(); }
 
-  /* ---------------- route renderer (single entry for ALL navigation) ---------------- */
+  /* ---------------- route renderer (single entry for ALL navigation) ----------------
+   * NOTE: overlay card opens/closes NEVER reach here (pushState/back without
+   * emit + popstate skip). Only real navigations (nav/tabs/pager/filter/
+   * search/small-link/direct/Forward-reopen) render. routeGen preserved. */
   async function renderRoute(route) {
     if (!route) route = R ? R.current() : { name: 'home', tab: 'trending', page: 1, path: '/' };
     const myGen = ++routeGen; // this navigation invalidates all older async page work
+    // URL tracking for modal parent restore (standalone detail via small link /
+    // direct / Forward). Overlay opens bypass renderRoute, so currentAppURL
+    // stays at the parent while the address bar shows the detail URL.
+    const thisURL = currentURL();
+    const prevURL = currentAppURL;
+    let entryTitle = null;
+    try { entryTitle = document.title; } catch { entryTitle = null; }
+    try { currentAppURL = thisURL; } catch {}
     teardownCollectionPaging(); // disconnect the previous collection observer, if any
     lastRouteName = route.name;
     if (R) document.title = R.titleFor(route);
@@ -699,7 +822,7 @@
     } catch { /* noop */ }
 
     if (route.name === 'home') {
-      hideModal(); currentDetail = null;
+      hideModal(); currentDetail = null; clearModalHistoryForList();
       mode = 'home'; subTab = route.tab || 'trending'; pageNum = route.page || 1;
       window.scrollTo({ top: 0 });
       Pages.clearHomeSections();
@@ -711,7 +834,7 @@
       return;
     }
     if (route.name === 'movies') {
-      hideModal(); currentDetail = null;
+      hideModal(); currentDetail = null; clearModalHistoryForList();
       mode = 'movie'; subTab = kebabToSnake(route.cat || 'popular'); pageNum = route.page || 1;
       window.scrollTo({ top: 0 });
       Pages.clearHomeSections();
@@ -719,7 +842,7 @@
       return;
     }
     if (route.name === 'tv') {
-      hideModal(); currentDetail = null;
+      hideModal(); currentDetail = null; clearModalHistoryForList();
       mode = 'tv'; subTab = kebabToSnake(route.cat || 'popular'); pageNum = route.page || 1;
       window.scrollTo({ top: 0 });
       Pages.clearHomeSections();
@@ -727,7 +850,7 @@
       return;
     }
     if (route.name === 'anime') {
-      hideModal(); currentDetail = null;
+      hideModal(); currentDetail = null; clearModalHistoryForList();
       mode = 'anime'; subTab = animeKindToSub(route.kind || 'series'); pageNum = route.page || 1;
       window.scrollTo({ top: 0 });
       Pages.clearHomeSections();
@@ -735,7 +858,7 @@
       return;
     }
     if (route.name === 'mylist') {
-      hideModal(); currentDetail = null;
+      hideModal(); currentDetail = null; clearModalHistoryForList();
       mode = 'mylist'; pageNum = 1;
       window.scrollTo({ top: 0 });
       Pages.clearHomeSections();
@@ -743,7 +866,7 @@
       return;
     }
     if (route.name === 'search') {
-      hideModal(); currentDetail = null;
+      hideModal(); currentDetail = null; clearModalHistoryForList();
       mode = 'search'; searchQuery = route.q || ''; pageNum = route.page || 1;
       window.scrollTo({ top: 0 });
       Pages.clearHomeSections();
@@ -751,7 +874,7 @@
       return;
     }
     if (route.name === 'collection') {
-      hideModal(); currentDetail = null;
+      hideModal(); currentDetail = null; clearModalHistoryForList();
       // Same-slug filter switches (?media=) must not yank scroll: the user is
       // already looking at this collection's catalog.
       const sameCollection = mode === 'collection' && collectionSlug === (route.slug || '');
@@ -772,6 +895,21 @@
         await loadList();
         if (myGen !== routeGen) return; // navigated away while booting
       }
+      // Standalone detail route (small link / direct / Forward-reopen): track
+      // parent so Back/X can close WITHOUT rebuilding. Overlay card opens
+      // bypass renderRoute entirely, so an existing modalParentURL (original
+      // parent) is preserved, never overwritten with the modal URL itself.
+      // Direct loads (prev null) keep parent null -> hide-only close.
+      // entryTitle is the parent title BEFORE this render overwrote it.
+      if (!modalParentURL && prevURL && prevURL !== thisURL) {
+        modalParentURL = prevURL;
+        modalDetailURL = thisURL;
+        modalParentTitle = entryTitle;
+      } else if (!modalParentURL) {
+        modalDetailURL = thisURL;
+      } else {
+        modalDetailURL = thisURL;
+      }
       await openDetail(route.id, mt);
       return;
     }
@@ -781,23 +919,35 @@
         await loadList();
         if (myGen !== routeGen) return; // navigated away while booting
       }
+      if (!modalParentURL && prevURL && prevURL !== thisURL) {
+        modalParentURL = prevURL;
+        modalDetailURL = thisURL;
+        modalParentTitle = entryTitle;
+      } else if (!modalParentURL) {
+        modalDetailURL = thisURL;
+      } else {
+        modalDetailURL = thisURL;
+      }
       await openPerson(route.id);
       return;
     }
-    hideModal(); currentDetail = null;
+    hideModal(); currentDetail = null; clearModalHistoryForList();
+    try { currentAppURL = currentURL(); } catch {}
     Pages.clearHomeSections();
     Pages.renderNotFound(route.path);
     document.querySelectorAll('.nav-btn').forEach((b) => b.classList.remove('active'));
   }
 
   // ---- events ----
-  // NAVIGATION SEPARATION (overlay architecture):
-  // - Card (anywhere except the small link/list-btn) -> openDetailModal():
-  //   overlay above the SAME page. NO navigate(), NO history, NO renderRoute.
-  // - Small explicit link <a data-detail-link href="/movie/:id|/tv/:id"> ->
-  //   real standalone detail URL via normal router navigation (untouched here;
-  //   Router's link interception handles it). Must NOT open the overlay and
-  //   must NOT be preventDefaulted here, or Back/new-tab/deep-link breaks.
+  // NAVIGATION SEPARATION (URL change WITHOUT route render):
+  // - NORMAL CARD (anywhere except small link/list-btn) -> openOverlay():
+  //   history.pushState(existing real detail URL, e.g. /movie/:id) WITHOUT
+  //   emit, then openDetailModal() directly. NO navigate(), NO renderRoute().
+  //   URL shows the detail URL while the SAME parent DOM stays mounted.
+  // - SMALL LINK <a data-detail-link href="/movie/:id|/tv/:id"> -> real
+  //   standalone detail navigation via normal router (push+renderRoute).
+  //   Untouched here; Router's interception owns it. Must NOT be
+  //   preventDefaulted here, or Back/new-tab/deep-link breaks.
   document.addEventListener('click', (e) => {
     const lb = e.target.closest('.list-btn');
     if (lb) {
@@ -816,8 +966,9 @@
     // Router's click interception owns this path (incl. new-tab/modifier keys).
     if (e.target.closest && e.target.closest('a[data-detail-link]')) return;
     const card = e.target.closest('.card[data-id]');
-    // Card itself is overlay-only: modal above current page, URL untouched.
-    if (card) { openDetailModal(+card.dataset.id, card.dataset.type); return; }
+    // Normal card: URL becomes the real detail URL via History API only
+    // (no router emit), modal overlays the still-mounted parent page.
+    if (card) { openOverlay(+card.dataset.id, card.dataset.type); return; }
     const nav = e.target.closest('[data-nav]');
     if (nav) {
       const key = nav.dataset.nav;
@@ -831,10 +982,11 @@
     }
   });
 
-  // Modal close is hide-only (closeDetailModal): never navigate/render/refetch.
+  // Modal close (closeDetailModal): hide + history.back() to the saved parent
+  // URL, consumed WITHOUT renderRoute(). Never navigate()/render directly.
   $('modal-close').addEventListener('click', (e) => { e.stopPropagation(); closeDetailModal(); });
   $('modal-bg').addEventListener('click', closeDetailModal);
-  // Phase 6.1 quiet-error back button: same hide-only close path as ✕/backdrop.
+  // Phase 6.1 quiet-error back button: same URL-restore close path as ✕/backdrop.
   try { const mb = $('m-back'); if (mb) mb.onclick = () => closeDetailModal(); } catch { /* back button optional */ }
   $('player-close').onclick = closePlayer;
   $('ep-prev').onclick = () => stepEpisode(-1);
@@ -938,8 +1090,8 @@
     $('settings').classList.add('hidden'); reloadBackground();
   };
 
-  // Escape closes the overlay without touching the parent page: no
-  // navigate/render/refetch — just hide. Player/settings close alongside.
+  // Escape closes the overlay (URL restored via history.back, consumed WITHOUT
+  // renderRoute). Parent DOM untouched. Player/settings close alongside.
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeDetailModal(); closePlayer(); $('settings').classList.add('hidden'); } });
 
   // ---- interaction protection (lightweight): no right-click menu, text
@@ -988,7 +1140,17 @@
     renderFooter();
     if (R) {
       R.init();
-      R.onChange((route) => { renderRoute(route); });
+      // Modal-aware popstate: Back/Forward to the saved parent URL while an
+      // overlay is tracked closes the modal WITHOUT renderRoute() — the SAME
+      // parent DOM instance (scroll/shelf/filter/progressive state) is revealed.
+      // Forward to a detail URL with no modal renders normally (reopens).
+      // All other Back/Forward renders normally. Router.js untouched.
+      R.onChange((route) => {
+        try {
+          if (consumeModalPopstate()) return;
+        } catch {}
+        renderRoute(route);
+      });
       renderRoute(R.current());
     } else {
       renderRoute({ name: 'home', tab: 'trending', page: 1, path: '/' });
@@ -997,6 +1159,6 @@
 
   // Headless/test hook (no UI effect): lets node-based checks drive the
   // route->state mapping without a browser. Overlay hooks exposed for the
-  // modal regression tests (open hides nothing, close renders nothing).
-  try { window.GreyboxApp = window.GreyboxApp || {}; window.GreyboxApp.renderRoute = renderRoute; window.GreyboxApp.openDetailModal = openDetailModal; window.GreyboxApp.closeDetailModal = closeDetailModal; window.GreyboxApp.openPersonModal = openPersonModal; } catch { /* noop */ }
+  // modal regression tests (URL changes without renderRoute on open/close).
+  try { window.GreyboxApp = window.GreyboxApp || {}; window.GreyboxApp.renderRoute = renderRoute; window.GreyboxApp.openDetailModal = openDetailModal; window.GreyboxApp.openOverlay = openOverlay; window.GreyboxApp.closeDetailModal = closeDetailModal; window.GreyboxApp.openPersonModal = openPersonModal; window.GreyboxApp.consumeModalPopstate = consumeModalPopstate; } catch { /* noop */ }
 })();
