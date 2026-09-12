@@ -1,47 +1,51 @@
-/* Greybox Phase 2 — cinematic hero module (+ trailer lifecycle refinement).
+/* Greybox Phase 2 — cinematic hero module (+ Phase 3 seamless trailer).
  *
- * Owns ONLY the homepage/public hero: state, text, backdrop, trailer countdown,
- * trailer, audio. The single trailer control lives in the hero actions row next
- * to "+ My List": countdown ring while waiting, speaker icon while playing.
- * Data comes from the existing flow (list items via components.setHero, detail
- * bundles via GreyboxData for trailer_key). No hardcoding, no new backend,
- * no token handling (trailer_key arrives server-shaped through /api/*).
+ * Owns ONLY the homepage/public hero: state, text, backdrop, trailer, audio.
+ * No countdown ring, no loading indicator — the poster is authoritative until
+ * the trailer proves it can actually play. Data comes from the existing flow
+ * (list items via components.setHero, detail bundles via GreyboxData for
+ * trailer_key). No hardcoding, no new backend, no token handling
+ * (trailer_key arrives server-shaped through /api/*).
  *
- * Lifecycle: backdrop → (valid key + visible + tab visible) → 7s countdown →
- * muted YouTube embed crossfaded over the still. Scrolling away, hiding the
- * tab, navigating, or any failure tears everything down to the still and the
- * next return starts a completely fresh sequence. One attempt per sequence,
- * no aggressive retries, no stale callbacks (generation-guarded).
+ * Lifecycle: poster → (valid key + visible + tab visible) → iframe buffers
+ * invisibly while the 7s delay runs → YouTube API confirms PLAYING →
+ * crossfade above the poster. Any failure, scroll-away, tab-hide, or route
+ * change tears down to the still; returning starts a completely fresh
+ * sequence. One attempt per sequence, no repeated retries, no stale
+ * callbacks (generation-guarded), one iframe element reused throughout.
  */
 (function () {
   'use strict';
 
-  /* Single configurable delay (ms) before the trailer attempt. */
+  /* The 7-second delay stays exactly 7000ms (single configurable value). */
   var TRAILER_DELAY_MS = 7000;
-  var TRAILER_LOAD_TIMEOUT_MS = 10000;
-
-  /* SVG progress ring geometry (r=15.5 in a 36x36 viewBox). */
-  var RING_C = 97.4;
+  /* Outer bound from buffering start: no usable playback by then → poster. */
+  var TRAILER_READY_TIMEOUT_MS = 15000;
 
   /* "Meaningfully visible" = at least this much of the hero in viewport. */
   var VISIBLE_RATIO = 0.35;
 
   var YT_KEY = /^[A-Za-z0-9_-]{11}$/;
+  var YT_ORIGIN = 'https://www.youtube.com';
 
   var cache = {}; // "mt:id" -> trailer key or null (session memo, avoids refetch)
-  var gen = 0;    // invalidates timers/fetches/iframes across hero changes + routes
-  var loadTimer = 0;
-  var countdownRaf = 0;
+  var gen = 0;    // invalidates timers/iframes/callbacks across lifecycles
+  var readyTimer = 0;
+  var delayRaf = 0;
+  var fadeTimer = 0;
+  var listenTimer = 0;
   var current = null;
   var trailerKey = '';
-  var phase = 'idle'; // idle | resolving | countdown | starting | playing | failed
+  var phase = 'idle'; // idle | resolving | delay | awaiting | playing | failed
+  var delayElapsed = false;
+  var hasPlayed = false;
+  var apiReady = false;
+  var playerGen = -1; // generation that owns the current iframe content
   var muted = true;
-  var optedOut = false; // user cancelled the pending trailer while staying on the hero
   var heroOnScreen = true; // corrected by IntersectionObserver as soon as it fires
   var routeAllowsHero = true; // corrected on every route change (see bind)
   var observerBound = false;
   var visBound = false;
-  var lastSecond = -1;
   var actions = {};
 
   function $(id) { return document.getElementById(id); }
@@ -77,36 +81,40 @@
       '&modestbranding=1&iv_load_policy=3&disablekb=1&enablejsapi=1';
   }
 
-  function cancelTimers() {
-    if (loadTimer) { try { clearTimeout(loadTimer); } catch (e) { /* noop */ } loadTimer = 0; }
-    cancelCountdown();
-  }
-
-  function cancelCountdown() {
-    if (countdownRaf) {
+  function cancelDelay() {
+    if (delayRaf) {
       try {
-        if (typeof window.cancelAnimationFrame === 'function') window.cancelAnimationFrame(countdownRaf);
+        if (typeof window.cancelAnimationFrame === 'function') window.cancelAnimationFrame(delayRaf);
       } catch (e) { /* noop */ }
-      countdownRaf = 0;
+      delayRaf = 0;
     }
   }
 
-  /* One element, three looks: countdown ring → muted speaker → waves.
-   * Never two controls at once — this is the only trailer control. */
+  function cancelReady() {
+    if (readyTimer) { try { clearTimeout(readyTimer); } catch (e) { /* noop */ } readyTimer = 0; }
+    if (listenTimer) { try { clearTimeout(listenTimer); } catch (e) { /* noop */ } listenTimer = 0; }
+  }
+
+  function cancelFade() {
+    if (fadeTimer) { try { clearTimeout(fadeTimer); } catch (e) { /* noop */ } fadeTimer = 0; }
+  }
+
+  function reducedMotion() {
+    try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; }
+    catch (e) { return false; }
+  }
+
+  /* The mute/unmute button is the only circular media control. It is visible
+   * exclusively while a trailer is playing — never during buffering. */
   function paintControl() {
     var b = $('hero-trailer-btn');
     if (!b) return;
-    b.classList.remove('is-countdown', 'is-muted', 'is-unmuted');
-    if (phase === 'countdown' || phase === 'resolving' || phase === 'starting') {
-      b.classList.remove('hidden');
-      b.classList.add('is-countdown');
-      b.removeAttribute('aria-pressed');
-    } else if (phase === 'playing') {
+    b.classList.remove('is-muted', 'is-unmuted');
+    if (phase === 'playing') {
       b.classList.remove('hidden');
       b.classList.add(muted ? 'is-muted' : 'is-unmuted');
       b.setAttribute('aria-label', muted ? 'Unmute trailer' : 'Mute trailer');
       b.setAttribute('aria-pressed', muted ? 'false' : 'true');
-      b.removeAttribute('title');
     } else {
       b.classList.add('hidden');
     }
@@ -115,23 +123,6 @@
   function hideControl() {
     var b = $('hero-trailer-btn');
     if (b) b.classList.add('hidden');
-  }
-
-  function setRing(p) {
-    try {
-      var b = $('hero-trailer-btn');
-      if (!b) return;
-      var fill = b.querySelector('.gx-ring-fill');
-      if (fill) fill.style.strokeDashoffset = (RING_C * (1 - p)).toFixed(1);
-    } catch (e) { /* noop */ }
-  }
-
-  function countdownLabel(sec) {
-    var b = $('hero-trailer-btn');
-    if (!b) return;
-    if (sec <= 0) b.setAttribute('aria-label', 'Trailer starting');
-    else b.setAttribute('aria-label', 'Trailer starts in ' + sec + ' second' + (sec === 1 ? '' : 's'));
-    b.setAttribute('title', 'Cancel trailer autoplay');
   }
 
   /* Backdrop image is never cleared — hiding the trailer reveals the still
@@ -149,22 +140,51 @@
     } catch (e) { /* noop */ }
   }
 
-  /* Full stop of anything trailer-related. Text/backdrop art untouched. */
-  function stopTrailer() {
-    gen++;
-    cancelTimers();
-    phase = 'idle';
-    trailerKey = '';
-    optedOut = false;
-    muted = true;
-    lastSecond = -1;
-    hideControl();
+  /* Detach the player completely: handlers off, source gone, layer hidden.
+   * The poster underneath was never removed, so nothing blank can show. */
+  function detachTrailer() {
+    cancelFade();
+    cancelReady();
     try {
       var f = $('hero-trailer');
       if (f) { f.onload = null; f.onerror = null; try { f.removeAttribute('src'); } catch (e) { /* noop */ } }
       var w = $('hero-trailer-wrap');
-      if (w) { w.classList.add('hidden'); w.classList.remove('is-visible'); }
+      if (w) { w.classList.add('hidden'); w.classList.remove('is-visible'); w.classList.remove('is-buffering'); }
     } catch (e) { /* noop */ }
+  }
+
+  /* Conceal a visible trailer: stop playback now, then fade the still back in.
+   * Failures detach instantly (an error surface must never linger or fade). */
+  function concealTrailer(graceful) {
+    cancelFade();
+    var wrap = $('hero-trailer-wrap');
+    var frame = $('hero-trailer');
+    try {
+      if (frame && frame.contentWindow) {
+        frame.contentWindow.postMessage(JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }), '*');
+        frame.contentWindow.postMessage(JSON.stringify({ event: 'command', func: 'mute', args: [] }), '*');
+      }
+    } catch (e) { /* player already gone */ }
+    muted = true;
+    var showing = !!(wrap && !wrap.classList.contains('hidden') && wrap.classList.contains('is-visible'));
+    if (wrap) wrap.classList.remove('is-visible');
+    if (!graceful || !showing || reducedMotion()) { detachTrailer(); return; }
+    var myGen = gen;
+    fadeTimer = setTimeout(function () { if (myGen === gen) detachTrailer(); }, 1400);
+  }
+
+  /* Full stop of anything trailer-related. Text/backdrop art untouched. */
+  function stopTrailer() {
+    gen++;
+    cancelDelay();
+    phase = 'idle';
+    trailerKey = '';
+    delayElapsed = false;
+    hasPlayed = false;
+    apiReady = false;
+    muted = true;
+    hideControl();
+    detachTrailer();
     restoreBackdrop();
   }
 
@@ -317,115 +337,162 @@
   }
 
   function beginSequence() {
-    if (!current || optedOut) return;
-    if (phase === 'countdown' || phase === 'starting' || phase === 'playing' || phase === 'resolving') return;
+    if (!current) return;
+    if (phase === 'delay' || phase === 'awaiting' || phase === 'playing' || phase === 'resolving') return;
     if (!routeAllowsHero) return; // stale hero behind search/modals/etc never self-starts
     if (overlayOpen()) return; // detail modal / player covers the hero
     if (document.hidden || !heroOnScreen) return;
     phase = 'resolving';
-    paintControl();
-    setRing(0);
-    try {
-      var rb = $('hero-trailer-btn');
-      if (rb) { rb.setAttribute('aria-label', 'Trailer starts soon'); rb.setAttribute('title', 'Cancel trailer autoplay'); }
-    } catch (e) { /* noop */ }
     var myGen = gen;
     resolveTrailerKey(current).then(function (k) {
       if (myGen !== gen) return;
-      if (!k) { phase = 'failed'; hideControl(); return; } // no countdown without a trailer
-      if (document.hidden || !heroOnScreen || optedOut) { phase = 'idle'; hideControl(); return; }
+      if (!k) { phase = 'failed'; hideControl(); return; } // no trailer → still, no indicator
+      if (document.hidden || !heroOnScreen || overlayOpen()) { phase = 'idle'; hideControl(); return; }
       trailerKey = k;
-      startCountdown(myGen);
+      bufferTrailer(k, myGen); // iframe loads invisibly right away…
+      startDelay(myGen); // …while the exact 7s delay runs concurrently
     });
   }
 
-  function startCountdown(myGen) {
-    phase = 'countdown';
-    paintControl();
-    setRing(0);
-    lastSecond = -1;
-    countdownLabel(Math.ceil(TRAILER_DELAY_MS / 1000));
-    var reduce = false;
-    try { reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { reduce = false; }
+  /* Silent 7s delay (no ring, no spinner, no label — pure timing). Doubles as
+   * a visibility watchdog so leaving mid-delay tears down immediately. */
+  function startDelay(myGen) {
+    phase = 'delay';
     var t0 = 0;
     try { t0 = performance.now(); } catch (e) { try { t0 = Date.now(); } catch (ignored) { t0 = 0; } }
     function frame(now) {
-      if (myGen !== gen || phase !== 'countdown') return;
-      if (document.hidden || !heroOnScreen) { stopTrailer(); return; }
-      var el = now - t0;
-      var p = el >= TRAILER_DELAY_MS ? 1 : el / TRAILER_DELAY_MS;
-      var sec = p >= 1 ? 0 : Math.ceil((TRAILER_DELAY_MS - el) / 1000);
-      if (sec !== lastSecond) {
-        lastSecond = sec;
-        countdownLabel(sec);
-        if (reduce) setRing(p); // coarse steps only under reduced motion
+      if (myGen !== gen || phase !== 'delay') return;
+      // Rect check backs up the observer on browsers without IntersectionObserver.
+      if (document.hidden || !heroOnScreen || !isHeroVisible()) { onHeroHidden(); return; }
+      if (now - t0 >= TRAILER_DELAY_MS) {
+        delayElapsed = true;
+        maybeReveal(myGen);
+        return;
       }
-      if (!reduce) setRing(p);
-      if (p >= 1) { attemptTrailer(myGen); return; }
-      try { countdownRaf = window.requestAnimationFrame(frame); }
+      try { delayRaf = window.requestAnimationFrame(frame); }
       catch (e) { stopTrailer(); }
     }
-    cancelCountdown();
-    try { countdownRaf = window.requestAnimationFrame(frame); }
+    cancelDelay();
+    try { delayRaf = window.requestAnimationFrame(frame); }
     catch (e) { stopTrailer(); }
   }
 
-  /* User opted out of the pending trailer while staying on the hero:
-   * stay on the still. Leaving + returning starts fresh (optedOut resets). */
-  function cancelPending() {
-    stopTrailer();
-    optedOut = true;
-  }
-
-  function attemptTrailer(myGen) {
+  /* Reveal only when the delay has elapsed AND playback is confirmed. */
+  function maybeReveal(myGen) {
     if (myGen !== gen) return;
-    if (document.hidden || !heroOnScreen || !isHeroVisible()) { phase = 'idle'; hideControl(); return; }
-    if (!trailerKey) { phase = 'failed'; hideControl(); return; }
-    phase = 'starting';
-    paintControl();
-    attachTrailer(trailerKey, myGen);
+    if (!delayElapsed || !hasPlayed) { if (phase === 'delay') phase = 'awaiting'; return; }
+    if (phase !== 'delay' && phase !== 'awaiting') return;
+    if (document.hidden || !heroOnScreen || overlayOpen()) { phase = 'idle'; hideControl(); return; }
+    revealTrailer(myGen);
   }
 
-  function attachTrailer(key, myGen) {
+  function revealTrailer(myGen) {
+    if (myGen !== gen) return;
+    var wrap = $('hero-trailer-wrap');
+    if (!wrap) { failTrailer(); return; }
+    cancelReady();
+    try {
+      wrap.classList.remove('is-buffering');
+      void wrap.offsetWidth;
+      wrap.classList.add('is-visible');
+      phase = 'playing';
+      muted = true;
+      paintControl(); // mute control appears only now
+    } catch (e) { failTrailer(); }
+  }
+
+  /* Any failure lands here: still image, no control, no message, no retry. */
+  function failTrailer() {
+    phase = 'failed';
+    hideControl();
+    detachTrailer();
+  }
+
+  /* Buffer invisibly from t=0: the wrapper stays in layout but paints nothing
+   * (visibility:hidden beats any internal YouTube UI flash). Readiness comes
+   * from the player API below - iframe `load` alone proves nothing. */
+  function bufferTrailer(key, myGen) {
     var wrap = $('hero-trailer-wrap');
     var frame = $('hero-trailer');
-    if (!wrap || !frame || !key) { phase = 'failed'; hideControl(); return; }
-    cancelLoadTimer();
-    var done = false;
-    function cleanup() {
-      if (done) return;
-      done = true;
-      cancelLoadTimer();
-      if (myGen !== gen) return;
-      phase = 'failed';
-      hideControl();
-      try { frame.onload = null; frame.onerror = null; frame.removeAttribute('src'); } catch (e) { /* noop */ }
-      wrap.classList.add('hidden');
+    if (!wrap || !frame || !key) { failTrailer(); return; }
+    playerGen = myGen;
+    delayElapsed = false;
+    hasPlayed = false;
+    apiReady = false;
+    try {
+      wrap.classList.remove('hidden');
       wrap.classList.remove('is-visible');
-    }
-    function onFail() { cleanup(); }
-    loadTimer = setTimeout(onFail, TRAILER_LOAD_TIMEOUT_MS);
+      wrap.classList.add('is-buffering');
+    } catch (e) { failTrailer(); return; }
     frame.onload = function () {
-      if (myGen !== gen) { cleanup(); return; }
-      if (done) return;
-      done = true;
-      cancelLoadTimer();
-      try {
-        wrap.classList.remove('hidden');
-        void wrap.offsetWidth;
-        wrap.classList.add('is-visible');
-        // Swap countdown → audio control only after a successful start.
-        phase = 'playing';
-        muted = true;
-        paintControl();
-      } catch (e) { /* noop */ }
+      if (myGen !== gen) return;
+      sendListening();
+      // One bounded handshake re-send: if the player missed the first one,
+      // this still cannot loop (single timer, generation-guarded).
+      cancelListenRetry();
+      listenTimer = setTimeout(function () {
+        if (myGen !== gen || playerGen !== gen) return;
+        if (!apiReady && (phase === 'delay' || phase === 'awaiting')) sendListening();
+      }, 2500);
     };
-    frame.onerror = onFail;
-    try { frame.src = embedUrl(key); } catch (e) { cleanup(); }
+    frame.onerror = function () { if (myGen === gen) failTrailer(); };
+    try { frame.src = embedUrl(key); } catch (e) { failTrailer(); return; }
+    cancelReadyTimer();
+    readyTimer = setTimeout(function () {
+      if (myGen !== gen || playerGen !== gen) return;
+      if (phase !== 'playing') failTrailer(); // never usable - poster, no retry
+    }, TRAILER_READY_TIMEOUT_MS);
   }
 
-  function cancelLoadTimer() {
-    if (loadTimer) { try { clearTimeout(loadTimer); } catch (e) { /* noop */ } loadTimer = 0; }
+  function cancelReadyTimer() {
+    if (readyTimer) { try { clearTimeout(readyTimer); } catch (e) { /* noop */ } readyTimer = 0; }
+  }
+
+  function cancelListenRetry() {
+    if (listenTimer) { try { clearTimeout(listenTimer); } catch (e) { /* noop */ } listenTimer = 0; }
+  }
+
+  function sendListening() {
+    try {
+      var frame = $('hero-trailer');
+      if (frame && frame.contentWindow) {
+        frame.contentWindow.postMessage(JSON.stringify({ event: 'listening', id: 1 }), '*');
+      }
+    } catch (e) { /* player not reachable - readiness timeout covers us */ }
+  }
+
+  /* YouTube player events (enablejsapi=1). Strictly validated: correct origin,
+   * our own iframe window, current generation - a stale iframe can never
+   * drive a newer hero. No URLs extracted, nothing proxied, nothing cached. */
+  function onPlayerMessage(ev) {
+    try {
+      if (!ev || ev.origin !== YT_ORIGIN) return;
+      var frame = $('hero-trailer');
+      if (!frame || !frame.contentWindow || ev.source !== frame.contentWindow) return;
+      var d = ev.data;
+      if (typeof d === 'string') {
+        try { d = JSON.parse(d); } catch (e) { return; }
+      }
+      if (!d || typeof d !== 'object' || playerGen !== gen) return;
+      if (d.event === 'onReady') {
+        apiReady = true;
+        cancelListenRetry();
+      } else if (d.event === 'onStateChange') {
+        onPlayerState(Number(d.info));
+      } else if (d.event === 'onError') {
+        if (phase === 'delay' || phase === 'awaiting' || phase === 'playing') failTrailer();
+      }
+    } catch (e) { /* ignore malformed player chatter */ }
+  }
+
+  function onPlayerState(info) {
+    if (playerGen !== gen) return;
+    if (info === 1) { // actually playing - the only proof we accept
+      hasPlayed = true;
+      if (phase === 'awaiting' || phase === 'delay') maybeReveal(gen);
+    }
+    // Every other state (unstarted cued buffering paused ended) means "not
+    // demonstrably playing" - the readiness timeout bounds the wait.
   }
 
   /* ---------------- public state ---------------- */
@@ -496,12 +563,26 @@
     } catch (e) { /* keep current audio state on failure */ }
   }
 
+  /* The button exists only while playing (no countdown control anymore). */
   function controlActivate() {
-    if (phase === 'countdown' || phase === 'resolving' || phase === 'starting') {
-      cancelPending();
-      return;
-    }
     if (phase === 'playing') toggleMute();
+  }
+
+  /* Graceful leave (scroll-away): playback stops now, the still fades back.
+   * Everything else (tab-hide, route, hero change, failure) is immediate. */
+  function onHeroHidden() {
+    heroOnScreen = false;
+    gen++;
+    cancelDelay();
+    phase = 'idle';
+    trailerKey = '';
+    delayElapsed = false;
+    hasPlayed = false;
+    apiReady = false;
+    muted = true;
+    hideControl();
+    concealTrailer(true);
+    restoreBackdrop();
   }
 
   function defaultInfo(item) {
@@ -565,6 +646,8 @@
       void added;
     });
     on($('hero-trailer-btn'), controlActivate);
+    // Single global player-message listener (source-validated per event).
+    try { window.addEventListener('message', onPlayerMessage); } catch (e) { /* noop */ }
     // Navigation invalidates any pending trailer — never play across routes.
     // Auto-restart on return is limited to hero-owning routes so a stale hero
     // behind search/modals never self-starts a trailer.
@@ -599,7 +682,7 @@
           }
         } catch (e) { vis = false; }
         heroOnScreen = vis;
-        if (!vis) { stopTrailer(); return; }
+        if (!vis) { onHeroHidden(); return; }
         if (current && phase === 'idle' && !document.hidden) beginSequence();
       }, { threshold: [0, VISIBLE_RATIO, 1] });
       var h = heroEl();
@@ -629,7 +712,7 @@
 
   window.GreyboxHero = {
     TRAILER_DELAY_MS: TRAILER_DELAY_MS,
-    TRAILER_LOAD_TIMEOUT_MS: TRAILER_LOAD_TIMEOUT_MS,
+    TRAILER_READY_TIMEOUT_MS: TRAILER_READY_TIMEOUT_MS,
     configure: function (opts) {
       try {
         var d = opts && opts.delayMs != null ? parseInt(opts.delayMs, 10) : NaN;

@@ -1,9 +1,9 @@
-/* Greybox Phase 2 — cinematic dynamic hero (+ trailer lifecycle refinement).
+/* Greybox Phase 2 — cinematic dynamic hero (+ Phase 3 seamless trailer).
  * Consumes Phase 1 tokens (black / glass / amber). No red primary, no neon.
- * Backdrop: slow Ken Burns (100% → 106% + subtle drift). Trailer crossfades
- * over the still. Ambient layer reuses the same artwork (blurred, static).
- * Trailer control lives in the actions row: countdown ring → speaker icon.
- * Respects prefers-reduced-motion (no zoom/movement, coarse ring steps). */
+ * Backdrop: slow Ken Burns (100% → 106% + subtle drift). The trailer iframe
+ * buffers invisibly (visibility:hidden layer) and crossfades above the still
+ * only after the YouTube player confirms actual playback. Mute/unmute keeps
+ * its existing styling. Respects prefers-reduced-motion. */
 
 .gx-hero {
   position: relative;
@@ -90,6 +90,11 @@
 
 .gx-hero-trailer.is-visible { opacity: 1; }
 .gx-hero-trailer.hidden { display: none; }
+
+/* Buffering layer: in layout (so the iframe loads) but paints nothing.
+ * This is what makes the trailer Window-safe while it gets ready — no
+ * YouTube chrome, spinner, or error surface can flash through. */
+.gx-hero-trailer.is-buffering { visibility: hidden; }
 
 .gx-hero-trailer iframe {
   position: absolute;
@@ -249,40 +254,13 @@
 
 .gx-trailer-btn.hidden { display: none; }
 
-/* Progress ring (JS drives stroke-dashoffset; no CSS animation involved) */
-.gx-trailer-btn .gx-ring {
-  position: absolute;
-  inset: -1px;
-  width: calc(100% + 2px);
-  height: calc(100% + 2px);
-  transform: rotate(-90deg);
-}
-
-.gx-trailer-btn .gx-ring-track {
-  fill: none;
-  stroke: rgba(255, 255, 255, 0.16);
-  stroke-width: 2.5;
-}
-
-.gx-trailer-btn .gx-ring-fill {
-  fill: none;
-  stroke: var(--gx-accent);
-  stroke-width: 2.5;
-  stroke-linecap: round;
-  stroke-dasharray: 97.4;
-  stroke-dashoffset: 97.4;
-}
-
-/* State visibility: ring only while counting, one icon while playing */
+/* State visibility: icons only while playing (button hidden otherwise) */
 .gx-trailer-btn .gx-icon {
   width: 18px;
   height: 18px;
 }
 
-.gx-trailer-btn.is-countdown .gx-icon { display: none; }
-.gx-trailer-btn.is-muted .gx-ring,
 .gx-trailer-btn.is-muted .gx-icon-unmuted { display: none; }
-.gx-trailer-btn.is-unmuted .gx-ring,
 .gx-trailer-btn.is-unmuted .gx-icon-muted { display: none; }
 .gx-trailer-btn.is-muted .gx-icon-muted,
 .gx-trailer-btn.is-unmuted .gx-icon-unmuted { display: block; }
@@ -332,6 +310,4 @@
   .gx-hero-img,
   .gx-hero-trailer { transition: none; }
   .gx-btn:active { transform: none; }
-  /* Countdown ring is JS-driven in coarse steps under reduced motion. */
-  .gx-trailer-btn .gx-ring-fill { stroke-dasharray: 97.4; }
 }
