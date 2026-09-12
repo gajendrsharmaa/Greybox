@@ -35,6 +35,11 @@
   var fadeTimer = 0;
   var listenTimer = 0;
   var current = null;
+  // Media identity ("mt:id", e.g. "tv:1399") of the item whose text/backdrop
+  // is currently displayed. Backdrop/trailer async completions must match
+  // BOTH this identity and the generation — so a slow Moana response can
+  // never paint over Game of Thrones text (Title A + Backdrop B impossible).
+  var currentIdentity = null;
   var trailerKey = '';
   var phase = 'idle'; // idle | resolving | delay | playing | failed
   var delayElapsed = false;
@@ -80,7 +85,10 @@
   function mediaOf(item) {
     if (!item) return 'movie';
     if (item.media_type === 'tv' || item.media_type === 'movie') return item.media_type;
-    return item.title ? 'movie' : 'tv';
+    // Shaped items alias title/name on both media types: title alone would
+    // misclassify TV as movie (wrong trailer fetch/cache key/route). Well-
+    // formed items (media_type present) never reach this fallback.
+    return (item.title && !item.first_air_date) ? 'movie' : 'tv';
   }
 
   function validKey(k) {
@@ -261,7 +269,7 @@
     refreshListLabel();
   }
 
-  function loadBackdrop(item, myGen) {
+  function loadBackdrop(item, myGen, expectedIdentity) {
     var hero = heroEl();
     var img = $('hero-img');
     var ambient = $('hero-ambient');
@@ -276,11 +284,15 @@
       if (hero) hero.classList.remove('hero-loading');
       return;
     }
-    // Preload off-DOM: fade in only when ready, never a broken icon.
+    // Preload off-DOM: fade in only when ready, never a broken icon. The
+    // completion must still belong to the displayed media identity AND the
+    // generation — a stale/slow response for another item is dropped even if
+    // the generation somehow matches, so title and artwork can never split.
     var pre = new Image();
     pre.decoding = 'async';
     pre.onload = function () {
       if (myGen !== gen) return;
+      if (expectedIdentity == null || currentIdentity !== expectedIdentity) return;
       try {
         img.src = url;
         img.alt = '';
@@ -296,8 +308,10 @@
     };
     pre.onerror = function () {
       if (myGen !== gen) return;
+      if (expectedIdentity == null || currentIdentity !== expectedIdentity) return;
       try { if (hero) hero.classList.remove('hero-loading'); } catch (e) { /* noop */ }
-      // Stay on the dark placeholder — still a valid cinematic state.
+      // Stay on the dark placeholder — still a valid cinematic state. Never
+      // fall back to another media item's artwork.
     };
     try { pre.src = url; } catch (e) { /* noop */ }
   }
@@ -353,8 +367,10 @@
     if (document.hidden || !heroOnScreen) return;
     phase = 'resolving';
     var myGen = gen;
+    var expectedIdentity = currentIdentity;
     resolveTrailerKey(current).then(function (k) {
       if (myGen !== gen) return;
+      if (expectedIdentity == null || currentIdentity !== expectedIdentity) return;
       if (!k) { phase = 'failed'; hideControl(); return; } // no trailer → still, no indicator
       if (document.hidden || !heroOnScreen || overlayOpen()) { phase = 'idle'; hideControl(); return; }
       trailerKey = k;
@@ -534,8 +550,11 @@
     if (!item) return null;
     stopTrailer();
     current = item;
+    // Capture this item's identity synchronously with its text: every async
+    // artwork/trailer completion below must still match it before painting.
+    currentIdentity = cacheKey(item);
     setText(item);
-    loadBackdrop(item, gen);
+    loadBackdrop(item, gen, currentIdentity);
     beginSequence();
     try { window.dispatchEvent(new CustomEvent('greybox:hero', { detail: { id: item.id } })); } catch (e) { /* noop */ }
     return item;
@@ -546,6 +565,7 @@
     if (on) {
       stopTrailer();
       current = null;
+      currentIdentity = null;
       if (hero) { hero.classList.add('hero-loading'); hero.classList.remove('is-ready'); }
       var badge = $('hero-badge');
       var title = $('hero-title');
@@ -568,6 +588,15 @@
   function showError(message) {
     stopTrailer();
     current = null;
+    currentIdentity = null;
+    // Error text must never sit over another item's artwork: drop the still
+    // back to the dark placeholder (existing valid cinematic state).
+    try {
+      var staleImg = $('hero-img');
+      if (staleImg) { try { staleImg.removeAttribute('src'); } catch (e) { /* noop */ } }
+      var staleAmbient = $('hero-ambient');
+      if (staleAmbient) { try { staleAmbient.removeAttribute('src'); } catch (e) { /* noop */ } }
+    } catch (e) { /* noop */ }
     var hero = heroEl();
     if (hero) { hero.classList.remove('hero-loading'); hero.classList.remove('is-ready'); }
     var badge = $('hero-badge');
@@ -766,8 +795,9 @@
     debug: function () {
       return { phase: phase, apiReady: apiReady, hasPlayed: hasPlayed,
         delayElapsed: delayElapsed, asks: asks, loads: loads,
-        muted: muted, hasCurrent: !!current };
+        muted: muted, hasCurrent: !!current, identity: currentIdentity };
     },
+    getIdentity: function () { return currentIdentity; },
     isMuted: function () { return muted; },
     toggleMute: toggleMute,
     embedUrl: embedUrl,

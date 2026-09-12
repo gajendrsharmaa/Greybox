@@ -392,7 +392,10 @@
 
   // Renders a resolved collection as its own destination: compact cinematic
   // header (title, concise description, quiet meta) + the shared Phase-4 card
-  // catalog in Greybox config order.
+  // catalog in Greybox config order. Returns the hero item (first shown on a
+  // non-empty set) so the controller can keep hero actions bound to the
+  // displayed hero — mirroring renderList. Same object paints hero text and
+  // hero artwork, so title/poster/backdrop/metadata always share one identity.
   // ctx: { collection: {title, description, cover, source, meta}, items,
   //        filter: 'all'|'movie'|'tv' (default 'all'),
   //        onFilter(f): 'all'|'movie'|'tv', isInList(id, mt) }
@@ -429,7 +432,11 @@
     $('grid').innerHTML = c.cardsHTML(shown, ctx.isInList) ||
       `<div class="gx-empty col-span-full">${c.escapeHtml(COLLECTION_FILTER_EMPTY[filter] || 'No titles available in this collection right now.')}</div>`;
     clearCollectionMore();
-    if (shown[0]) c.setHero(shown[0]);
+    // Hero text + artwork come from this same object (single identity). An
+    // empty filtered set leaves the previous hero untouched (no split state);
+    // the return value lets the controller bind hero actions to it.
+    if (shown[0]) { c.setHero(shown[0]); return shown[0]; }
+    return null;
   }
 
   /* ---------------- Phase 5.4: progressive collection pagination ----------------
@@ -546,6 +553,15 @@
     c.clearHeroLoading();
     $('hero-badge').textContent = '404';
     $('hero-title').textContent = 'That URL does not exist';
+    // Non-media state: drop any previous item's artwork so the 404 text can
+    // never appear over another title's backdrop (identity split). The dark
+    // placeholder underneath remains a valid state.
+    try {
+      const hi = $('hero-img');
+      if (hi) { try { hi.removeAttribute('src'); } catch (e) { /* noop */ } }
+      const ha = $('hero-ambient');
+      if (ha) { try { ha.removeAttribute('src'); } catch (e) { /* noop */ } }
+    } catch (e) { /* hero optional in headless use */ }
     c.setPageLabel(1);
   }
 

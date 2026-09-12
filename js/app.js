@@ -253,18 +253,20 @@
     }
   }
 
-  // Dedupe key: media_type + TMDB id (a movie and a TV item stay distinct).
-  // Mirrors the card fallback (title-bearing items read as movies) so the
-  // accumulated set matches what cards would route to.
+  // Dedupe key: media_type + TMDB id (a movie and a TV item stay distinct,
+  // e.g. tv:1399 vs movie:1399). Shaped items alias title/name on both media
+  // types, so the title-only fallback would miskey a TV-shaped object missing
+  // media_type as a movie — first_air_date disambiguates, mirroring the card
+  // fallback so the accumulated set still matches what cards route to.
   function collectionItemKey(item) {
     const mt = (item && (item.media_type === 'movie' || item.media_type === 'tv'))
-      ? item.media_type : ((item && item.title) ? 'movie' : 'tv');
+      ? item.media_type : ((item && item.title && !(item && item.first_air_date)) ? 'movie' : 'tv');
     return mt + ':' + (item && item.id);
   }
 
   function shapeCollectionItem(item) {
     const mt = (item && (item.media_type === 'movie' || item.media_type === 'tv'))
-      ? item.media_type : ((item && item.title) ? 'movie' : 'tv');
+      ? item.media_type : ((item && item.title && !(item && item.first_air_date)) ? 'movie' : 'tv');
     return { ...item, media_type: mt };
   }
 
@@ -286,11 +288,16 @@
   }
 
   function renderCollectionView(view) {
-    Pages.renderCollection({
+    // renderCollection returns the exact item it painted as hero (or null
+    // when the filtered set is empty and the previous hero stays). Binding
+    // heroItem to it keeps hero Watch/Info/List actions on the displayed
+    // media identity instead of a stale previous card.
+    const hero = Pages.renderCollection({
       collection: view.col, items: view.items, filter: view.filter,
       onFilter: collectionFilterNav,
       isInList: (id, mt) => Data.isInMyList(id, mt),
     });
+    if (hero) heroItem = hero;
     if (R) document.title = `${view.col.title} — Greybox`;
     hasLoadedList = true;
   }
@@ -997,7 +1004,7 @@
   // Hero actions (Phase 2): Watch uses the existing Stream behavior for movies
   // (direct embed when configured) and falls back to the detail route;
   // More Info always uses the existing movie/TV detail route. No route changes.
-  function heroMedia(item) { return item.media_type || (item.title ? 'movie' : 'tv'); }
+  function heroMedia(item) { return item.media_type || ((item.title && !item.first_air_date) ? 'movie' : 'tv'); }
   function watchHeroItem(item) {
     const mt = heroMedia(item);
     try {

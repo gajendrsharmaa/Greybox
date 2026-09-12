@@ -646,7 +646,7 @@
         page: d.page, total_pages: d.total_pages,
         results: media === 'all'
           ? (d.results || [])
-          : (d.results || []).filter((x) => (x.media_type || (x.title ? 'movie' : 'tv')) === media),
+          : (d.results || []).filter((x) => (x.media_type || ((x.title && !x.first_air_date) ? 'movie' : 'tv')) === media),
       })), cap).then((results) => ({ results }));
     }
     if (src.type === 'popular') {
@@ -722,7 +722,7 @@
         page: d.page, total_pages: d.total_pages,
         results: media === 'all'
           ? (d.results || [])
-          : (d.results || []).filter((x) => (x.media_type || (x.title ? 'movie' : 'tv')) === media),
+          : (d.results || []).filter((x) => (x.media_type || ((x.title && !x.first_air_date) ? 'movie' : 'tv')) === media),
       }));
     }
     if (src.type === 'popular') {
@@ -797,10 +797,10 @@
       ? resolveIdItems(c.pin)
       : Promise.resolve([]);
     return Promise.all([pins, fetchCollectionBasePage(c.source, p)]).then(([pinned, d]) => {
-      const seen = new Set(pinned.map((x) => itemKey(x.media_type || (x.title ? 'movie' : 'tv'), x.id)));
+      const seen = new Set(pinned.map((x) => itemKey(x.media_type || ((x.title && !x.first_air_date) ? 'movie' : 'tv'), x.id)));
       const items = [...pinned];
       for (const x of (d.results || [])) {
-        const mt = x.media_type || (x.title ? 'movie' : 'tv');
+        const mt = x.media_type || ((x.title && !x.first_air_date) ? 'movie' : 'tv');
         if (seen.has(itemKey(mt, x.id))) continue;
         if (isExcluded({ media: mt, id: x.id }, c.exclude || [])) continue;
         seen.add(itemKey(mt, x.id));
@@ -832,10 +832,10 @@
       ? resolveIdItems(c.pin)
       : Promise.resolve([]);
     return Promise.all([pins, base]).then(([pinned, d]) => {
-      const seen = new Set(pinned.map((x) => itemKey(x.media_type || (x.title ? 'movie' : 'tv'), x.id)));
+      const seen = new Set(pinned.map((x) => itemKey(x.media_type || ((x.title && !x.first_air_date) ? 'movie' : 'tv'), x.id)));
       const items = [...pinned];
       for (const x of (d.results || [])) {
-        const mt = x.media_type || (x.title ? 'movie' : 'tv');
+        const mt = x.media_type || ((x.title && !x.first_air_date) ? 'movie' : 'tv');
         if (seen.has(itemKey(mt, x.id))) continue;
         if (isExcluded({ media: mt, id: x.id }, c.exclude || [])) continue;
         seen.add(itemKey(mt, x.id));
@@ -921,9 +921,13 @@
   // receive the final object without knowing any value's source.
   function applyOverrides(item, fallbackMedia) {
     if (!item || typeof item !== 'object') return item;
+    // Identity fallback: shaped items alias title/name on both media types,
+    // so title alone cannot distinguish them — a TV-shaped object missing
+    // media_type must not be miskeyed as movie:id (wrong override artwork
+    // grafted onto another identity). first_air_date disambiguates.
     const media = item.media_type === 'tv' || item.media_type === 'movie' ? item.media_type
       : (fallbackMedia === 'tv' || fallbackMedia === 'movie' ? fallbackMedia
-      : (item.title ? 'movie' : 'tv'));
+      : ((item.title && !item.first_air_date) ? 'movie' : 'tv'));
     const o = getOverride(media, item.id);
     if (!o) return item;
     const out = { ...item, media_type: media };

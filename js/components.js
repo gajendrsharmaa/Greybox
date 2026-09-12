@@ -24,7 +24,11 @@
   // img, .font-semibold (title lookup), .list-btn + its data attrs (the star
   // character stays the button's sole content so the toggle keeps working).
   function card(item, inList) {
-    const mt = item.media_type || (item.title ? 'movie' : 'tv');
+    // Shaped items alias title/name on both media types, so title alone would
+    // misroute a TV-shaped object missing media_type to /movie/:id (wrong
+    // identity). first_air_date disambiguates; well-formed items (media_type
+    // present) are unaffected.
+    const mt = item.media_type || ((item.title && !item.first_air_date) ? 'movie' : 'tv');
     const title = item.title || item.name || 'Untitled';
     const date = item.release_date || item.first_air_date || '';
     const year = date ? date.slice(0, 4) : '';
@@ -49,7 +53,7 @@
   function cardsHTML(items, isInList) {
     const list = Array.isArray(items) ? items : [];
     const fn = typeof isInList === 'function' ? isInList : () => false;
-    return list.map((item) => card(item, !!fn(item.id, item.media_type || (item.title ? 'movie' : 'tv')))).join('');
+    return list.map((item) => card(item, !!fn(item.id, item.media_type || ((item.title && !item.first_air_date) ? 'movie' : 'tv')))).join('');
   }
 
   // Phase 5.5 unified discovery link: ONE reusable control for every
