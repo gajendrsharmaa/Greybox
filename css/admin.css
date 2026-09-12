@@ -44,6 +44,12 @@ textarea.input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; re
 
 /* ---------- connect ---------- */
 #admin-connect-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 2rem 1rem; }
+/* Auth-state visibility must not depend on Tailwind CDN cascade order:
+   the ID selector above (1,0,0) beats `.hidden` (0,1,0), so without these
+   rules the connect panel stays in layout after login. display:none
+   genuinely removes the inactive view from layout. */
+#admin-connect-wrap.hidden,
+#admin-app.hidden { display: none; }
 .connect-card { width: 100%; max-width: 28rem; background: var(--gx-surface); border: 1px solid var(--gx-border); border-radius: 1rem; padding: 1.75rem; box-shadow: var(--gx-shadow-pop); }
 .connect-brand { display: flex; align-items: center; gap: .75rem; margin-bottom: 1rem; }
 .connect-eyebrow { font-size: .68rem; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; color: var(--gx-text-faint); }
