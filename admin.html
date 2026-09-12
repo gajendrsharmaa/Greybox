@@ -3,105 +3,302 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Greybox Admin — Control Panel</title>
-<meta name="description" content="Greybox admin control panel. Manage homepage sections, collections, metadata overrides and settings." />
+<title>Greybox Admin — Control Center</title>
+<meta name="description" content="Greybox Control Center. Manage homepage sections, collections, metadata overrides and settings." />
 <meta name="robots" content="noindex, nofollow" />
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
 tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a12' } } } }
 </script>
+<link rel="stylesheet" href="/css/tokens.css" />
 <link rel="stylesheet" href="/css/style.css" />
+<link rel="stylesheet" href="/css/admin.css" />
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 </head>
-<body class="bg-[#0a0a12] text-zinc-100 min-h-screen">
-<!-- ADMIN NAV (isolated from the public site: no shared JS, no router) -->
-<header class="sticky top-0 z-40 backdrop-blur bg-[#0a0a12]/85 border-b border-amber-500/30">
-  <div class="max-w-5xl mx-auto px-4 py-3 flex items-center gap-3">
-    <img src="/favicon.svg" alt="Greybox" class="w-8 h-8" />
-    <span class="text-xl font-black tracking-tight">Greybox</span>
-    <span class="text-xs font-bold uppercase tracking-widest bg-amber-500/15 text-amber-300 border border-amber-500/40 rounded px-2 py-0.5">Admin</span>
-    <div class="flex-1"></div>
-    <a href="/" class="text-sm text-zinc-300 hover:text-white">← Public site</a>
-    <button id="admin-disconnect" class="hidden text-sm bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg">Disconnect</button>
-  </div>
-  <nav id="admin-tabs" class="hidden max-w-5xl mx-auto px-4 pb-3 flex gap-2 text-sm overflow-x-auto">
-    <button data-atab="sections" class="atab px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 whitespace-nowrap">Home sections</button>
-    <button data-atab="collections" class="atab px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 whitespace-nowrap">Collections</button>
-    <button data-atab="overrides" class="atab px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 whitespace-nowrap">Overrides</button>
-    <button data-atab="search" class="atab px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 whitespace-nowrap">TMDB Search</button>
-    <button data-atab="settings" class="atab px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 whitespace-nowrap">Settings</button>
-  </nav>
-</header>
+<body class="gx-admin">
+<a class="skip-link" href="#admin-main">Skip to content</a>
 
-<main class="max-w-5xl mx-auto px-4 pb-24">
-  <div id="admin-notice" class="mt-6 text-sm rounded-xl p-4 hidden"></div>
-
-  <!-- CONNECT: token lives in page memory only (a JS variable). It is never
-       written to source, localStorage, sessionStorage, cookies, D1, or the URL. -->
-  <section id="admin-connect" class="mt-8 max-w-lg">
-    <h1 class="text-2xl font-black">Admin sign-in</h1>
-    <p class="mt-2 text-sm text-zinc-400">Paste the <code>GREYBOX_ADMIN_TOKEN</code> server secret to manage Greybox-owned data. It stays in this page's memory only — reload or Disconnect forgets it. Nothing is stored in your browser.</p>
-    <label class="block mt-4 text-xs text-zinc-400" for="admin-token">Admin token</label>
-    <input id="admin-token" type="password" autocomplete="off" placeholder="Paste token…" class="mt-1 w-full bg-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 ring-amber-500" />
-    <div class="mt-3 flex gap-2">
-      <button id="admin-connect-btn" class="bg-amber-500 hover:bg-amber-400 text-black px-5 py-2 rounded-lg font-bold text-sm">Connect</button>
+<!-- CONNECT VIEW (pre-auth): token lives in page memory only, never persisted -->
+<div id="admin-connect-wrap">
+  <div class="connect-card" role="dialog" aria-modal="false" aria-labelledby="connect-title">
+    <div class="connect-brand">
+      <img src="/favicon.svg" alt="Greybox" class="w-9 h-9" />
+      <div>
+        <p class="connect-eyebrow">Greybox</p>
+        <h1 id="connect-title" class="connect-title">Control Center</h1>
+      </div>
+      <span class="badge badge-soon">Admin</span>
     </div>
-    <div id="admin-connect-error" class="mt-3 text-sm text-red-300 hidden"></div>
-    <p class="mt-4 text-xs text-zinc-500">No token configured on the server? Ask the site operator to set the <code>GREYBOX_ADMIN_TOKEN</code> Pages secret (see README §5). Until then every request fails closed with 401.</p>
-  </section>
-
-  <!-- DASHBOARD -->
-  <div id="admin-dash" class="hidden">
-    <section id="apanel-sections" class="apanel mt-8">
-      <div class="flex items-end justify-between mb-3">
-        <h2 class="text-xl font-bold">Home sections</h2>
-        <button id="sec-refresh" class="text-sm bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg">Refresh</button>
-      </div>
-      <div id="sec-list" class="grid gap-3"></div>
-      <h3 class="mt-6 font-bold" id="sec-form-title">New section</h3>
-      <form id="sec-form" class="mt-2 grid gap-3 bg-white/5 border border-white/10 rounded-2xl p-4" autocomplete="off"></form>
-    </section>
-
-    <section id="apanel-collections" class="apanel mt-8 hidden">
-      <div class="flex items-end justify-between mb-3">
-        <h2 class="text-xl font-bold">Collections</h2>
-        <button id="col-refresh" class="text-sm bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg">Refresh</button>
-      </div>
-      <div id="col-list" class="grid gap-3"></div>
-      <h3 class="mt-6 font-bold" id="col-form-title">New collection</h3>
-      <form id="col-form" class="mt-2 grid gap-3 bg-white/5 border border-white/10 rounded-2xl p-4" autocomplete="off"></form>
-    </section>
-
-    <section id="apanel-overrides" class="apanel mt-8 hidden">
-      <div class="flex items-end justify-between mb-3">
-        <h2 class="text-xl font-bold">Metadata overrides</h2>
-        <button id="ov-refresh" class="text-sm bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg">Refresh</button>
-      </div>
-      <div id="ov-list" class="grid gap-3"></div>
-      <h3 class="mt-6 font-bold" id="ov-form-title">New override</h3>
-      <form id="ov-form" class="mt-2 grid gap-3 bg-white/5 border border-white/10 rounded-2xl p-4" autocomplete="off"></form>
-    </section>
-
-    <section id="apanel-search" class="apanel mt-8 hidden">
-      <div class="flex items-end justify-between mb-3">
-        <h2 class="text-xl font-bold">TMDB Search</h2>
-      </div>
-      <form id="tmdb-search-form" class="grid gap-3 bg-white/5 border border-white/10 rounded-2xl p-4" autocomplete="off"></form>
-      <div id="tmdb-search-list" class="grid gap-3 mt-3"></div>
-    </section>
-
-    <section id="apanel-settings" class="apanel mt-8 hidden">
-      <h2 class="text-xl font-bold mb-3">Settings — homepage hero</h2>
-      <form id="hero-form" class="grid gap-3 bg-white/5 border border-white/10 rounded-2xl p-4" autocomplete="off"></form>
-    </section>
+    <p class="connect-desc">Paste the <code>GREYBOX_ADMIN_TOKEN</code> server secret to manage Greybox-owned data. It stays in this page's memory only — reload or Disconnect forgets it. Nothing is stored in your browser.</p>
+    <label class="field-label" for="admin-token">Admin token</label>
+    <input id="admin-token" type="password" autocomplete="off" placeholder="Paste token…" class="input" />
+    <div class="connect-actions">
+      <button id="admin-connect-btn" class="btn btn-primary">Connect</button>
+      <a href="/" class="btn btn-ghost">← Public site</a>
+    </div>
+    <div id="admin-connect-error" class="form-error hidden" role="alert"></div>
+    <p class="connect-foot">No token configured on the server? Ask the site operator to set the <code>GREYBOX_ADMIN_TOKEN</code> Pages secret (see README §5). Until then every request fails closed with 401.</p>
   </div>
-</main>
+</div>
 
-<footer class="border-t border-white/10 text-center text-xs text-zinc-500 py-8 px-4">
-  Greybox Admin — changes apply to the live site on save.<br/>
-  <a href="/" class="hover:text-white underline">Back to public site</a>
-</footer>
+<!-- APP SHELL (post-auth) -->
+<div id="admin-app" class="admin-shell hidden">
+  <!-- Mobile top strip -->
+  <div class="mobile-bar">
+    <button id="nav-toggle" class="btn btn-ghost btn-sm" aria-label="Open navigation" aria-expanded="false" aria-controls="admin-sidebar">☰ Menu</button>
+    <span class="mobile-brand"><img src="/favicon.svg" alt="" class="w-5 h-5" /> Greybox <span class="badge badge-soon">Admin</span></span>
+    <a href="/" class="btn btn-ghost btn-sm">← Site</a>
+  </div>
 
-<script src="/js/admin.js?v=2"></script>
+  <!-- SIDEBAR -->
+  <aside id="admin-sidebar" class="admin-sidebar" aria-label="Admin navigation">
+    <div class="side-brand">
+      <img src="/favicon.svg" alt="Greybox" class="w-8 h-8" />
+      <div class="side-brand-text">
+        <span class="side-name">Greybox</span>
+        <span class="side-sub">Control Center</span>
+      </div>
+      <span class="badge badge-soon">Admin</span>
+    </div>
+
+    <nav id="admin-nav" class="side-nav">
+      <p class="nav-group">Overview</p>
+      <button class="nav-item is-active" data-view="dashboard" aria-current="page"><span class="nav-dot" aria-hidden="true"></span>Dashboard</button>
+      <button class="nav-item is-disabled" data-view="activity" disabled aria-disabled="true" title="Coming soon — Part 1+"><span class="nav-dot" aria-hidden="true"></span>Activity<span class="badge badge-soon">Soon</span></button>
+
+      <p class="nav-group">Content</p>
+      <button class="nav-item" data-view="sections"><span class="nav-dot" aria-hidden="true"></span>Home Sections</button>
+      <button class="nav-item is-disabled" data-view="heroes" disabled aria-disabled="true" title="Coming soon — full hero editor is a later increment"><span class="nav-dot" aria-hidden="true"></span>Heroes<span class="badge badge-soon">Soon</span></button>
+      <button class="nav-item" data-view="collections"><span class="nav-dot" aria-hidden="true"></span>Collections</button>
+      <button class="nav-item" data-view="overrides"><span class="nav-dot" aria-hidden="true"></span>Overrides</button>
+      <button class="nav-item is-disabled" data-view="blocked" disabled aria-disabled="true" title="Coming soon — permanent blocklist is a later increment"><span class="nav-dot" aria-hidden="true"></span>Blocked Titles<span class="badge badge-soon">Soon</span></button>
+      <button class="nav-item" data-view="search"><span class="nav-dot" aria-hidden="true"></span>TMDB Search</button>
+      <button class="nav-item" data-view="picks"><span class="nav-dot" aria-hidden="true"></span>Greybox Picks</button>
+
+      <p class="nav-group">Experience</p>
+      <button class="nav-item is-disabled" disabled aria-disabled="true" title="Coming soon"><span class="nav-dot" aria-hidden="true"></span>Navigation<span class="badge badge-soon">Soon</span></button>
+      <button class="nav-item is-disabled" disabled aria-disabled="true" title="Coming soon"><span class="nav-dot" aria-hidden="true"></span>Detail Pages<span class="badge badge-soon">Soon</span></button>
+      <button class="nav-item is-disabled" disabled aria-disabled="true" title="Coming soon"><span class="nav-dot" aria-hidden="true"></span>Playback<span class="badge badge-soon">Soon</span></button>
+
+      <p class="nav-group">Appearance</p>
+      <button class="nav-item is-disabled" disabled aria-disabled="true" title="Coming soon"><span class="nav-dot" aria-hidden="true"></span>Branding<span class="badge badge-soon">Soon</span></button>
+      <button class="nav-item is-disabled" disabled aria-disabled="true" title="Coming soon"><span class="nav-dot" aria-hidden="true"></span>Theme<span class="badge badge-soon">Soon</span></button>
+      <button class="nav-item is-disabled" disabled aria-disabled="true" title="Coming soon"><span class="nav-dot" aria-hidden="true"></span>Components<span class="badge badge-soon">Soon</span></button>
+
+      <p class="nav-group">Site</p>
+      <button class="nav-item is-disabled" disabled aria-disabled="true" title="Coming soon"><span class="nav-dot" aria-hidden="true"></span>Footer<span class="badge badge-soon">Soon</span></button>
+      <button class="nav-item is-disabled" disabled aria-disabled="true" title="Coming soon"><span class="nav-dot" aria-hidden="true"></span>SEO / Metadata<span class="badge badge-soon">Soon</span></button>
+
+      <p class="nav-group">System</p>
+      <button class="nav-item" data-view="settings"><span class="nav-dot" aria-hidden="true"></span>General Settings</button>
+      <button class="nav-item is-disabled" disabled aria-disabled="true" title="Coming soon"><span class="nav-dot" aria-hidden="true"></span>Integrations<span class="badge badge-soon">Soon</span></button>
+      <button class="nav-item is-disabled" disabled aria-disabled="true" title="Coming soon"><span class="nav-dot" aria-hidden="true"></span>Cache / Refresh<span class="badge badge-soon">Soon</span></button>
+      <button class="nav-item is-disabled" disabled aria-disabled="true" title="Coming soon"><span class="nav-dot" aria-hidden="true"></span>Diagnostics<span class="badge badge-soon">Soon</span></button>
+    </nav>
+
+    <div class="side-foot">
+      <div id="conn-pill" class="conn-pill" role="status"><span class="conn-dot" aria-hidden="true"></span><span id="conn-text">Disconnected</span></div>
+      <div class="side-foot-row">
+        <a href="/" class="btn btn-ghost btn-sm">← Public site</a>
+        <button id="admin-disconnect" class="btn btn-ghost btn-sm">Disconnect</button>
+      </div>
+    </div>
+  </aside>
+  <div id="nav-scrim" class="nav-scrim hidden" aria-hidden="true"></div>
+
+  <!-- MAIN -->
+  <div class="admin-main-col">
+    <header class="topbar">
+      <nav class="crumbs" aria-label="Breadcrumb"><span id="crumb-section">Dashboard</span><span class="crumb-sep" aria-hidden="true">/</span><span id="crumb-sub" class="crumb-sub">Overview</span></nav>
+      <div class="topbar-actions">
+        <label class="cmdk" title="Global command search — foundation only, coming in a later increment">
+          <span aria-hidden="true">⌘K</span>
+          <input type="text" placeholder="Search admin… (soon)" disabled aria-disabled="true" />
+        </label>
+        <span id="env-pill" class="badge badge-env" title="Environment">Local / Pages</span>
+        <button id="top-disconnect" class="btn btn-ghost btn-sm">Disconnect</button>
+      </div>
+    </header>
+
+    <main id="admin-main" class="admin-main" tabindex="-1">
+      <div id="admin-notice" class="notice hidden" role="status"></div>
+
+      <!-- DASHBOARD -->
+      <section id="view-dashboard" class="admin-view" aria-labelledby="dash-title">
+        <div class="page-head">
+          <div>
+            <h1 id="dash-title" class="page-title">Greybox Control Center</h1>
+            <p class="page-desc">Live configuration state from the existing management API. Create, edit and reorder homepage content — everything saves to the same endpoints as before.</p>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-primary btn-sm" data-quick-new="section">+ New Section</button>
+            <button class="btn btn-secondary btn-sm" data-quick-new="collection">+ New Collection</button>
+            <button class="btn btn-secondary btn-sm" data-quick-new="override">+ New Override</button>
+          </div>
+        </div>
+        <div id="dash-cards" class="stat-grid" aria-live="polite"></div>
+        <div class="dash-grid">
+          <div class="panel">
+            <div class="panel-head"><h2>Current configuration</h2><button class="btn btn-ghost btn-sm" id="dash-refresh">Refresh</button></div>
+            <div id="dash-config"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h2>Quick actions</h2></div>
+            <div class="quick-grid">
+              <button class="quick-card" data-quick-new="section"><strong>+ New Section</strong><span>Add a homepage shelf</span></button>
+              <button class="quick-card" data-quick-new="collection"><strong>+ New Collection</strong><span>Add a rule-based row</span></button>
+              <button class="quick-card" data-quick-new="override"><strong>+ New Override</strong><span>Fix a title's metadata</span></button>
+              <button class="quick-card" data-goto="search"><strong>Search TMDB</strong><span>Find movies &amp; TV</span></button>
+            </div>
+            <div class="panel-head" style="margin-top:1rem"><h2>Roadmap</h2></div>
+            <p class="muted text-sm">Heroes, Blocked Titles, Navigation, Footer, SEO, Integrations and Diagnostics are scaffolded in the sidebar as <span class="badge badge-soon">Soon</span> — they become real editors in later increments. No placeholder controls were added.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- SECTIONS -->
+      <section id="view-sections" class="admin-view hidden" aria-labelledby="sec-title">
+        <div class="page-head">
+          <div>
+            <h1 id="sec-title" class="page-title">Home Sections</h1>
+            <p class="page-desc">Shelves on the homepage, in display order. Editing never destroys list context — it opens an editor drawer.</p>
+          </div>
+          <div class="page-actions">
+            <button id="sec-new" class="btn btn-primary btn-sm">+ New Section</button>
+            <button id="sec-refresh" class="btn btn-secondary btn-sm">Refresh</button>
+          </div>
+        </div>
+        <div class="toolbar" role="search">
+          <input id="sec-search" class="input" type="search" placeholder="Search sections…" aria-label="Search sections" autocomplete="off" />
+          <select id="sec-filter" class="input input-select" aria-label="Filter sections by visibility">
+            <option value="all">All statuses</option>
+            <option value="visible">Visible</option>
+            <option value="hidden">Hidden</option>
+          </select>
+        </div>
+        <div id="sec-list" class="row-list"></div>
+      </section>
+
+      <!-- COLLECTIONS -->
+      <section id="view-collections" class="admin-view hidden" aria-labelledby="col-title">
+        <div class="page-head">
+          <div>
+            <h1 id="col-title" class="page-title">Collections</h1>
+            <p class="page-desc">Rule-based rows behind <code>/collection/:slug</code>. Use the editor drawer to create or edit — no scrolling past the list.</p>
+          </div>
+          <div class="page-actions">
+            <button id="col-new" class="btn btn-primary btn-sm">+ New Collection</button>
+            <button id="col-refresh" class="btn btn-secondary btn-sm">Refresh</button>
+          </div>
+        </div>
+        <div class="toolbar" role="search">
+          <input id="col-search" class="input" type="search" placeholder="Search collections…" aria-label="Search collections" autocomplete="off" />
+          <select id="col-filter" class="input input-select" aria-label="Filter collections by visibility">
+            <option value="all">All statuses</option>
+            <option value="visible">Visible</option>
+            <option value="hidden">Hidden</option>
+          </select>
+        </div>
+        <div id="col-list" class="row-list"></div>
+      </section>
+
+      <!-- OVERRIDES -->
+      <section id="view-overrides" class="admin-view hidden" aria-labelledby="ov-title">
+        <div class="page-head">
+          <div>
+            <h1 id="ov-title" class="page-title">Metadata Overrides</h1>
+            <p class="page-desc">Explicit per-title fixes. Anything absent falls back to live TMDB data.</p>
+          </div>
+          <div class="page-actions">
+            <button id="ov-new" class="btn btn-primary btn-sm">+ New Override</button>
+            <button id="ov-refresh" class="btn btn-secondary btn-sm">Refresh</button>
+          </div>
+        </div>
+        <div class="toolbar" role="search">
+          <input id="ov-search" class="input" type="search" placeholder="Search media:id or field…" aria-label="Search overrides" autocomplete="off" />
+          <select id="ov-filter" class="input input-select" aria-label="Filter overrides">
+            <option value="all">All overrides</option>
+            <option value="picks">★ Greybox Picks</option>
+            <option value="movie">Movies</option>
+            <option value="tv">TV</option>
+          </select>
+        </div>
+        <div id="ov-list" class="row-list"></div>
+      </section>
+
+      <!-- PICKS (read view over existing overrides — no new backend) -->
+      <section id="view-picks" class="admin-view hidden" aria-labelledby="picks-title">
+        <div class="page-head">
+          <div>
+            <h1 id="picks-title" class="page-title">Greybox Picks</h1>
+            <p class="page-desc">Titles marked <span class="badge badge-pick">★ Greybox Pick</span> via the existing overrides (<code>featured + custom_badge</code>). No new database — toggling here calls the same overrides API.</p>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-secondary btn-sm" data-goto="overrides">Manage overrides</button>
+            <button class="btn btn-secondary btn-sm" data-goto="search">Find titles</button>
+          </div>
+        </div>
+        <div id="picks-list" class="row-list"></div>
+      </section>
+
+      <!-- SEARCH -->
+      <section id="view-search" class="admin-view hidden" aria-labelledby="search-title">
+        <div class="page-head">
+          <div>
+            <h1 id="search-title" class="page-title">TMDB Search</h1>
+            <p class="page-desc">Operator helper over the existing public <code>/api/tmdb</code> proxy. Actions reuse collections + overrides only.</p>
+          </div>
+        </div>
+        <form id="tmdb-search-form" class="panel form-panel" autocomplete="off"></form>
+        <div id="tmdb-search-list" class="row-list" style="margin-top:1rem"></div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section id="view-settings" class="admin-view hidden" aria-labelledby="settings-title">
+        <div class="page-head">
+          <div>
+            <h1 id="settings-title" class="page-title">General Settings</h1>
+            <p class="page-desc">Homepage hero behavior. The full Heroes studio arrives later — this preserves the existing hero controls exactly.</p>
+          </div>
+        </div>
+        <form id="hero-form" class="panel form-panel" autocomplete="off"></form>
+      </section>
+
+      <!-- PLACEHOLDER for disabled/soon views (never linked from enabled nav) -->
+      <section id="view-soon" class="admin-view hidden" aria-labelledby="soon-title">
+        <div class="page-head"><div><h1 id="soon-title" class="page-title">Coming soon</h1><p class="page-desc">This area is scaffolded for a later increment. No placeholder controls were added on purpose.</p></div></div>
+        <div class="empty"><p class="empty-title">Not built yet</p><p class="empty-desc">Part 0 only ships Dashboard, Home Sections, Collections, Overrides, Greybox Picks, TMDB Search and General Settings.</p><button class="btn btn-secondary btn-sm" data-goto="dashboard">Back to Dashboard</button></div>
+      </section>
+    </main>
+
+    <footer class="admin-foot">Greybox Admin — changes apply to the live site on save. <a href="/">Back to public site</a></footer>
+  </div>
+</div>
+
+<!-- EDITOR DRAWER (reusable surface for Sections / Collections / Overrides) -->
+<div id="drawer-scrim" class="drawer-scrim hidden" aria-hidden="true"></div>
+<div id="editor-drawer" class="drawer hidden" role="dialog" aria-modal="true" aria-labelledby="drawer-title" aria-hidden="true">
+  <div class="drawer-head">
+    <div><p id="drawer-kicker" class="drawer-kicker">Editor</p><h2 id="drawer-title" class="drawer-title">New item</h2><p id="drawer-sub" class="drawer-sub"></p></div>
+    <button id="drawer-close" class="btn btn-ghost btn-sm" aria-label="Close editor (Escape)">✕ Close</button>
+  </div>
+  <div id="drawer-body" class="drawer-body"></div>
+  <div id="drawer-dirty" class="savebar hidden" role="status">
+    <span>Unsaved changes</span>
+    <span class="savebar-actions"><button id="drawer-discard" class="btn btn-ghost btn-sm">Discard</button><button id="drawer-save" class="btn btn-primary btn-sm">Save Changes</button></span>
+  </div>
+</div>
+
+<!-- CONFIRM DIALOG -->
+<div id="confirm-scrim" class="drawer-scrim hidden" aria-hidden="true"></div>
+<div id="confirm-dialog" class="confirm hidden" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-desc" aria-hidden="true">
+  <h2 id="confirm-title" class="confirm-title">Are you sure?</h2>
+  <p id="confirm-desc" class="confirm-desc"></p>
+  <div class="confirm-actions"><button id="confirm-cancel" class="btn btn-secondary btn-sm">Cancel</button><button id="confirm-ok" class="btn btn-danger btn-sm">Delete</button></div>
+</div>
+
+<div id="toast-root" class="toast-root" aria-live="polite" aria-atomic="false"></div>
+
+<script src="/js/admin.js?v=3"></script>
 </body>
 </html>

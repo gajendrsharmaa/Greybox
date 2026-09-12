@@ -1,6 +1,6 @@
-/* Greybox Admin Control Panel — vanilla JS, no framework, no router.
+/* Greybox Admin Control Center (Part 0) — vanilla JS, no framework, no router.
  *
- * AUTH MODEL (read carefully): the operator pastes the GREYBOX_ADMIN_TOKEN
+ * AUTH MODEL (unchanged): the operator pastes the GREYBOX_ADMIN_TOKEN
  * server secret into the connect screen. It lives ONLY in the `ADMIN_TOKEN`
  * variable below — plain page memory for the lifetime of this tab. It is
  * NEVER written to source code, localStorage, sessionStorage, cookies, D1,
@@ -10,10 +10,14 @@
  * session store exists (and none is needed: adding one would only create
  * CSRF/session-fixation surface for a single-operator tool).
  *
- * The panel talks ONLY to the protected management API from Step 9 and the
- * public read API for verification links. It never touches D1 directly and
- * contains no SQL. After every mutation it re-reads from the API instead of
- * assuming success.
+ * The panel talks ONLY to the protected management API and the public read
+ * API for verification links. It never touches D1 directly and contains no
+ * SQL. After every mutation it re-reads from the API instead of assuming
+ * success.
+ *
+ * PART 0 shell: sidebar navigation, dashboard, editor drawer, compact rows,
+ * toasts + confirm dialog primitives. All CRUD/validation logic below is
+ * preserved from the previous panel — only presentation moved.
  */
 (function () {
   'use strict';
@@ -62,49 +66,211 @@
     return data;
   }
 
-  /* ---------------- status + tabs ---------------- */
+  /* ---------------- toast + notice primitives ---------------- */
+  function toast(kind, text) {
+    try {
+      const root = $('toast-root');
+      if (!root) return;
+      const t = document.createElement('div');
+      t.className = 'toast ' + (kind === 'ok' ? 'ok' : 'err');
+      t.textContent = String(text == null ? '' : text);
+      root.appendChild(t);
+      while (root.children.length > 4) root.removeChild(root.firstChild);
+      setTimeout(() => { try { if (t.isConnected) t.remove(); } catch { /* noop */ } }, kind === 'ok' ? 5000 : 8000);
+    } catch { /* toast must never break flows */ }
+  }
+
   let noticeTimer = 0;
   function notice(kind, text) {
     const n = $('admin-notice');
-    if (!n) return;
+    if (!n) { toast(kind, text); return; }
     n.classList.remove('hidden');
-    n.className = 'mt-6 text-sm rounded-xl p-4 ' + (kind === 'ok'
-      ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-200'
-      : 'bg-red-500/10 border border-red-500/40 text-red-200');
+    n.className = 'notice ' + (kind === 'ok' ? 'ok' : 'err');
     n.textContent = text;
+    toast(kind, text);
     if (noticeTimer) clearTimeout(noticeTimer);
     if (kind === 'ok') noticeTimer = setTimeout(() => n.classList.add('hidden'), 6000);
   }
 
-  function showTab(name) {
-    document.querySelectorAll('.atab').forEach((b) => {
-      const on = b.dataset.atab === name;
-      b.classList.toggle('bg-amber-500', on);
-      b.classList.toggle('text-black', on);
-      b.classList.toggle('font-bold', on);
-      b.classList.toggle('bg-white/10', !on);
+  /* ---------------- confirmation dialog primitive ---------------- */
+  let confirmState = null;
+  function confirmDialog(opts) {
+    const o = opts || {};
+    return new Promise((resolve) => {
+      const dlg = $('confirm-dialog');
+      const scrim = $('confirm-scrim');
+      if (!dlg || !scrim) {
+        try { resolve(window.confirm(o.message || 'Are you sure?')); } catch { resolve(false); }
+        return;
+      }
+      if (confirmState) { try { confirmState.resolve(false); } catch { /* noop */ } }
+      $('confirm-title').textContent = o.title || 'Are you sure?';
+      $('confirm-desc').textContent = o.message || '';
+      const okBtn = $('confirm-ok');
+      okBtn.textContent = o.okLabel || 'Delete';
+      const prevFocus = document.activeElement;
+      confirmState = { resolve, prevFocus };
+      const close = (val) => {
+        dlg.classList.add('hidden');
+        scrim.classList.add('hidden');
+        dlg.setAttribute('aria-hidden', 'true');
+        confirmState = null;
+        try { if (prevFocus && prevFocus.focus) prevFocus.focus(); } catch { /* noop */ }
+        resolve(val);
+      };
+      confirmState.close = close;
+      $('confirm-cancel').onclick = () => close(false);
+      okBtn.onclick = () => close(true);
+      scrim.onclick = () => close(false);
+      dlg.classList.remove('hidden');
+      scrim.classList.remove('hidden');
+      dlg.setAttribute('aria-hidden', 'false');
+      try { okBtn.focus(); } catch { /* noop */ }
     });
-    document.querySelectorAll('.apanel').forEach((p) => p.classList.add('hidden'));
-    const panel = $('apanel-' + name);
+  }
+
+  /* ---------------- editor drawer primitive ---------------- */
+  let drawerPrevFocus = null;
+  let drawerDirty = false;
+  let drawerForm = null;
+
+  function setDrawerDirty(on) {
+    drawerDirty = !!on;
+    const bar = $('drawer-dirty');
+    if (bar) bar.classList.toggle('hidden', !drawerDirty);
+  }
+
+  function openDrawer(opts) {
+    const o = opts || {};
+    const drawer = $('editor-drawer');
+    const scrim = $('drawer-scrim');
+    const body = $('drawer-body');
+    if (!drawer || !scrim || !body) return null;
+    drawerPrevFocus = document.activeElement;
+    $('drawer-kicker').textContent = o.kicker || 'Editor';
+    $('drawer-title').textContent = o.title || 'Edit item';
+    $('drawer-sub').textContent = o.sub || '';
+    body.innerHTML = '';
+    if (o.node) body.appendChild(o.node);
+    drawerForm = o.form || body.querySelector('form') || null;
+    setDrawerDirty(false);
+    if (drawerForm) {
+      drawerForm.addEventListener('input', () => setDrawerDirty(true));
+      drawerForm.addEventListener('change', () => setDrawerDirty(true));
+    }
+    drawer.classList.remove('hidden');
+    scrim.classList.remove('hidden');
+    drawer.setAttribute('aria-hidden', 'false');
+    document.body.style.overflow = 'hidden';
+    try {
+      const first = body.querySelector('input:not([disabled]), select, textarea, button');
+      if (first && first.focus) first.focus();
+    } catch { /* noop */ }
+    return body;
+  }
+
+  function closeDrawer() {
+    const drawer = $('editor-drawer');
+    const scrim = $('drawer-scrim');
+    if (!drawer) return;
+    drawer.classList.add('hidden');
+    if (scrim) scrim.classList.add('hidden');
+    drawer.setAttribute('aria-hidden', 'true');
+    document.body.style.overflow = '';
+    setDrawerDirty(false);
+    drawerForm = null;
+    try { if (drawerPrevFocus && drawerPrevFocus.focus) drawerPrevFocus.focus(); } catch { /* noop */ }
+    drawerPrevFocus = null;
+  }
+
+  function isDrawerOpen() {
+    const d = $('editor-drawer');
+    return !!(d && !d.classList.contains('hidden'));
+  }
+
+  /* ---------------- navigation / views ---------------- */
+  const VIEWS = {
+    dashboard: { title: 'Dashboard', sub: 'Overview' },
+    sections: { title: 'Home Sections', sub: 'Content' },
+    collections: { title: 'Collections', sub: 'Content' },
+    overrides: { title: 'Overrides', sub: 'Content' },
+    picks: { title: 'Greybox Picks', sub: 'Content' },
+    search: { title: 'TMDB Search', sub: 'Content' },
+    settings: { title: 'General Settings', sub: 'System' },
+    soon: { title: 'Coming soon', sub: '' },
+  };
+  let currentView = 'dashboard';
+
+  function showView(name) {
+    const key = VIEWS[name] ? name : 'dashboard';
+    currentView = key;
+    document.querySelectorAll('#admin-nav .nav-item[data-view]').forEach((b) => {
+      const on = b.dataset.view === key;
+      b.classList.toggle('is-active', on);
+      if (on) b.setAttribute('aria-current', 'page');
+      else b.removeAttribute('aria-current');
+    });
+    document.querySelectorAll('.admin-view').forEach((p) => p.classList.add('hidden'));
+    const panel = $('view-' + key);
     if (panel) panel.classList.remove('hidden');
+    const meta = VIEWS[key];
+    if ($('crumb-section')) $('crumb-section').textContent = meta.title;
+    if ($('crumb-sub')) $('crumb-sub').textContent = meta.sub || '';
+    closeMobileNav();
+    if (!ADMIN_TOKEN) return;
+    if (key === 'dashboard') loadDashboard();
+    if (key === 'sections') loadSections();
+    if (key === 'collections') loadCollections();
+    if (key === 'overrides') loadOverrides();
+    if (key === 'picks') loadPicks();
+    if (key === 'settings') loadHero();
+  }
+
+  // Back-compat alias (previous tab system + headless tests).
+  function showTab(name) {
+    const map = { sections: 'sections', collections: 'collections', overrides: 'overrides', search: 'search', settings: 'settings' };
+    showView(map[name] || 'dashboard');
   }
 
   function setAuthed(on, msg) {
-    $('admin-connect').classList.toggle('hidden', on);
-    $('admin-dash').classList.toggle('hidden', !on);
-    $('admin-tabs').classList.toggle('hidden', !on);
-    $('admin-disconnect').classList.toggle('hidden', !on);
+    $('admin-connect-wrap').classList.toggle('hidden', on);
+    $('admin-app').classList.toggle('hidden', !on);
+    const pill = $('conn-pill');
+    if (pill) {
+      pill.classList.toggle('is-live', !!on);
+      const t = $('conn-text');
+      if (t) t.textContent = on ? 'Connected — token in memory' : 'Disconnected';
+    }
     if (!on) {
       const e = $('admin-connect-error');
       if (msg && e) { e.textContent = msg; e.classList.remove('hidden'); }
       const pw = $('admin-token');
       if (pw) pw.value = '';
+      closeDrawer();
     }
   }
 
   function forceDisconnect(msg) {
     ADMIN_TOKEN = null;
     setAuthed(false, msg);
+  }
+
+  function openMobileNav() {
+    const s = $('admin-sidebar');
+    const scrim = $('nav-scrim');
+    if (!s) return;
+    s.classList.add('open');
+    if (scrim) scrim.classList.remove('hidden');
+    const t = $('nav-toggle');
+    if (t) t.setAttribute('aria-expanded', 'true');
+  }
+  function closeMobileNav() {
+    const s = $('admin-sidebar');
+    const scrim = $('nav-scrim');
+    if (s) s.classList.remove('open');
+    if (scrim) scrim.classList.add('hidden');
+    const t = $('nav-toggle');
+    if (t) t.setAttribute('aria-expanded', 'false');
   }
 
   /* ---------------- client-side validation (mirrors functions/lib/validate.js) ---------------- */
@@ -148,9 +314,6 @@
     const t = src.type;
     if (t === 'search' && !String(src.query || '').trim()) return 'search needs a query';
     if (t === 'genre') {
-      // Collections allow combined Movies + TV (media 'both' + genre object
-      // because TMDB movie and TV genre IDs differ). Home/hero stay
-      // single-media only (server validateHomeSource rejects 'both').
       const isCollection = allowed.indexOf('discover') >= 0;
       if (isCollection && src.media === 'both') {
         if (!src.genre || typeof src.genre !== 'object') return 'genre needs a movie + TV genre selection';
@@ -225,7 +388,7 @@
     return bits.join(' · ');
   }
 
-  /* ---------------- shared DOM builders ---------------- */
+  /* ---------------- shared DOM builders (admin primitives) ---------------- */
   function el(tag, cls, text) {
     const e = document.createElement(tag);
     if (cls) e.className = cls;
@@ -235,7 +398,7 @@
 
   function fieldRow(labelText, input) {
     const wrap = el('label', 'block');
-    wrap.appendChild(el('span', 'block text-xs text-zinc-400 mb-1', labelText));
+    wrap.appendChild(el('span', 'flabel', labelText));
     wrap.appendChild(input);
     return wrap;
   }
@@ -245,7 +408,7 @@
     i.id = id; i.type = 'text';
     i.value = value == null ? '' : String(value);
     if (placeholder) i.placeholder = placeholder;
-    i.className = 'w-full bg-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 ring-amber-500';
+    i.className = 'input';
     return i;
   }
 
@@ -260,14 +423,14 @@
     t.id = id; t.rows = rows || 3;
     t.value = value == null ? '' : String(value);
     if (placeholder) t.placeholder = placeholder;
-    t.className = 'w-full bg-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 ring-amber-500 font-mono';
+    t.className = 'input';
     return t;
   }
 
   function selectInput(id, options, value) {
     const s = document.createElement('select');
     s.id = id;
-    s.className = 'w-full bg-[#23232f] border border-white/20 rounded-lg px-3 py-2 text-sm outline-none cursor-pointer';
+    s.className = 'input input-select';
     for (const [v, label] of options) {
       const o = document.createElement('option');
       o.value = v; o.textContent = label;
@@ -278,35 +441,51 @@
   }
 
   function checkInput(id, checked, labelText) {
-    const wrap = el('label', 'flex items-center gap-2 text-sm text-zinc-300 cursor-pointer');
+    const wrap = el('label', 'flex items-center gap-2 text-sm cursor-pointer');
+    wrap.style.cssText = 'display:flex;align-items:center;gap:.5rem;font-size:.83rem;color:var(--gx-text-dim);cursor:pointer';
     const c = document.createElement('input');
     c.id = id; c.type = 'checkbox'; c.checked = !!checked;
-    c.className = 'w-4 h-4 accent-amber-500';
+    c.className = 'w-4 h-4';
     wrap.appendChild(c);
     wrap.appendChild(el('span', '', labelText));
     return wrap;
   }
 
+  function statusBadge(item) {
+    const hidden = item && item.visible === false;
+    const b = el('span', 'badge ' + (hidden ? 'badge-hidden' : 'badge-live'), hidden ? 'Hidden' : 'Live');
+    return b;
+  }
+
   function rowButtons(defs) {
-    const wrap = el('div', 'flex flex-wrap gap-2 mt-3');
-    for (const [label, cls, fn] of defs) {
-      const b = el('button', 'text-xs px-3 py-1.5 rounded-lg ' + cls, label);
+    const wrap = el('div', 'row-actions');
+    for (const [label, kind, fn, title] of defs) {
+      const b = el('button', 'rowbtn ' + (kind || ''), label);
       b.type = 'button';
-      b.onclick = fn;
+      if (title) b.title = title;
+      b.addEventListener('click', fn);
       wrap.appendChild(b);
     }
     return wrap;
   }
 
-  const BTN = 'bg-white/10 hover:bg-white/20';
-  const BTN_GO = 'bg-amber-500 hover:bg-amber-400 text-black font-bold';
-  const BTN_DANGER = 'bg-red-600/80 hover:bg-red-600';
+  function stateBox(host, kind, title, desc) {
+    host.innerHTML = '';
+    const box = el('div', kind === 'error' ? 'error-box' : kind === 'loading' ? 'loading-box' : 'empty');
+    if (kind === 'loading') {
+      box.appendChild(el('p', '', title || 'Loading…'));
+      const sk = el('div', 'skel');
+      sk.style.width = '100%';
+      box.appendChild(sk);
+    } else {
+      box.appendChild(el('p', 'empty-title', title || 'Nothing here'));
+      if (desc) box.appendChild(el('p', 'empty-desc', desc));
+    }
+    host.appendChild(box);
+    return box;
+  }
 
   /* ---------------- TMDB genre lists (via existing server-side proxy) ---------------- */
-  // Genre names/IDs always come from TMDB through the same /api/tmdb/*
-  // proxy the public site uses (secret stays server-side). Nothing is
-  // hardcoded here: movie and TV lists are fetched separately because
-  // TMDB IDs differ between the two lists.
   const GENRE_CACHE = { movie: null, tv: null };
   const GENRE_PENDING = { movie: null, tv: null };
 
@@ -348,15 +527,13 @@
   }
 
   /* ---------------- source sub-form (shared by sections, collections, hero) ---------------- */
-
-  // Renders type-specific inputs for a rule source into `host`. `prefix`
-  // namespaces input ids; `allowed` is the type list for this resource.
   function renderSourceFields(host, prefix, allowed, src) {
     host.innerHTML = '';
     const s = src && typeof src === 'object' ? src : {};
     const typeSel = selectInput(prefix + '-type', allowed.map((t) => [t, t]), s.type || allowed[0]);
     host.appendChild(fieldRow('Source type', typeSel));
-    const sub = el('div', 'grid gap-3');
+    const sub = el('div', 'grid');
+    sub.style.cssText = 'display:grid;gap:.7rem';
     host.appendChild(sub);
     const paint = () => {
       sub.innerHTML = '';
@@ -369,7 +546,8 @@
       } else if (t === 'tv') {
         sub.appendChild(fieldRow('Category', selectInput(prefix + '-category', HOME_TV_CATS.map((c) => [c, c]), val('category', 'popular'))));
       } else if (t === 'now-playing') {
-        sub.appendChild(el('p', 'text-xs text-zinc-500', 'Movies only — no extra options.'));
+        const p = el('p', 'muted text-sm', 'Movies only — no extra options.');
+        sub.appendChild(p);
       } else if (t === 'anime') {
         sub.appendChild(fieldRow('Kind', selectInput(prefix + '-kind', [['series', 'series'], ['movies', 'movies']], val('kind', 'series'))));
       } else if (t === 'search') {
@@ -378,12 +556,6 @@
         const lines = Array.isArray(s.items) ? s.items.map((it) => (it && typeof it === 'object' ? it.media + ':' + it.id : it)).join('\n') : '';
         sub.appendChild(fieldRow(t === 'custom' ? 'Items (one per line: media:id or bare movie id)' : 'Items (one per line: media:id)', areaInput(prefix + '-items', lines, 'movie:550\ntv:1399', 4)));
       } else if (t === 'genre') {
-        // Genre collections: Media (Movies / TV Shows / Movies + TV Shows for
-        // collections) + Genre dropdown(s) populated live from TMDB through
-        // the existing /api/tmdb proxy (no hardcoded IDs, no token in the
-        // browser). TMDB movie and TV genre lists differ, so Movies + TV
-        // keeps one ID per list. Single-media keeps the historic genreId
-        // shape so existing collections reload unchanged.
         const isCollection = allowed.indexOf('discover') >= 0;
         const mediaOpts = isCollection
           ? [['movie', 'Movies'], ['tv', 'TV Shows'], ['both', 'Movies + TV Shows']]
@@ -393,7 +565,8 @@
         if (!isCollection && curMedia === 'both') curMedia = 'movie';
         const mediaSel = selectInput(prefix + '-media', mediaOpts, curMedia);
         sub.appendChild(fieldRow('Media', mediaSel));
-        const genreHost = el('div', 'grid gap-3');
+        const genreHost = el('div', '');
+        genreHost.style.cssText = 'display:grid;gap:.7rem';
         sub.appendChild(genreHost);
         sub.appendChild(fieldRow('Sort', textInput(prefix + '-sort', val('sort', 'popularity.desc'), 'popularity.desc')));
         let genreGen = 0;
@@ -404,27 +577,26 @@
           if (m === 'both' && isCollection) {
             let bothMovieId = (s.genre && typeof s.genre === 'object' && s.genre.movie_id) ? String(s.genre.movie_id) : '';
             let bothTvId = (s.genre && typeof s.genre === 'object' && s.genre.tv_id) ? String(s.genre.tv_id) : '';
-            // Preserve a single-media edit when flipping to Movies + TV.
             if (!bothMovieId && s.genreId) bothMovieId = String(s.genreId);
             if (!bothTvId && s.genreId && s.media === 'tv') bothTvId = String(s.genreId);
             const movieWrap = el('div', '');
             const tvWrap = el('div', '');
-            movieWrap.appendChild(el('span', 'block text-xs text-zinc-400 mb-1', 'Movie genre (TMDB movie list)'));
-            tvWrap.appendChild(el('span', 'block text-xs text-zinc-400 mb-1', 'TV genre (TMDB TV list — IDs differ)'));
-            const mLoad = el('p', 'text-xs text-zinc-500', 'Loading movie genres…');
-            const tLoad = el('p', 'text-xs text-zinc-500', 'Loading TV genres…');
+            movieWrap.appendChild(el('span', 'flabel', 'Movie genre (TMDB movie list)'));
+            tvWrap.appendChild(el('span', 'flabel', 'TV genre (TMDB TV list — IDs differ)'));
+            const mLoad = el('p', 'muted text-sm', 'Loading movie genres…');
+            const tLoad = el('p', 'muted text-sm', 'Loading TV genres…');
             movieWrap.appendChild(mLoad);
             tvWrap.appendChild(tLoad);
             genreHost.appendChild(movieWrap);
             genreHost.appendChild(tvWrap);
-            genreHost.appendChild(el('p', 'text-xs text-zinc-500', 'Movies fetch /discover/movie, TV fetch /discover/tv, then combine. Movies link to /movie/:id, TV to /tv/:id.'));
+            genreHost.appendChild(el('p', 'muted text-sm', 'Movies fetch /discover/movie, TV fetch /discover/tv, then combine. Movies link to /movie/:id, TV to /tv/:id.'));
             Promise.all([fetchGenres('movie'), fetchGenres('tv')]).then(
               ([movieList, tvList]) => {
                 if (myGen !== genreGen) return;
                 movieWrap.innerHTML = '';
                 tvWrap.innerHTML = '';
-                movieWrap.appendChild(el('span', 'block text-xs text-zinc-400 mb-1', 'Movie genre (TMDB movie list)'));
-                tvWrap.appendChild(el('span', 'block text-xs text-zinc-400 mb-1', 'TV genre (TMDB TV list — IDs differ)'));
+                movieWrap.appendChild(el('span', 'flabel', 'Movie genre (TMDB movie list)'));
+                tvWrap.appendChild(el('span', 'flabel', 'TV genre (TMDB TV list — IDs differ)'));
                 const mSel = selectInput(prefix + '-genreMovie', movieList.map((g) => [String(g.id), g.name]), bothMovieId || String((movieList[0] && movieList[0].id) || ''));
                 const tSel = selectInput(prefix + '-genreTv', tvList.map((g) => [String(g.id), g.name]), bothTvId || String((tvList[0] && tvList[0].id) || ''));
                 movieWrap.appendChild(mSel);
@@ -434,8 +606,8 @@
                 if (myGen !== genreGen) return;
                 movieWrap.innerHTML = '';
                 tvWrap.innerHTML = '';
-                movieWrap.appendChild(el('span', 'block text-xs text-zinc-400 mb-1', 'Movie genre ID (list unavailable — check backend TMDB setup)'));
-                tvWrap.appendChild(el('span', 'block text-xs text-zinc-400 mb-1', 'TV genre ID'));
+                movieWrap.appendChild(el('span', 'flabel', 'Movie genre ID (list unavailable — check backend TMDB setup)'));
+                tvWrap.appendChild(el('span', 'flabel', 'TV genre ID'));
                 movieWrap.appendChild(numInput(prefix + '-genreMovie', bothMovieId, '27'));
                 tvWrap.appendChild(numInput(prefix + '-genreTv', bothTvId, '9648'));
               }
@@ -446,7 +618,7 @@
             if ((existingId === '' || existingId == null) && s.media === 'both' && s.genre && typeof s.genre === 'object') {
               existingId = mt === 'tv' ? s.genre.tv_id : s.genre.movie_id;
             }
-            genreHost.appendChild(el('p', 'text-xs text-zinc-500', 'Loading genres from TMDB…'));
+            genreHost.appendChild(el('p', 'muted text-sm', 'Loading genres from TMDB…'));
             fetchGenres(mt).then(
               (list) => {
                 if (myGen !== genreGen) return;
@@ -474,14 +646,11 @@
         sub.appendChild(fieldRow('Year', numInput(prefix + '-year', val('year', ''), '1999')));
         sub.appendChild(fieldRow('Sort', textInput(prefix + '-sort', val('sort', 'popularity.desc'), 'popularity.desc')));
       } else if (t === 'collection') {
-        // Expandable shelf: associate the section with ONE existing collection
-        // slug. Preview + View All share that collection's rule (no second
-        // list). Prefer a dropdown of existing collections; fall back to a
-        // plain slug input when the list is unavailable.
         const cur = String(val('slug', '') || '').trim().toLowerCase();
-        const slugHost = el('div', 'grid gap-3');
+        const slugHost = el('div', '');
+        slugHost.style.cssText = 'display:grid;gap:.7rem';
         sub.appendChild(slugHost);
-        slugHost.appendChild(el('p', 'text-xs text-zinc-500', 'Loading collections…'));
+        slugHost.appendChild(el('p', 'muted text-sm', 'Loading collections…'));
         const stillCurrent = () => {
           try {
             if (!slugHost.isConnected) return false;
@@ -500,13 +669,13 @@
           } else {
             slugHost.appendChild(fieldRow('Collection slug', textInput(prefix + '-collection', cur, 'kids')));
           }
-          slugHost.appendChild(el('p', 'text-xs text-zinc-500', 'Preview shows the first N of this collection; View All → opens /collection/<slug>. Same rule, no second list.'));
+          slugHost.appendChild(el('p', 'muted text-sm', 'Preview shows the first N of this collection; View All → opens /collection/<slug>. Same rule, no second list.'));
         };
         const fillText = () => {
           if (!stillCurrent()) return;
           slugHost.innerHTML = '';
           slugHost.appendChild(fieldRow('Collection slug', textInput(prefix + '-collection', cur, 'kids')));
-          slugHost.appendChild(el('p', 'text-xs text-zinc-500', 'Type an existing collection slug (e.g. kids). Preview + View All use that collection’s rule.'));
+          slugHost.appendChild(el('p', 'muted text-sm', 'Type an existing collection slug (e.g. kids). Preview + View All use that collection’s rule.'));
         };
         fetch('/api/config/collections', { headers: { accept: 'application/json' } }).then((r) => {
           if (!r.ok) throw new Error('no public list');
@@ -520,11 +689,6 @@
     paint();
   }
 
-  // Reads the inputs rendered by renderSourceFields back into a source object.
-  // Numbers stay empty-string when blank (server applies defaults); the
-  // items textarea is parsed strictly — throws { message } on bad lines.
-  // Genre Movies + TV (media 'both') reads the two dropdowns into
-  // genre { name, movie_id, tv_id }; single-media keeps genreId.
   function readSource(prefix) {
     const v = (id) => { const n = document.getElementById(id); return n ? n.value : ''; };
     const type = v(prefix + '-type');
@@ -557,46 +721,72 @@
 
   /* ================= HOME SECTIONS ================= */
   let secEditing = null; // id being edited, or null for create
+  let secCache = [];
 
-  function buildSectionForm() {
-    const f = $('sec-form');
-    f.innerHTML = '';
-    f.appendChild(fieldRow('ID (lowercase letters/numbers/hyphens; set once)', textInput('s-id', '', 'editors-picks')));
-    f.appendChild(fieldRow('Title', textInput('s-title', '', 'Editor’s Picks')));
-    f.appendChild(fieldRow('Description (optional)', textInput('s-desc', '', '')));
-    f.appendChild(checkInput('s-visible', true, 'Visible'));
-    f.appendChild(fieldRow('Limit (1–24)', numInput('s-limit', '12', '12')));
+  function sectionEditorNode(item) {
+    const f = document.createElement('form');
+    f.id = 'sec-form';
+    f.autocomplete = 'off';
+    f.style.cssText = 'display:grid;gap:.8rem';
+    f.appendChild(fieldRow('ID (lowercase letters/numbers/hyphens; set once)', textInput('s-id', item ? item.id : '', 'editors-picks')));
+    f.appendChild(fieldRow('Title', textInput('s-title', item ? item.title || '' : '', 'Editor’s Picks')));
+    f.appendChild(fieldRow('Description (optional)', textInput('s-desc', item ? item.description || '' : '', '')));
+    f.appendChild(checkInput('s-visible', item ? item.visible !== false : true, 'Visible'));
+    f.appendChild(fieldRow('Limit (1–24)', numInput('s-limit', item && item.limit != null ? item.limit : 12, '12')));
     f.appendChild(fieldRow('Sort order (optional, blank = keep/append)', numInput('s-sort', '', '')));
-    const srcHost = el('div', 'grid gap-3');
+    const srcHost = el('div', '');
+    srcHost.style.cssText = 'display:grid;gap:.7rem';
     srcHost.id = 's-source';
-    f.appendChild(fieldRow('Rule source', srcHost));
-    renderSourceFields(srcHost, 's-src', HOME_SOURCE_TYPES, null);
-    const row = el('div', 'flex gap-2');
-    const save = el('button', BTN_GO + ' px-5 py-2 rounded-lg text-sm', 'Save section');
+    const srcLabel = el('div', '');
+    srcLabel.appendChild(el('span', 'flabel', 'Rule source'));
+    srcLabel.appendChild(srcHost);
+    f.appendChild(srcLabel);
+    renderSourceFields(srcHost, 's-src', HOME_SOURCE_TYPES, item ? item.source : null);
+    const row = el('div', '');
+    row.style.cssText = 'display:flex;gap:.5rem;flex-wrap:wrap';
+    const save = el('button', 'btn btn-primary btn-sm', item ? 'Save Changes' : 'Create section');
     save.type = 'submit';
-    const cancel = el('button', BTN + ' px-4 py-2 rounded-lg text-sm hidden', 'Cancel');
+    const cancel = el('button', 'btn btn-ghost btn-sm', 'Discard');
     cancel.type = 'button';
-    cancel.id = 's-cancel';
-    cancel.onclick = () => fillSectionForm(null);
+    cancel.addEventListener('click', closeDrawer);
     row.appendChild(save);
     row.appendChild(cancel);
     f.appendChild(row);
-    f.onsubmit = (e) => { e.preventDefault(); saveSection(); };
+    f.addEventListener('submit', (e) => { e.preventDefault(); saveSection(); });
+    return f;
   }
 
-  function fillSectionForm(item) {
+  function openSectionEditor(item) {
     secEditing = item ? item.id : null;
-    $('sec-form-title').textContent = item ? 'Edit section: ' + item.id : 'New section';
-    $('s-id').value = item ? item.id : '';
-    $('s-id').disabled = !!item;
-    $('s-title').value = item ? item.title || '' : '';
-    $('s-desc').value = item ? item.description || '' : '';
-    $('s-visible').checked = item ? item.visible !== false : true;
-    $('s-limit').value = item && item.limit != null ? item.limit : 12;
-    $('s-sort').value = '';
-    $('s-cancel').classList.toggle('hidden', !item);
-    renderSourceFields($('s-source'), 's-src', HOME_SOURCE_TYPES, item ? item.source : null);
-    if (item) $('sec-form').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const node = sectionEditorNode(item);
+    openDrawer({
+      kicker: 'Home Sections',
+      title: item ? 'Edit section' : 'New section',
+      sub: item ? String(item.id) : 'Shelves render on the homepage in display order.',
+      node,
+      form: node,
+    });
+    const idEl = $('s-id');
+    if (idEl && item) idEl.disabled = true;
+    const cancelOld = $('s-cancel');
+    if (cancelOld) cancelOld.remove();
+  }
+
+  // Back-compat: previous inline form API now opens the drawer.
+  function buildSectionForm() { /* forms are built on demand inside the drawer */ }
+  function fillSectionForm(item) {
+    if (!ADMIN_TOKEN || !$('admin-app') || $('admin-app').classList.contains('hidden')) {
+      // Headless/test context: build a detached form so read* helpers work.
+      secEditing = item ? item.id : null;
+      let host = $('sec-form-host-test');
+      if (!host) { host = document.createElement('div'); host.id = 'sec-form-host-test'; host.style.display = 'none'; document.body.appendChild(host); }
+      host.innerHTML = '';
+      host.appendChild(sectionEditorNode(item));
+      const idEl = $('s-id');
+      if (idEl && item) idEl.disabled = true;
+      return;
+    }
+    openSectionEditor(item);
   }
 
   function readSectionForm() {
@@ -629,34 +819,67 @@
     return body;
   }
 
+  function filteredSections() {
+    const q = String(($('sec-search') && $('sec-search').value) || '').trim().toLowerCase();
+    const f = ($('sec-filter') && $('sec-filter').value) || 'all';
+    return secCache.filter((s) => {
+      if (f === 'visible' && s.visible === false) return false;
+      if (f === 'hidden' && s.visible !== false) return false;
+      if (!q) return true;
+      const hay = (s.id + ' ' + (s.title || '') + ' ' + (s.description || '') + ' ' + summarizeSource(s.source)).toLowerCase();
+      return hay.indexOf(q) >= 0;
+    });
+  }
+
   async function loadSections() {
     const host = $('sec-list');
-    host.innerHTML = '<div class="inline-loader"><span class="spinner"></span> Loading sections…</div>';
+    if (!host) return;
+    stateBox(host, 'loading', 'Loading sections…');
     try {
       const list = await api(API.homeSections);
-      host.innerHTML = '';
-      if (!list.length) host.appendChild(el('p', 'text-sm text-zinc-500', 'No sections yet. Create one below.'));
-      list.forEach((s, i) => {
-        const card = el('div', 'bg-white/5 border border-white/10 rounded-2xl p-4');
-        const head = el('div', 'flex items-center gap-2 flex-wrap');
-        head.appendChild(el('span', 'font-bold', s.title));
-        if (s.visible === false) head.appendChild(el('span', 'text-xs bg-zinc-600/60 px-2 py-0.5 rounded', 'hidden'));
-        head.appendChild(el('span', 'text-xs text-zinc-500', '#' + (i + 1) + ' · id: ' + s.id + ' · limit ' + (s.limit != null ? s.limit : '?')));
-        card.appendChild(head);
-        card.appendChild(el('p', 'mt-1 text-xs text-zinc-400', summarizeSource(s.source) + (s.description ? ' — ' + s.description : '')));
-        card.appendChild(rowButtons([
-          ['Edit', BTN, () => fillSectionForm(s)],
-          [s.visible === false ? 'Show' : 'Hide', BTN, () => toggleSection(s)],
-          ['Up', BTN, () => moveSection(list, i, -1)],
-          ['Down', BTN, () => moveSection(list, i, 1)],
-          ['Delete', BTN_DANGER, () => deleteSection(s)],
-        ]));
-        host.appendChild(card);
-      });
+      secCache = Array.isArray(list) ? list : [];
+      renderSections();
     } catch (e) {
       host.innerHTML = '';
       notice('err', 'Sections failed to load: ' + (e.message || e));
     }
+  }
+
+  function renderSections() {
+    const host = $('sec-list');
+    if (!host) return;
+    const list = filteredSections();
+    host.innerHTML = '';
+    if (!secCache.length) {
+      const box = stateBox(host, 'empty', 'No sections yet', 'Create the first homepage shelf — it appears immediately, no scrolling needed.');
+      const b = el('button', 'btn btn-primary btn-sm', '+ New Section');
+      b.type = 'button';
+      b.addEventListener('click', () => openSectionEditor(null));
+      box.appendChild(b);
+      return;
+    }
+    if (!list.length) {
+      stateBox(host, 'empty', 'No matches', 'Try a different search or status filter.');
+      return;
+    }
+    list.forEach((s) => {
+      const idx = secCache.indexOf(s);
+      const card = el('div', 'data-row');
+      const head = el('div', 'row-top');
+      head.appendChild(el('span', 'row-title', s.title || s.id));
+      head.appendChild(statusBadge(s));
+      head.appendChild(el('span', 'row-mono muted', '#' + (idx + 1) + ' · ' + s.id + ' · limit ' + (s.limit != null ? s.limit : '?')));
+      card.appendChild(head);
+      card.appendChild(el('p', 'row-meta', summarizeSource(s.source) + (s.description ? ' — ' + s.description : '')));
+      card.appendChild(rowButtons([
+        ['Edit', 'go', () => openSectionEditor(s)],
+        [s.visible === false ? 'Show' : 'Hide', '', () => toggleSection(s), s.visible === false ? 'Make visible' : 'Hide from homepage'],
+        ['↑ Up', '', () => moveSection(secCache, idx, -1), 'Move up'],
+        ['↓ Down', '', () => moveSection(secCache, idx, 1), 'Move down'],
+        ['Delete', 'danger', () => deleteSection(s), 'Delete section'],
+      ]));
+      host.appendChild(card);
+    });
   }
 
   async function saveSection() {
@@ -669,8 +892,10 @@
         await api(API.homeSections, { method: 'POST', body });
         notice('ok', 'Section created.');
       }
-      fillSectionForm(null);
+      secEditing = null;
+      closeDrawer();
       await loadSections();
+      if (currentView === 'dashboard') loadDashboard();
     } catch (e) {
       notice('err', (e.message || e));
     }
@@ -695,7 +920,7 @@
     try {
       const n = $('admin-notice');
       if (n) n.classList.add('hidden');
-      $('sec-list').querySelectorAll('button').forEach((b) => { b.disabled = true; });
+      document.querySelectorAll('#sec-list button').forEach((b) => { b.disabled = true; });
       const a = list[i], b = list[j];
       await api(API.homeSections + '/' + encodeURIComponent(a.id), { method: 'PUT', body: { ...a, id: a.id, sort_order: j } });
       await api(API.homeSections + '/' + encodeURIComponent(b.id), { method: 'PUT', body: { ...b, id: b.id, sort_order: i } });
@@ -708,25 +933,22 @@
   }
 
   async function deleteSection(s) {
-    if (!confirm('Delete home section "' + s.id + '"? This cannot be undone.')) return;
+    const ok = await confirmDialog({ title: 'Delete section?', message: 'Delete home section "' + s.id + '"? This cannot be undone.', okLabel: 'Delete' });
+    if (!ok) return;
     try {
       await api(API.homeSections + '/' + encodeURIComponent(s.id), { method: 'DELETE' });
-      if (secEditing === s.id) fillSectionForm(null);
+      if (secEditing === s.id) secEditing = null;
       notice('ok', 'Section deleted.');
       await loadSections();
+      if (currentView === 'dashboard') loadDashboard();
     } catch (e) {
       notice('err', e.message || e);
     }
   }
 
   /* ---------------- Greybox Picks (override-based, no new database) ---------------- */
-  // A "Greybox Pick" is just an override with featured=true + custom_badge.
-  // Collection membership (custom items) and Pick status (overrides) stay
-  // separate: toggling a Pick only calls /api/admin/overrides, never the
-  // collections API — so unmarking never removes the title from Editor's
-  // Picks, and editing a collection never deletes its overrides.
   const PICK_BADGE = 'Greybox Pick';
-  let ovCache = null; // last GET /api/admin/overrides list (shared by both tabs)
+  let ovCache = null; // last GET /api/admin/overrides list (shared)
 
   function isGreyboxPick(entry) {
     return !!entry && entry.custom_badge === PICK_BADGE;
@@ -754,8 +976,6 @@
     }
   }
 
-  // Mark via existing endpoints only: POST when no row, PUT (preserving all
-  // other override fields) when one exists. Never touches collections.
   async function markGreyboxPick(media, id) {
     const t = validPickTarget(media, id);
     const existing = await readOverrideRow(t.media, t.id);
@@ -776,9 +996,6 @@
     return created;
   }
 
-  // Unmark via existing endpoints only: PUT remaining fields when others
-  // exist, DELETE when Pick fields were the only ones. Never touches
-  // collections, so the title stays in Editor's Picks.
   async function unmarkGreyboxPick(media, id, known) {
     const t = validPickTarget(media, id);
     const existing = (known && typeof known === 'object') ? known : await readOverrideRow(t.media, t.id);
@@ -807,55 +1024,73 @@
 
   /* ================= COLLECTIONS ================= */
   let colEditing = null;
+  let colCache = [];
 
-  function buildCollectionForm() {
-    const f = $('col-form');
-    f.innerHTML = '';
-    f.appendChild(fieldRow('Slug (lowercase letters/numbers/hyphens; set once)', textInput('c-slug', '', 'gothic-horror')));
-    f.appendChild(fieldRow('Title', textInput('c-title', '', 'Gothic Horror')));
-    f.appendChild(fieldRow('Description (optional)', textInput('c-desc', '', '')));
-    f.appendChild(fieldRow('Cover URL (optional, https://…)', textInput('c-cover', '', 'https://…')));
-    f.appendChild(checkInput('c-visible', true, 'Visible (hidden collections 404 everywhere)'));
-    f.appendChild(fieldRow('Limit (1–60)', numInput('c-limit', '20', '20')));
+  function collectionEditorNode(item) {
+    const f = document.createElement('form');
+    f.id = 'col-form';
+    f.autocomplete = 'off';
+    f.style.cssText = 'display:grid;gap:.8rem';
+    f.appendChild(fieldRow('Slug (lowercase letters/numbers/hyphens; set once)', textInput('c-slug', item ? item.slug : '', 'gothic-horror')));
+    f.appendChild(fieldRow('Title', textInput('c-title', item ? item.title || '' : '', 'Gothic Horror')));
+    f.appendChild(fieldRow('Description (optional)', textInput('c-desc', item ? item.description || '' : '', '')));
+    f.appendChild(fieldRow('Cover URL (optional, https://…)', textInput('c-cover', item ? item.cover || '' : '', 'https://…')));
+    f.appendChild(checkInput('c-visible', item ? item.visible !== false : true, 'Visible (hidden collections 404 everywhere)'));
+    f.appendChild(fieldRow('Limit (1–60)', numInput('c-limit', item && item.limit != null ? item.limit : 20, '20')));
     f.appendChild(fieldRow('Sort order (optional, blank = keep/append)', numInput('c-sort', '', '')));
-    const srcHost = el('div', 'grid gap-3');
+    const srcHost = el('div', '');
+    srcHost.style.cssText = 'display:grid;gap:.7rem';
     srcHost.id = 'c-source';
-    f.appendChild(fieldRow('Rule source', srcHost));
-    renderSourceFields(srcHost, 'c-src', COL_SOURCE_TYPES, null);
-    f.appendChild(fieldRow('Pin (optional, one per line: media:id)', areaInput('c-pin', '', 'movie:550', 3)));
-    f.appendChild(fieldRow('Exclude (optional, one per line: id or media:id)', areaInput('c-exclude', '', '123', 3)));
-    f.appendChild(fieldRow('Meta JSON (optional, e.g. {"curator":"Greybox"})', areaInput('c-meta', '', '{"curator":"Greybox"}', 2)));
-    const row = el('div', 'flex gap-2');
-    const save = el('button', BTN_GO + ' px-5 py-2 rounded-lg text-sm', 'Save collection');
+    const srcLabel = el('div', '');
+    srcLabel.appendChild(el('span', 'flabel', 'Rule source'));
+    srcLabel.appendChild(srcHost);
+    f.appendChild(srcLabel);
+    renderSourceFields(srcHost, 'c-src', COL_SOURCE_TYPES, item ? item.source : null);
+    const lines = (arr) => (Array.isArray(arr) ? arr.map((it) => (it && typeof it === 'object' ? (it.media ? it.media + ':' + it.id : it.id) : it)).join('\n') : '');
+    f.appendChild(fieldRow('Pin (optional, one per line: media:id)', areaInput('c-pin', item ? lines(item.pin) : '', 'movie:550', 3)));
+    f.appendChild(fieldRow('Exclude (optional, one per line: id or media:id)', areaInput('c-exclude', item ? lines(item.exclude) : '', '123', 3)));
+    f.appendChild(fieldRow('Meta JSON (optional, e.g. {"curator":"Greybox"})', areaInput('c-meta', item && item.meta ? JSON.stringify(item.meta) : '', '{"curator":"Greybox"}', 2)));
+    const row = el('div', '');
+    row.style.cssText = 'display:flex;gap:.5rem;flex-wrap:wrap';
+    const save = el('button', 'btn btn-primary btn-sm', item ? 'Save Changes' : 'Create collection');
     save.type = 'submit';
-    const cancel = el('button', BTN + ' px-4 py-2 rounded-lg text-sm hidden', 'Cancel');
+    const cancel = el('button', 'btn btn-ghost btn-sm', 'Discard');
     cancel.type = 'button';
-    cancel.id = 'c-cancel';
-    cancel.onclick = () => fillCollectionForm(null);
+    cancel.addEventListener('click', closeDrawer);
     row.appendChild(save);
     row.appendChild(cancel);
     f.appendChild(row);
-    f.onsubmit = (e) => { e.preventDefault(); saveCollection(); };
+    f.addEventListener('submit', (e) => { e.preventDefault(); saveCollection(); });
+    return f;
   }
 
-  function fillCollectionForm(item) {
+  function openCollectionEditor(item) {
     colEditing = item ? item.slug : null;
-    $('col-form-title').textContent = item ? 'Edit collection: ' + item.slug : 'New collection';
-    $('c-slug').value = item ? item.slug : '';
-    $('c-slug').disabled = !!item;
-    $('c-title').value = item ? item.title || '' : '';
-    $('c-desc').value = item ? item.description || '' : '';
-    $('c-cover').value = item ? item.cover || '' : '';
-    $('c-visible').checked = item ? item.visible !== false : true;
-    $('c-limit').value = item && item.limit != null ? item.limit : 20;
-    $('c-sort').value = '';
-    $('c-cancel').classList.toggle('hidden', !item);
-    renderSourceFields($('c-source'), 'c-src', COL_SOURCE_TYPES, item ? item.source : null);
-    const lines = (arr) => (Array.isArray(arr) ? arr.map((it) => (it && typeof it === 'object' ? (it.media ? it.media + ':' + it.id : it.id) : it)).join('\n') : '');
-    $('c-pin').value = item ? lines(item.pin) : '';
-    $('c-exclude').value = item ? lines(item.exclude) : '';
-    $('c-meta').value = item && item.meta ? JSON.stringify(item.meta) : '';
-    if (item) $('col-form').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const node = collectionEditorNode(item);
+    openDrawer({
+      kicker: 'Collections',
+      title: item ? 'Edit collection' : 'New collection',
+      sub: item ? '/collection/' + item.slug : 'Rule-based rows behind /collection/:slug.',
+      node,
+      form: node,
+    });
+    const slugEl = $('c-slug');
+    if (slugEl && item) slugEl.disabled = true;
+  }
+
+  function buildCollectionForm() { /* built on demand in the drawer */ }
+  function fillCollectionForm(item) {
+    if (!ADMIN_TOKEN || !$('admin-app') || $('admin-app').classList.contains('hidden')) {
+      colEditing = item ? item.slug : null;
+      let host = $('col-form-host-test');
+      if (!host) { host = document.createElement('div'); host.id = 'col-form-host-test'; host.style.display = 'none'; document.body.appendChild(host); }
+      host.innerHTML = '';
+      host.appendChild(collectionEditorNode(item));
+      const slugEl = $('c-slug');
+      if (slugEl && item) slugEl.disabled = true;
+      return;
+    }
+    openCollectionEditor(item);
   }
 
   function readCollectionForm() {
@@ -901,84 +1136,112 @@
     return body;
   }
 
+  function filteredCollections() {
+    const q = String(($('col-search') && $('col-search').value) || '').trim().toLowerCase();
+    const f = ($('col-filter') && $('col-filter').value) || 'all';
+    return colCache.filter((c) => {
+      if (f === 'visible' && c.visible === false) return false;
+      if (f === 'hidden' && c.visible !== false) return false;
+      if (!q) return true;
+      const hay = (c.slug + ' ' + (c.title || '') + ' ' + (c.description || '') + ' ' + summarizeSource(c.source)).toLowerCase();
+      return hay.indexOf(q) >= 0;
+    });
+  }
+
   async function loadCollections() {
     const host = $('col-list');
-    host.innerHTML = '<div class="inline-loader"><span class="spinner"></span> Loading collections…</div>';
+    if (!host) return;
+    stateBox(host, 'loading', 'Loading collections…');
     try {
       const list = await api(API.collections);
-      // Pick states come from the existing overrides endpoint (shared cache).
-      // A failure here must not break the collections list itself.
+      colCache = Array.isArray(list) ? list : [];
       try {
         ovCache = await api(API.overrides);
       } catch (ovErr) {
         if (ovErr && (ovErr.status === 401 || ovErr.status === 403)) throw ovErr;
         ovCache = null;
       }
-      host.innerHTML = '';
-      if (!list.length) host.appendChild(el('p', 'text-sm text-zinc-500', 'No collections yet. Create one below.'));
-      list.forEach((c, i) => {
-        const card = el('div', 'bg-white/5 border border-white/10 rounded-2xl p-4');
-        const head = el('div', 'flex items-center gap-2 flex-wrap');
-        head.appendChild(el('span', 'font-bold', c.title));
-        if (c.visible === false) head.appendChild(el('span', 'text-xs bg-zinc-600/60 px-2 py-0.5 rounded', 'hidden'));
-        head.appendChild(el('span', 'text-xs text-zinc-500', '#' + (i + 1) + ' · /collection/' + c.slug));
-        card.appendChild(head);
-        card.appendChild(el('p', 'mt-1 text-xs text-zinc-400', summarizeSource(c.source) + (c.description ? ' — ' + c.description : '')));
-        const links = el('div', 'mt-1 text-xs');
-        const a = el('a', 'text-amber-300 hover:text-amber-200 underline', 'Open public page ↗');
-        a.href = '/collection/' + c.slug;
-        a.target = '_blank';
-        a.rel = 'noopener';
-        links.appendChild(a);
-        card.appendChild(links);
-        // Custom collections (e.g. Editor's Picks) list exact titles, so each
-        // item gets a one-click Pick toggle using its existing media:id —
-        // no manual TMDB ID entry. This only calls the overrides API.
-        if (c.source && c.source.type === 'custom' && Array.isArray(c.source.items) && c.source.items.length) {
-          const pickWrap = el('div', 'mt-2 flex items-start gap-2 flex-wrap');
-          pickWrap.appendChild(el('span', 'text-xs text-zinc-500', 'Greybox Picks:'));
-          c.source.items.forEach((it) => {
-            const media = it && it.media === 'tv' ? 'tv' : 'movie';
-            const id = it && parseInt(it.id, 10);
-            if (!Number.isInteger(id) || id < 1) return;
-            const known = findCachedOverride(media, id);
-            const marked = isGreyboxPick(known);
-            const b = el('button', 'text-xs px-2 py-1 rounded-lg ' + (marked ? 'bg-amber-500 text-black font-bold' : BTN),
-              (marked ? '★ ' : '☆ ') + media + ':' + id);
-            b.type = 'button';
-            b.title = marked ? 'Unmark Greybox Pick (keeps it in this collection)' : 'Mark as Greybox Pick';
-            b.onclick = async () => {
-              b.disabled = true;
-              try {
-                await toggleGreyboxPick(media, id, findCachedOverride(media, id));
-                ovCache = await api(API.overrides);
-                notice('ok', marked ? ('Unmarked ' + media + ':' + id + ' (still in collection).') : ('Marked ' + media + ':' + id + ' as Greybox Pick.'));
-                await loadCollections();
-              } catch (e) {
-                b.disabled = false;
-                notice('err', (e && e.message) || e);
-              }
-            };
-            pickWrap.appendChild(b);
-          });
-          if (ovCache === null) {
-            pickWrap.appendChild(el('span', 'text-xs text-zinc-500', '(pick states unavailable — overrides failed to load)'));
-          }
-          card.appendChild(pickWrap);
-        }
-        card.appendChild(rowButtons([
-          ['Edit', BTN, () => fillCollectionForm(c)],
-          [c.visible === false ? 'Show' : 'Hide', BTN, () => toggleCollection(c)],
-          ['Up', BTN, () => moveCollection(list, i, -1)],
-          ['Down', BTN, () => moveCollection(list, i, 1)],
-          ['Delete', BTN_DANGER, () => deleteCollection(c)],
-        ]));
-        host.appendChild(card);
-      });
+      renderCollections();
     } catch (e) {
       host.innerHTML = '';
       notice('err', 'Collections failed to load: ' + (e.message || e));
     }
+  }
+
+  function renderCollections() {
+    const host = $('col-list');
+    if (!host) return;
+    const list = filteredCollections();
+    host.innerHTML = '';
+    if (!colCache.length) {
+      const box = stateBox(host, 'empty', 'No collections yet', 'Create the first rule-based row — the editor opens immediately.');
+      const b = el('button', 'btn btn-primary btn-sm', '+ New Collection');
+      b.type = 'button';
+      b.addEventListener('click', () => openCollectionEditor(null));
+      box.appendChild(b);
+      return;
+    }
+    if (!list.length) {
+      stateBox(host, 'empty', 'No matches', 'Try a different search or status filter.');
+      return;
+    }
+    list.forEach((c) => {
+      const idx = colCache.indexOf(c);
+      const card = el('div', 'data-row');
+      const head = el('div', 'row-top');
+      head.appendChild(el('span', 'row-title', c.title || c.slug));
+      head.appendChild(statusBadge(c));
+      head.appendChild(el('span', 'row-mono muted', '#' + (idx + 1) + ' · /collection/' + c.slug));
+      card.appendChild(head);
+      card.appendChild(el('p', 'row-meta', summarizeSource(c.source) + (c.description ? ' — ' + c.description : '')));
+      const links = el('div', '');
+      links.style.marginTop = '.35rem';
+      const a = el('a', 'row-link', 'Open public page ↗');
+      a.href = '/collection/' + c.slug;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      links.appendChild(a);
+      card.appendChild(links);
+      if (c.source && c.source.type === 'custom' && Array.isArray(c.source.items) && c.source.items.length) {
+        const pickWrap = el('div', 'pick-strip');
+        pickWrap.appendChild(el('span', 'pick-hint', 'Greybox Picks:'));
+        c.source.items.forEach((it) => {
+          const media = it && it.media === 'tv' ? 'tv' : 'movie';
+          const id = it && parseInt(it.id, 10);
+          if (!Number.isInteger(id) || id < 1) return;
+          const known = findCachedOverride(media, id);
+          const marked = isGreyboxPick(known);
+          const b = el('button', 'rowbtn' + (marked ? ' go' : ''), (marked ? '★ ' : '☆ ') + media + ':' + id);
+          b.type = 'button';
+          b.title = marked ? 'Unmark Greybox Pick (keeps it in this collection)' : 'Mark as Greybox Pick';
+          b.addEventListener('click', async () => {
+            b.disabled = true;
+            try {
+              await toggleGreyboxPick(media, id, findCachedOverride(media, id));
+              ovCache = await api(API.overrides);
+              notice('ok', marked ? ('Unmarked ' + media + ':' + id + ' (still in collection).') : ('Marked ' + media + ':' + id + ' as Greybox Pick.'));
+              renderCollections();
+            } catch (e) {
+              b.disabled = false;
+              notice('err', (e && e.message) || e);
+            }
+          });
+          pickWrap.appendChild(b);
+        });
+        if (ovCache === null) {
+          pickWrap.appendChild(el('span', 'pick-hint', '(pick states unavailable — overrides failed to load)'));
+        }
+        card.appendChild(pickWrap);
+      }
+      card.appendChild(rowButtons([
+        ['Edit', 'go', () => openCollectionEditor(c)],
+        [c.visible === false ? 'Show' : 'Hide', '', () => toggleCollection(c), c.visible === false ? 'Make visible' : 'Hide everywhere'],
+        ['↑ Up', '', () => moveCollection(colCache, idx, -1), 'Move up'],
+        ['↓ Down', '', () => moveCollection(colCache, idx, 1), 'Move down'],
+        ['Delete', 'danger', () => deleteCollection(c), 'Delete collection'],
+      ]));
+      host.appendChild(card);
+    });
   }
 
   async function saveCollection() {
@@ -991,8 +1254,10 @@
         await api(API.collections, { method: 'POST', body });
         notice('ok', 'Collection created.');
       }
-      fillCollectionForm(null);
+      colEditing = null;
+      closeDrawer();
       await loadCollections();
+      if (currentView === 'dashboard') loadDashboard();
     } catch (e) {
       notice('err', (e.message || e));
     }
@@ -1015,7 +1280,7 @@
     const j = i + dir;
     if (j < 0 || j >= list.length) return;
     try {
-      $('col-list').querySelectorAll('button').forEach((b) => { b.disabled = true; });
+      document.querySelectorAll('#col-list button').forEach((b) => { b.disabled = true; });
       const a = list[i], b = list[j];
       await api(API.collections + '/' + encodeURIComponent(a.slug), { method: 'PUT', body: { ...a, slug: a.slug, sort_order: j } });
       await api(API.collections + '/' + encodeURIComponent(b.slug), { method: 'PUT', body: { ...b, slug: b.slug, sort_order: i } });
@@ -1028,12 +1293,14 @@
   }
 
   async function deleteCollection(c) {
-    if (!confirm('Delete collection "' + c.slug + '"? This cannot be undone.')) return;
+    const ok = await confirmDialog({ title: 'Delete collection?', message: 'Delete collection "' + c.slug + '"? This cannot be undone.', okLabel: 'Delete' });
+    if (!ok) return;
     try {
       await api(API.collections + '/' + encodeURIComponent(c.slug), { method: 'DELETE' });
-      if (colEditing === c.slug) fillCollectionForm(null);
+      if (colEditing === c.slug) colEditing = null;
       notice('ok', 'Collection deleted.');
       await loadCollections();
+      if (currentView === 'dashboard') loadDashboard();
     } catch (e) {
       notice('err', e.message || e);
     }
@@ -1042,62 +1309,81 @@
   /* ================= OVERRIDES ================= */
   let ovEditing = null; // { media, id } being edited, or null
 
-  function buildOverrideForm() {
-    const f = $('ov-form');
-    f.innerHTML = '';
-    f.appendChild(fieldRow('Media', selectInput('o-media', [['movie', 'movie'], ['tv', 'tv']], 'movie')));
-    f.appendChild(fieldRow('TMDB ID', numInput('o-id', '', '550')));
+  function overrideEditorNode(item) {
+    const f = document.createElement('form');
+    f.id = 'ov-form';
+    f.autocomplete = 'off';
+    f.style.cssText = 'display:grid;gap:.8rem';
+    f.appendChild(fieldRow('Media', selectInput('o-media', [['movie', 'movie'], ['tv', 'tv']], item ? item.media : 'movie')));
+    f.appendChild(fieldRow('TMDB ID', numInput('o-id', item ? item.tmdb_id : '', '550')));
     for (const k of OVERRIDE_FIELDS) {
       if (k === 'featured') {
-        f.appendChild(checkInput('o-featured', false, 'featured'));
+        f.appendChild(checkInput('o-featured', !!(item && item[k]), 'featured'));
       } else if (k === 'vote_average') {
-        f.appendChild(fieldRow('vote_average (number)', numInput('o-vote_average', '', '8.5')));
+        f.appendChild(fieldRow('vote_average (number)', numInput('o-vote_average', item && item[k] != null ? item[k] : '', '8.5')));
       } else if (k === 'overview' || k === 'description') {
-        f.appendChild(fieldRow(k + ' (optional)', areaInput('o-' + k, '', '', 2)));
+        f.appendChild(fieldRow(k + ' (optional)', areaInput('o-' + k, item && item[k] != null ? item[k] : '', '', 2)));
       } else {
-        f.appendChild(fieldRow(k + ' (optional)', textInput('o-' + k, '', '')));
+        f.appendChild(fieldRow(k + ' (optional)', textInput('o-' + k, item && item[k] != null ? item[k] : '', '')));
       }
     }
-    const hint = el('p', 'text-xs text-zinc-500', 'Only filled fields are stored — clearing a field removes that override. Editing replaces all fields. Tip: use “Fill Greybox Pick” for featured + badge without typing them.');
-    f.appendChild(hint);
-    const row = el('div', 'flex gap-2 flex-wrap');
-    const save = el('button', BTN_GO + ' px-5 py-2 rounded-lg text-sm', 'Save override');
-    save.type = 'submit';
-    const pickFill = el('button', BTN + ' px-4 py-2 rounded-lg text-sm', '★ Fill Greybox Pick');
+    f.appendChild(el('p', 'muted text-sm', 'Only filled fields are stored — clearing a field removes that override. Editing replaces all fields. Tip: use “Fill Greybox Pick” for featured + badge without typing them.'));
+    const row = el('div', '');
+    row.style.cssText = 'display:flex;gap:.5rem;flex-wrap:wrap';
+    const pickFill = el('button', 'btn btn-secondary btn-sm', '★ Fill Greybox Pick');
     pickFill.type = 'button';
     pickFill.title = 'Set featured + custom_badge without typing them';
-    pickFill.onclick = () => {
+    pickFill.addEventListener('click', () => {
       const feat = document.getElementById('o-featured');
       const badge = document.getElementById('o-custom_badge');
       if (feat) feat.checked = true;
       if (badge) badge.value = PICK_BADGE;
-    };
-    row.appendChild(pickFill);
-    const cancel = el('button', BTN + ' px-4 py-2 rounded-lg text-sm hidden', 'Cancel');
+      setDrawerDirty(true);
+    });
+    const save = el('button', 'btn btn-primary btn-sm', item ? 'Save Changes' : 'Create override');
+    save.type = 'submit';
+    const cancel = el('button', 'btn btn-ghost btn-sm', 'Discard');
     cancel.type = 'button';
-    cancel.id = 'o-cancel';
-    cancel.onclick = () => fillOverrideForm(null);
+    cancel.addEventListener('click', closeDrawer);
     row.appendChild(save);
+    row.appendChild(pickFill);
     row.appendChild(cancel);
     f.appendChild(row);
-    f.onsubmit = (e) => { e.preventDefault(); saveOverride(); };
+    f.addEventListener('submit', (e) => { e.preventDefault(); saveOverride(); });
+    return f;
   }
 
-  function fillOverrideForm(item) {
+  function openOverrideEditor(item) {
     ovEditing = item ? { media: item.media, id: item.tmdb_id } : null;
-    $('ov-form-title').textContent = item ? 'Edit override: ' + item.media + ':' + item.tmdb_id : 'New override';
-    $('o-media').value = item ? item.media : 'movie';
-    $('o-media').disabled = !!item;
-    $('o-id').value = item ? item.tmdb_id : '';
-    $('o-id').disabled = !!item;
-    for (const k of OVERRIDE_FIELDS) {
-      const n = document.getElementById('o-' + k);
-      if (!n) continue;
-      if (k === 'featured') n.checked = !!(item && item[k]);
-      else n.value = item && item[k] != null ? String(item[k]) : '';
+    const node = overrideEditorNode(item);
+    openDrawer({
+      kicker: 'Overrides',
+      title: item ? 'Edit override' : 'New override',
+      sub: item ? item.media + ':' + item.tmdb_id + ' — TMDB stays the fallback for everything else.' : 'TMDB stays the fallback for everything else.',
+      node,
+      form: node,
+    });
+    const mEl = $('o-media');
+    const idEl = $('o-id');
+    if (mEl && item) mEl.disabled = true;
+    if (idEl && item) idEl.disabled = true;
+  }
+
+  function buildOverrideForm() { /* built on demand in the drawer */ }
+  function fillOverrideForm(item) {
+    if (!ADMIN_TOKEN || !$('admin-app') || $('admin-app').classList.contains('hidden')) {
+      ovEditing = item ? { media: item.media, id: item.tmdb_id } : null;
+      let host = $('ov-form-host-test');
+      if (!host) { host = document.createElement('div'); host.id = 'ov-form-host-test'; host.style.display = 'none'; document.body.appendChild(host); }
+      host.innerHTML = '';
+      host.appendChild(overrideEditorNode(item));
+      const mEl = $('o-media');
+      const idEl = $('o-id');
+      if (mEl && item) mEl.disabled = true;
+      if (idEl && item) idEl.disabled = true;
+      return;
     }
-    $('o-cancel').classList.toggle('hidden', !item);
-    if (item) $('ov-form').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    openOverrideEditor(item);
   }
 
   function readOverrideForm() {
@@ -1126,33 +1412,68 @@
     return { media, tmdb_id: id, fields };
   }
 
+  function filteredOverrides() {
+    const list = Array.isArray(ovCache) ? ovCache : [];
+    const q = String(($('ov-search') && $('ov-search').value) || '').trim().toLowerCase();
+    const f = ($('ov-filter') && $('ov-filter').value) || 'all';
+    return list.filter((o) => {
+      if (f === 'picks' && !isGreyboxPick(o)) return false;
+      if (f === 'movie' && o.media !== 'movie') return false;
+      if (f === 'tv' && o.media !== 'tv') return false;
+      if (!q) return true;
+      const keys = Object.keys(o).filter((k) => k !== 'media' && k !== 'tmdb_id');
+      const hay = (o.media + ':' + o.tmdb_id + ' ' + keys.join(' ') + ' ' + keys.map((k) => String(o[k])).join(' ')).toLowerCase();
+      return hay.indexOf(q) >= 0;
+    });
+  }
+
   async function loadOverrides() {
     const host = $('ov-list');
-    host.innerHTML = '<div class="inline-loader"><span class="spinner"></span> Loading overrides…</div>';
+    if (!host) return;
+    stateBox(host, 'loading', 'Loading overrides…');
     try {
       const list = await api(API.overrides);
-      ovCache = list;
-      host.innerHTML = '';
-      if (!list.length) host.appendChild(el('p', 'text-sm text-zinc-500', 'No overrides yet. Create one below — TMDB stays the fallback for everything else.'));
-      for (const o of list) {
-        const keys = Object.keys(o).filter((k) => k !== 'media' && k !== 'tmdb_id');
-        const card = el('div', 'bg-white/5 border border-white/10 rounded-2xl p-4');
-        const head = el('div', 'flex items-center gap-2 flex-wrap');
-        head.appendChild(el('span', 'font-bold font-mono', o.media + ':' + o.tmdb_id));
-        if (isGreyboxPick(o)) head.appendChild(el('span', 'text-xs bg-amber-500 text-black font-bold px-2 py-0.5 rounded', '★ Greybox Pick'));
-        head.appendChild(el('span', 'text-xs text-zinc-500', keys.join(', ') || '(no fields)'));
-        card.appendChild(head);
-        const marked = isGreyboxPick(o);
-        card.appendChild(rowButtons([
-          ['Edit', BTN, () => fillOverrideForm(o)],
-          [marked ? '☆ Unmark Pick' : '★ Mark Pick', BTN, () => togglePickFromOverrides(o)],
-          ['Delete', BTN_DANGER, () => deleteOverride(o)],
-        ]));
-        host.appendChild(card);
-      }
+      ovCache = Array.isArray(list) ? list : [];
+      renderOverrides();
     } catch (e) {
       host.innerHTML = '';
       notice('err', 'Overrides failed to load: ' + (e.message || e));
+    }
+  }
+
+  function renderOverrides() {
+    const host = $('ov-list');
+    if (!host) return;
+    const all = Array.isArray(ovCache) ? ovCache : [];
+    const list = filteredOverrides();
+    host.innerHTML = '';
+    if (!all.length) {
+      const box = stateBox(host, 'empty', 'No overrides yet', 'Create one — TMDB stays the fallback for everything else.');
+      const b = el('button', 'btn btn-primary btn-sm', '+ New Override');
+      b.type = 'button';
+      b.addEventListener('click', () => openOverrideEditor(null));
+      box.appendChild(b);
+      return;
+    }
+    if (!list.length) {
+      stateBox(host, 'empty', 'No matches', 'Try a different search or filter.');
+      return;
+    }
+    for (const o of list) {
+      const keys = Object.keys(o).filter((k) => k !== 'media' && k !== 'tmdb_id');
+      const card = el('div', 'data-row');
+      const head = el('div', 'row-top');
+      head.appendChild(el('span', 'row-title row-mono', o.media + ':' + o.tmdb_id));
+      if (isGreyboxPick(o)) head.appendChild(el('span', 'badge badge-pick', '★ Greybox Pick'));
+      head.appendChild(el('span', 'muted text-sm', keys.join(', ') || '(no fields)'));
+      card.appendChild(head);
+      const marked = isGreyboxPick(o);
+      card.appendChild(rowButtons([
+        ['Edit', 'go', () => openOverrideEditor(o)],
+        [marked ? '☆ Unmark Pick' : '★ Mark Pick', '', () => togglePickFromOverrides(o), marked ? 'Remove Greybox Pick badge' : 'Mark as Greybox Pick'],
+        ['Delete', 'danger', () => deleteOverride(o), 'Delete override'],
+      ]));
+      host.appendChild(card);
     }
   }
 
@@ -1163,6 +1484,7 @@
         ? ('Unmarked ' + o.media + ':' + o.tmdb_id + ' (other override fields kept).')
         : ('Marked ' + o.media + ':' + o.tmdb_id + ' as Greybox Pick.'));
       await loadOverrides();
+      if (currentView === 'picks') loadPicks();
     } catch (e) {
       notice('err', (e && e.message) || e);
     }
@@ -1178,31 +1500,73 @@
         await api(API.overrides, { method: 'POST', body: { media, tmdb_id, ...fields } });
         notice('ok', 'Override created.');
       }
-      fillOverrideForm(null);
+      ovEditing = null;
+      closeDrawer();
       await loadOverrides();
+      if (currentView === 'dashboard' || currentView === 'picks') loadDashboard();
     } catch (e) {
       notice('err', (e.message || e));
     }
   }
 
   async function deleteOverride(o) {
-    if (!confirm('Delete override ' + o.media + ':' + o.tmdb_id + '? TMDB data becomes the fallback again.')) return;
+    const ok = await confirmDialog({ title: 'Delete override?', message: 'Delete override ' + o.media + ':' + o.tmdb_id + '? TMDB data becomes the fallback again.', okLabel: 'Delete' });
+    if (!ok) return;
     try {
       await api(API.overrides + '/' + o.media + '/' + o.tmdb_id, { method: 'DELETE' });
-      if (ovEditing && ovEditing.media === o.media && ovEditing.id === o.tmdb_id) fillOverrideForm(null);
+      if (ovEditing && ovEditing.media === o.media && ovEditing.id === o.tmdb_id) ovEditing = null;
       notice('ok', 'Override deleted.');
       await loadOverrides();
+      if (currentView === 'picks') loadPicks();
+      if (currentView === 'dashboard') loadDashboard();
     } catch (e) {
-      notice('err', (e.message || e));
+      notice('err', e.message || e);
     }
   }
 
+  /* ================= GREYBOX PICKS (read view over existing overrides) ================= */
+  async function loadPicks() {
+    const host = $('picks-list');
+    if (!host) return;
+    if (!Array.isArray(ovCache)) {
+      stateBox(host, 'loading', 'Loading picks…');
+      try {
+        ovCache = await api(API.overrides);
+      } catch (e) {
+        host.innerHTML = '';
+        notice('err', 'Picks failed to load: ' + (e.message || e));
+        return;
+      }
+    }
+    const picks = (ovCache || []).filter(isGreyboxPick);
+    host.innerHTML = '';
+    if (!picks.length) {
+      const box = stateBox(host, 'empty', 'No Greybox Picks yet', 'Mark any override as a Pick, or use TMDB Search to find titles.');
+      const b = el('button', 'btn btn-secondary btn-sm', 'Go to Overrides');
+      b.type = 'button';
+      b.addEventListener('click', () => showView('overrides'));
+      box.appendChild(b);
+      return;
+    }
+    picks.forEach((o) => {
+      const keys = Object.keys(o).filter((k) => k !== 'media' && k !== 'tmdb_id' && k !== 'featured' && k !== 'custom_badge');
+      const card = el('div', 'data-row');
+      const head = el('div', 'row-top');
+      head.appendChild(el('span', 'row-title row-mono', o.media + ':' + o.tmdb_id));
+      head.appendChild(el('span', 'badge badge-pick', '★ Greybox Pick'));
+      card.appendChild(head);
+      const label = o.title || o.name || '';
+      card.appendChild(el('p', 'row-meta', (label ? label + ' — ' : '') + (keys.join(', ') || 'featured + badge')));
+      card.appendChild(rowButtons([
+        ['Edit override', 'go', () => openOverrideEditor(o)],
+        ['☆ Unmark', '', () => togglePickFromOverrides(o).then(() => loadPicks()), 'Remove Greybox Pick badge'],
+        ['Open ↗', '', () => { try { window.open(detailUrlFor(o.media, o.tmdb_id), '_blank', 'noopener'); } catch { /* noop */ } }, 'Open public page'],
+      ]));
+      host.appendChild(card);
+    });
+  }
+
   /* ================= TMDB SEARCH (admin helper, existing systems only) ================= */
-  // Title search for the operator: queries TMDB through the existing public
-  // /api/tmdb proxy (no token in the browser — plain fetch, no Authorization
-  // header). Every action reuses an existing system: public detail routing,
-  // the collections API (Editor's Picks membership), the overrides API and
-  // the Greybox Pick helpers above. No new database, API, or auth.
   const EDITOR_PICKS_SLUG = 'editor-picks';
   const TMDB_IMG = 'https://image.tmdb.org/t/p/w500';
   let searchState = { query: '', results: [], epItems: null }; // epItems null = unknown
@@ -1218,8 +1582,6 @@
     return TMDB_IMG + posterPath;
   }
 
-  // TMDB search/multi payload in, admin-ready rows out. Drops people and
-  // anything without a usable id; preserves media_type exactly.
   function normalizeTmdbSearchResults(raw) {
     const list = raw && Array.isArray(raw.results) ? raw.results : [];
     const out = [];
@@ -1243,7 +1605,6 @@
     return out;
   }
 
-  // Pure Editor's Picks item helpers (same { media, id } shape as custom sources).
   function normalizeEpItems(items) {
     return (Array.isArray(items) ? items : [])
       .map((it) => {
@@ -1272,8 +1633,6 @@
     return normalizeEpItems(items).filter((it) => !(it.media === t.media && it.id === t.id));
   }
 
-  // No admin token here on purpose: /api/tmdb is the public proxy and needs
-  // none. Only safe params are sent (the proxy allowlists path + params).
   async function tmdbSearchFetch(query) {
     const q = String(query || '').trim();
     if (!q) throw { status: 400, message: 'Type a title first.' };
@@ -1319,8 +1678,7 @@
     const t = validPickTarget(media, id);
     const known = findCachedOverride(t.media, t.id);
     const apply = (row) => {
-      showTab('overrides');
-      fillOverrideForm(row || { media: t.media, tmdb_id: t.id });
+      openOverrideEditor(row || { media: t.media, tmdb_id: t.id });
     };
     if (known) { apply(known); return Promise.resolve(); }
     return readOverrideRow(t.media, t.id).then(apply, (e) => { notice('err', (e && e.message) || e); });
@@ -1331,16 +1689,16 @@
     if (!f) return;
     f.innerHTML = '';
     f.appendChild(fieldRow('Title', textInput('tmdb-search-q', '', 'Fight Club')));
-    const hint = el('p', 'text-xs text-zinc-500', 'Searches TMDB through the existing server-side proxy (no key in the browser). Movies + TV only — people are hidden.');
-    f.appendChild(hint);
-    const row = el('div', 'flex gap-2');
-    const go = el('button', BTN_GO + ' px-5 py-2 rounded-lg text-sm', 'Search');
+    f.appendChild(el('p', 'muted text-sm', 'Searches TMDB through the existing server-side proxy (no key in the browser). Movies + TV only — people are hidden.'));
+    const row = el('div', '');
+    row.style.cssText = 'display:flex;gap:.5rem';
+    const go = el('button', 'btn btn-primary btn-sm', 'Search');
     go.type = 'submit';
     row.appendChild(go);
     f.appendChild(row);
-    f.onsubmit = (e) => { e.preventDefault(); runTmdbSearch(); };
+    f.addEventListener('submit', (e) => { e.preventDefault(); runTmdbSearch(); });
     const host = $('tmdb-search-list');
-    if (host) host.innerHTML = '<p class="text-sm text-zinc-500">Type a movie or TV title above, then Search.</p>';
+    if (host) stateBox(host, 'empty', 'Search TMDB', 'Type a movie or TV title above, then Search.');
   }
 
   async function runTmdbSearch() {
@@ -1349,7 +1707,7 @@
     const q = qEl ? qEl.value.trim() : '';
     if (!q) { notice('err', 'Type a title first.'); return; }
     if (q.length > 120) { notice('err', 'Query must be at most 120 characters.'); return; }
-    if (host) host.innerHTML = '<div class="inline-loader"><span class="spinner"></span> Searching TMDB…</div>';
+    if (host) stateBox(host, 'loading', 'Searching TMDB…');
     try {
       const [tmdbRes, epRes, ovRes] = await Promise.allSettled([
         tmdbSearchFetch(q),
@@ -1368,12 +1726,13 @@
       renderSearchCards();
       if (!searchState.results.length && host) {
         host.innerHTML = '';
-        host.appendChild(el('p', 'text-sm text-zinc-500', 'No matches for “' + q + '”. Try another spelling.'));
+        const box = stateBox(host, 'empty', 'No matches', 'No matches for “' + q + '”. Try another spelling.');
+        void box;
       }
     } catch (e) {
       if (host) {
         host.innerHTML = '';
-        host.appendChild(el('p', 'text-sm text-red-300', 'Search failed: ' + ((e && e.message) || e)));
+        stateBox(host, 'error', 'Search failed', (e && e.message) || String(e));
       }
       notice('err', 'Search failed: ' + ((e && e.message) || e));
     }
@@ -1383,36 +1742,39 @@
     const host = $('tmdb-search-list');
     if (!host) return;
     host.innerHTML = '';
+    if (!searchState.results.length) return;
     searchState.results.forEach((r) => {
-      const card = el('div', 'bg-white/5 border border-white/10 rounded-2xl p-4');
-      const row = el('div', 'flex gap-3');
+      const card = el('div', 'data-row');
+      const row = el('div', '');
+      row.style.cssText = 'display:flex;gap:.75rem';
       const img = document.createElement('img');
       const posterUrl = tmdbPosterUrl(r.poster);
-      img.className = 'w-12 h-[72px] object-cover rounded-lg shrink-0';
+      img.className = 'search-thumb';
       img.loading = 'lazy';
       img.alt = '';
       img.src = posterUrl || 'https://via.placeholder.com/48x72?text=?';
       row.appendChild(img);
-      const body = el('div', 'min-w-0 flex-1');
-      const head = el('div', 'flex items-center gap-2 flex-wrap');
-      head.appendChild(el('span', 'font-bold', r.title));
-      head.appendChild(el('span', 'text-xs bg-white/10 px-2 py-0.5 rounded', r.media === 'tv' ? 'TV' : 'Movie'));
+      const body = el('div', '');
+      body.style.cssText = 'min-width:0;flex:1';
+      const head = el('div', 'row-top');
+      head.appendChild(el('span', 'row-title', r.title));
+      head.appendChild(el('span', 'badge', r.media === 'tv' ? 'TV' : 'Movie'));
       if (isGreyboxPick(findCachedOverride(r.media, r.id))) {
-        head.appendChild(el('span', 'text-xs bg-amber-500 text-black font-bold px-2 py-0.5 rounded', '★ Greybox Pick'));
+        head.appendChild(el('span', 'badge badge-pick', '★ Greybox Pick'));
       }
       body.appendChild(head);
       const metaBits = [(r.year || '—'), '⭐ ' + Number(r.vote || 0).toFixed(1), 'TMDB ' + r.media + ':' + r.id];
-      body.appendChild(el('p', 'mt-1 text-xs text-zinc-400', metaBits.join(' · ')));
-      if (r.overview) body.appendChild(el('p', 'mt-1 text-xs text-zinc-500 line-clamp-3', r.overview));
+      body.appendChild(el('p', 'row-meta', metaBits.join(' · ')));
+      if (r.overview) body.appendChild(el('p', 'row-meta', r.overview));
       row.appendChild(body);
       card.appendChild(row);
       const inPicks = searchState.epItems !== null && isInEditorPicks(searchState.epItems, r.media, r.id);
       const marked = isGreyboxPick(findCachedOverride(r.media, r.id));
       card.appendChild(rowButtons([
-        ['Open ↗', BTN, () => { try { window.open(detailUrlFor(r.media, r.id), '_blank', 'noopener'); } catch { /* noop */ } }],
-        [searchState.epItems === null ? "+ Editor's Picks" : (inPicks ? "✓ In Editor's Picks" : "+ Editor's Picks"), BTN, () => toggleEditorPicksFromSearch(r)],
-        [marked ? '☆ Unmark Pick' : '★ Mark Pick', BTN, () => togglePickFromSearch(r)],
-        ['Override', BTN, () => manageOverrideFor(r.media, r.id)],
+        ['Open ↗', '', () => { try { window.open(detailUrlFor(r.media, r.id), '_blank', 'noopener'); } catch { /* noop */ } }, 'Open public page'],
+        [searchState.epItems === null ? "+ Editor's Picks" : (inPicks ? "✓ In Editor's Picks" : "+ Editor's Picks"), '', () => toggleEditorPicksFromSearch(r), "Toggle Editor's Picks membership"],
+        [marked ? '☆ Unmark Pick' : '★ Mark Pick', '', () => togglePickFromSearch(r), marked ? 'Remove Greybox Pick badge' : 'Mark as Greybox Pick'],
+        ['Override', 'go', () => manageOverrideFor(r.media, r.id), 'Create or edit override'],
       ]));
       host.appendChild(card);
     });
@@ -1443,32 +1805,39 @@
     }
   }
 
-  /* ================= SETTINGS (hero) ================= */
+  /* ================= SETTINGS (hero — existing controls preserved) ================= */
   function buildHeroForm() {
     const f = $('hero-form');
+    if (!f) return;
     f.innerHTML = '';
     f.appendChild(fieldRow('Mode', selectInput('h-mode', [['follow-grid', 'follow-grid (banner follows the grid)'], ['custom', 'custom (fixed spotlight)']], 'follow-grid')));
     f.appendChild(fieldRow('Badge (custom mode label, optional)', textInput('h-badge', '', 'Greybox Spotlight')));
     f.appendChild(fieldRow('Pick (custom mode item index)', numInput('h-pick', '0', '0')));
-    const srcHost = el('div', 'grid gap-3');
+    const srcHost = el('div', '');
+    srcHost.style.cssText = 'display:grid;gap:.7rem';
     srcHost.id = 'h-source';
-    f.appendChild(fieldRow('Rule source (required for custom mode)', srcHost));
+    const srcLabel = el('div', '');
+    srcLabel.appendChild(el('span', 'flabel', 'Rule source (required for custom mode)'));
+    srcLabel.appendChild(srcHost);
+    f.appendChild(srcLabel);
     renderSourceFields(srcHost, 'h-src', HOME_SOURCE_TYPES, null);
-    const row = el('div', 'flex gap-2');
-    const save = el('button', BTN_GO + ' px-5 py-2 rounded-lg text-sm', 'Save hero');
+    const row = el('div', '');
+    row.style.cssText = 'display:flex;gap:.5rem;flex-wrap:wrap';
+    const save = el('button', 'btn btn-primary btn-sm', 'Save hero');
     save.type = 'submit';
     row.appendChild(save);
-    const refresh = el('button', BTN + ' px-4 py-2 rounded-lg text-sm', 'Reload');
+    const refresh = el('button', 'btn btn-secondary btn-sm', 'Reload');
     refresh.type = 'button';
-    refresh.onclick = () => loadHero();
+    refresh.addEventListener('click', loadHero);
     row.appendChild(refresh);
     f.appendChild(row);
-    f.onsubmit = (e) => { e.preventDefault(); saveHero(); };
+    f.addEventListener('submit', (e) => { e.preventDefault(); saveHero(); });
   }
 
   async function loadHero() {
     try {
       const hero = await api(API.hero);
+      if (!$('h-mode')) return;
       $('h-mode').value = hero && hero.mode === 'custom' ? 'custom' : 'follow-grid';
       $('h-badge').value = (hero && hero.badge) || '';
       $('h-pick').value = (hero && hero.pick != null) ? hero.pick : 0;
@@ -1505,17 +1874,166 @@
     }
   }
 
+  /* ================= DASHBOARD ================= */
+  async function loadDashboard() {
+    const cards = $('dash-cards');
+    const cfg = $('dash-config');
+    if (!cards || !cfg) return;
+    cards.innerHTML = '';
+    for (let i = 0; i < 4; i++) {
+      const sk = el('div', 'skel');
+      cards.appendChild(sk);
+    }
+    cfg.innerHTML = '<p class="muted text-sm">Loading live configuration…</p>';
+    const [secRes, colRes, ovRes, heroRes] = await Promise.allSettled([
+      api(API.homeSections),
+      api(API.collections),
+      api(API.overrides),
+      api(API.hero),
+    ]);
+    const secs = secRes.status === 'fulfilled' && Array.isArray(secRes.value) ? secRes.value : null;
+    const cols = colRes.status === 'fulfilled' && Array.isArray(colRes.value) ? colRes.value : null;
+    const ovs = ovRes.status === 'fulfilled' && Array.isArray(ovRes.value) ? ovRes.value : null;
+    const hero = heroRes.status === 'fulfilled' ? heroRes.value : null;
+    if (secs) secCache = secs;
+    if (cols) colCache = cols;
+    if (ovs) ovCache = ovs;
+
+    const count = (a) => (Array.isArray(a) ? a.length : null);
+    const visCount = (a) => (Array.isArray(a) ? a.filter((x) => x && x.visible !== false).length : null);
+    const picks = Array.isArray(ovs) ? ovs.filter(isGreyboxPick).length : null;
+    const fmt = (n) => (n == null ? '—' : String(n));
+
+    const stats = [
+      { label: 'Home Sections', n: fmt(count(secs)), sub: secs ? visCount(secs) + ' visible · ' + (secs.length - visCount(secs)) + ' hidden' : 'Unavailable', view: 'sections' },
+      { label: 'Collections', n: fmt(count(cols)), sub: cols ? visCount(cols) + ' visible · ' + (cols.length - visCount(cols)) + ' hidden' : 'Unavailable', view: 'collections' },
+      { label: 'Overrides', n: fmt(count(ovs)), sub: ovs ? picks + ' ★ picks' : 'Unavailable', view: 'overrides' },
+      { label: 'Hero Mode', n: hero && hero.mode ? hero.mode : '—', sub: hero ? 'pick ' + (hero.pick != null ? hero.pick : 0) + (hero.badge ? ' · ' + hero.badge : '') : 'Unavailable', view: 'settings' },
+    ];
+    cards.innerHTML = '';
+    stats.forEach((s) => {
+      const b = el('button', 'stat-card');
+      b.type = 'button';
+      b.setAttribute('aria-label', s.label + ': ' + s.n + '. Go to ' + s.label);
+      b.appendChild(el('p', 'stat-num', s.n));
+      b.appendChild(el('p', 'stat-label', s.label));
+      b.appendChild(el('p', 'stat-sub', s.sub));
+      b.addEventListener('click', () => showView(s.view));
+      cards.appendChild(b);
+    });
+
+    cfg.innerHTML = '';
+    if (!secs && !cols && !ovs) {
+      cfg.appendChild(el('p', 'muted text-sm', 'Configuration is unavailable — the management API could not be reached. Check the connection and retry.'));
+      return;
+    }
+    const addRow = (label, detail, view) => {
+      const row = el('div', 'cfg-row');
+      row.appendChild(el('span', 'grow', label + (detail ? ' — ' + detail : '')));
+      if (view) {
+        const b = el('button', 'rowbtn', 'Open');
+        b.type = 'button';
+        b.addEventListener('click', () => showView(view));
+        row.appendChild(b);
+      }
+      cfg.appendChild(row);
+    };
+    if (secs) {
+      const names = secs.slice(0, 4).map((s) => s.title || s.id).join(', ') || '—';
+      addRow(secs.length + ' sections', names + (secs.length > 4 ? ' (+' + (secs.length - 4) + ' more)' : ''), 'sections');
+    }
+    if (cols) {
+      const names = cols.slice(0, 4).map((c) => c.slug).join(', ') || '—';
+      addRow(cols.length + ' collections', names + (cols.length > 4 ? ' (+' + (cols.length - 4) + ' more)' : ''), 'collections');
+    }
+    if (ovs) {
+      addRow(ovs.length + ' overrides', picks + ' marked as Greybox Picks', 'overrides');
+    }
+    if (hero) {
+      addRow('Hero: ' + (hero.mode || 'follow-grid'), hero.mode === 'custom' ? summarizeSource(hero.source) : 'banner follows the grid', 'settings');
+    }
+  }
+
   /* ---------------- boot ---------------- */
-  function bindTabs() {
-    document.querySelectorAll('.atab').forEach((b) => {
-      b.onclick = () => {
-        showTab(b.dataset.atab);
-        if (b.dataset.atab === 'sections') loadSections();
-        if (b.dataset.atab === 'collections') loadCollections();
-        if (b.dataset.atab === 'overrides') loadOverrides();
-        if (b.dataset.atab === 'search') { /* results persist; nothing to reload */ }
-        if (b.dataset.atab === 'settings') loadHero();
-      };
+  function bindNav() {
+    document.querySelectorAll('#admin-nav .nav-item[data-view]').forEach((b) => {
+      if (b.disabled) {
+        b.addEventListener('click', () => showView('soon'));
+        return;
+      }
+      b.addEventListener('click', () => showView(b.dataset.view));
+    });
+    document.querySelectorAll('[data-goto]').forEach((b) => {
+      b.addEventListener('click', () => showView(b.dataset.goto));
+    });
+    document.querySelectorAll('[data-quick-new]').forEach((b) => {
+      b.addEventListener('click', () => {
+        const k = b.dataset.quickNew;
+        if (k === 'section') openSectionEditor(null);
+        else if (k === 'collection') openCollectionEditor(null);
+        else if (k === 'override') openOverrideEditor(null);
+      });
+    });
+  }
+
+  function bindToolbar() {
+    const secNew = $('sec-new');
+    if (secNew) secNew.addEventListener('click', () => openSectionEditor(null));
+    const colNew = $('col-new');
+    if (colNew) colNew.addEventListener('click', () => openCollectionEditor(null));
+    const ovNew = $('ov-new');
+    if (ovNew) ovNew.addEventListener('click', () => openOverrideEditor(null));
+    const sr = $('sec-refresh');
+    if (sr) sr.addEventListener('click', loadSections);
+    const cr = $('col-refresh');
+    if (cr) cr.addEventListener('click', loadCollections);
+    const orr = $('ov-refresh');
+    if (orr) orr.addEventListener('click', loadOverrides);
+    const dr = $('dash-refresh');
+    if (dr) dr.addEventListener('click', loadDashboard);
+    const ss = $('sec-search');
+    if (ss) ss.addEventListener('input', renderSections);
+    const sf = $('sec-filter');
+    if (sf) sf.addEventListener('change', renderSections);
+    const cs = $('col-search');
+    if (cs) cs.addEventListener('input', renderCollections);
+    const cf = $('col-filter');
+    if (cf) cf.addEventListener('change', renderCollections);
+    const os = $('ov-search');
+    if (os) os.addEventListener('input', renderOverrides);
+    const of = $('ov-filter');
+    if (of) of.addEventListener('change', renderOverrides);
+  }
+
+  function bindChrome() {
+    const t = $('nav-toggle');
+    if (t) t.addEventListener('click', () => {
+      const s = $('admin-sidebar');
+      if (s && s.classList.contains('open')) closeMobileNav();
+      else openMobileNav();
+    });
+    const scrim = $('nav-scrim');
+    if (scrim) scrim.addEventListener('click', closeMobileNav);
+    const dc = $('drawer-close');
+    if (dc) dc.addEventListener('click', closeDrawer);
+    const ds = $('drawer-scrim');
+    if (ds) ds.addEventListener('click', closeDrawer);
+    const discard = $('drawer-discard');
+    if (discard) discard.addEventListener('click', closeDrawer);
+    const save = $('drawer-save');
+    if (save) save.addEventListener('click', () => {
+      try {
+        if (drawerForm && drawerForm.requestSubmit) drawerForm.requestSubmit();
+        else if (drawerForm) drawerForm.dispatchEvent(new Event('submit', { cancelable: true }));
+      } catch { /* noop */ }
+    });
+    const cc = $('confirm-cancel');
+    if (cc) cc.addEventListener('click', () => { if (confirmState && confirmState.close) confirmState.close(false); });
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      if (confirmState && confirmState.close) { confirmState.close(false); return; }
+      if (isDrawerOpen()) { closeDrawer(); return; }
+      closeMobileNav();
     });
   }
 
@@ -1533,8 +2051,7 @@
     api(API.collections).then(
       () => {
         setAuthed(true);
-        showTab('sections');
-        loadSections();
+        showView('dashboard');
         notice('ok', 'Connected. Token lives in this tab’s memory only.');
       },
       (e) => {
@@ -1544,18 +2061,26 @@
     );
   }
 
-  buildSectionForm();
-  buildCollectionForm();
-  buildOverrideForm();
+  function disconnect() {
+    ADMIN_TOKEN = null;
+    setAuthed(false);
+    const n = $('admin-notice');
+    if (n) n.classList.add('hidden');
+  }
+
   buildSearchPanel();
   buildHeroForm();
-  bindTabs();
+  bindNav();
+  bindToolbar();
+  bindChrome();
   const cbtn = $('admin-connect-btn');
-  if (cbtn) cbtn.onclick = connect;
+  if (cbtn) cbtn.addEventListener('click', connect);
   const pw = $('admin-token');
   if (pw) pw.addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(); });
   const dc = $('admin-disconnect');
-  if (dc) dc.onclick = () => { ADMIN_TOKEN = null; setAuthed(false); const n = $('admin-notice'); if (n) n.classList.add('hidden'); };
+  if (dc) dc.addEventListener('click', disconnect);
+  const td = $('top-disconnect');
+  if (td) td.addEventListener('click', disconnect);
 
   // Headless/test hook: pure helpers only (no DOM, no fetch, no token).
   try {
@@ -1572,6 +2097,7 @@
       EDITOR_PICKS_SLUG, detailUrlFor, tmdbPosterUrl,
       normalizeTmdbSearchResults, normalizeEpItems, isInEditorPicks,
       withAddedToEditorPicks, withRemovedFromEditorPicks, tmdbSearchFetch,
+      showView, showTab,
       HOME_SOURCE_TYPES, COL_SOURCE_TYPES, OVERRIDE_FIELDS, SLUG_RE,
       API,
     });
