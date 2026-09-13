@@ -138,6 +138,21 @@ preserved but ignored, and the Admin labels them inactive. `artwork`
 travel with every mode. Collection heroes (`settings.collection_heroes`)
 are a separate scope: a Home Hero update never touches them and vice versa.
 
+Hero trailer presentation (`js/hero.js` + `css/hero.css`): the trailer plays
+as a background video, never as a visible YouTube player. The embed
+requests a chromeless player (`controls=0&fs=0`, keyboard input disabled,
+modest branding, no annotations), the iframe is overscan-cropped inside the
+`overflow:hidden` hero so residual YouTube edge chrome (title bar, playlist
+affordances from loop mode) renders outside the visible area, clicks/focus
+never reach YouTube (`pointer-events:none`, `tabindex=-1`), and a naturally
+ending non-loop trailer falls back to the still instead of lingering on the
+endscreen. Greybox's own controls stay independent: the circular
+mute/unmute button (visible only while playing), Watch Now, More Info and
+In My List. Limitation (platform-imposed): YouTube does not offer a fully
+brand-free player — a watermark/"Watch on YouTube" affordance can still
+exist inside the video frame; what is guaranteed is no visible playback
+controls over the hero.
+
 Flow: browser → `GET /api/config/*` (Cloudflare Pages Functions, same-origin)
 → D1 read via `functions/lib/db.js` (the only file with raw SQL) → frontend
 `js/data.js` preloads once at boot, then all existing getters, merge logic

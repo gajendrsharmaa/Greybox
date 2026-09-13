@@ -1,6 +1,16 @@
 /* Greybox Phase 2 — cinematic hero module (+ Phase 3 seamless trailer,
  * + Part 2 Hero Control Center presentation layer).
  *
+ * The trailer plays as a BACKGROUND video, never as a visible YouTube
+ * player: the embed requests a chromeless player (controls=0, fs=0,
+ * disablekb=1, modest branding, no annotations), the iframe is overscan-
+ * cropped in css/hero.css so residual YouTube edge chrome renders outside
+ * the visible hero, pointer events never reach YouTube, and a naturally
+ * ending non-loop trailer falls back to the still instead of lingering on
+ * the endscreen. The only trailer control is Greybox's own circular
+ * mute/unmute button (visible exclusively while playing); Watch Now, More
+ * Info and In My List are untouched hero actions.
+ *
  * Owns ONLY the homepage/public hero: state, text, backdrop, trailer, audio.
  * No countdown ring, no loading indicator — the poster is authoritative until
  * the trailer proves it can actually play. Data comes from the existing flow
@@ -182,8 +192,21 @@
     var loopParam = !(presentation.trailer && presentation.trailer.loop === false);
     // Unmuted autoplay is offered but never guaranteed: if the browser
     // blocks it, the failure path below keeps the still (honest fallback).
+    //
+    // Background-video player configuration: the trailer must play as
+    // cinematic scenery, never as a visible YouTube player. controls=0
+    // suppresses the control bar by request, but YouTube still paints
+    // residual chrome that controls=0 does NOT suppress (top title bar on
+    // start, playlist prev/next affordances — loop mode below makes this a
+    // single-item playlist player — center pause flashes on state changes,
+    // endscreen when a non-looping trailer ends). So this is only half the
+    // fix: css/hero.css additionally overscans the iframe (scale crop inside
+    // overflow:hidden) so all edge chrome renders outside the visible hero,
+    // and onPlayerState() conceals the endscreen on natural end. fs=0 keeps
+    // the fullscreen affordance out; disablekb=1 (+ tabindex -1 in markup)
+    // keeps keyboard focus from ever driving the player.
     var url = 'https://www.youtube.com/embed/' + key +
-      '?autoplay=1&controls=0&rel=0&playsinline=1' +
+      '?autoplay=1&controls=0&fs=0&rel=0&playsinline=1' +
       (mutedParam ? '&mute=1' : '') +
       (loopParam ? '&loop=1&playlist=' + key : '') +
       '&modestbranding=1&iv_load_policy=3&disablekb=1&enablejsapi=1';
@@ -740,9 +763,34 @@
     if (info === 1) { // actually playing - the only proof we accept
       hasPlayed = true;
       if (phase === 'delay') maybeReveal(gen);
+      return;
     }
-    // Every other state (unstarted cued buffering paused ended) means "not
+    if (info === 0) { // natural end: never leave the endscreen ("More
+      // videos") over the hero — fall back to the still (loop mode wraps
+      // by itself and is deliberately untouched here).
+      onTrailerEnded();
+      return;
+    }
+    // Every other state (unstarted cued buffering paused) means "not
     // demonstrably playing" - the readiness timeout bounds the wait.
+  }
+
+  // Natural end of a NON-looping trailer: the YouTube endscreen is player UI
+  // that must never sit over the cinematic hero. Same fallback philosophy as
+  // failTrailer (still image, no control, no message), but restartable: the
+  // generation and identity are kept, so leaving/returning may start a fresh
+  // sequence via beginSequence exactly like any other idle hero.
+  function onTrailerEnded() {
+    if (((presentation.trailer) || {}).loop !== false) return; // loop wraps by itself
+    phase = 'idle';
+    trailerKey = '';
+    delayElapsed = false;
+    hasPlayed = false;
+    apiReady = false;
+    muted = true;
+    hideControl();
+    detachTrailer();
+    restoreBackdrop();
   }
 
   /* ---------------- public state ---------------- */

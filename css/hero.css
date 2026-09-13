@@ -79,7 +79,8 @@
   background: radial-gradient(120% 95% at 50% 42%, transparent 52%, rgba(0, 0, 0, 0.6) 100%);
 }
 
-/* Trailer sits between still and shade: crossfade, fills hero, no controls */
+/* Trailer sits between still and shade: crossfade, cover-fills the hero and
+ * overscans it, so no YouTube player chrome is ever visible (see iframe rule) */
 .gx-hero-trailer {
   position: absolute;
   inset: 0;
@@ -103,8 +104,15 @@
   width: max(100%, 177.78vh);
   height: max(100%, 56.25vw);
   border: 0;
-  transform: translate(-50%, -50%);
-  pointer-events: none; /* our own mute control; no giant YouTube bar */
+  /* Background-video overscan: controls=0 only *requests* a chromeless
+   * player — YouTube still paints edge chrome (top title bar on start,
+   * playlist prev/next from loop mode, endscreen edges). Scaling the cover
+   * fit ~30% beyond the hero pushes ALL of that outside the visible area
+   * (.gx-hero-trailer and .gx-hero are both overflow:hidden), so no playback
+   * controls can ever show regardless of transient player states. The
+   * Greybox mute button lives outside this iframe and is unaffected. */
+  transform: translate(-50%, -50%) scale(1.3);
+  pointer-events: none; /* our own mute control; clicks never reach YouTube */
 }
 
 /* Content */
