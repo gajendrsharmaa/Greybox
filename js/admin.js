@@ -41,6 +41,16 @@
  * switch on the same row (no second Pick system), save read-back
  * verification and delete-then-404 verification. No new backend: same
  * /api/admin/overrides routes, same D1 overrides table.
+ *
+ * PART 4.5 — Custom Tags (editorial content groups): Tags workspace (cards
+ * with live counts, local search + visibility filter), tag editor (Identity
+ * / Presentation / Usage, slug-suggest, permanent slugs), Manage Titles
+ * (TMDB multi-select add, chunked cached stale-guarded title resolution,
+ * reorder, membership-only remove), real usage display + delete blocked
+ * while referenced (409). `tag` source type in Home + Collection editors
+ * (same resolveTagItems rule public renders use). Backend: new D1
+ * tags/tag_members tables (migration 0003) + /api/admin/tags* +
+ * /api/config/tags; overrides custom_badge untouched.
  */
 (function () {
   'use strict';
@@ -58,6 +68,7 @@
   const API = {
     homeSections: '/api/admin/home-sections',
     collections: '/api/admin/collections',
+    tags: '/api/admin/tags',
     overrides: '/api/admin/overrides',
     hero: '/api/admin/settings/home-hero',
     colHeroes: '/api/admin/settings/collection-heroes',
@@ -207,6 +218,8 @@
     colPreviewGen++;
     ovGen++;
     ovSearchGen++;
+    tagDetailGen++;
+    tagAddGen++;
     try { if (drawerPrevFocus && drawerPrevFocus.focus) drawerPrevFocus.focus(); } catch { /* noop */ }
     drawerPrevFocus = null;
   }
@@ -222,6 +235,7 @@
     sections: { title: 'Home', sub: 'Content' },
     heroes: { title: 'Heroes', sub: 'Content' },
     collections: { title: 'Collections', sub: 'Content' },
+    tags: { title: 'Tags', sub: 'Content' },
     overrides: { title: 'Overrides', sub: 'Content' },
     picks: { title: 'Greybox Picks', sub: 'Content' },
     search: { title: 'TMDB Search', sub: 'Content' },
@@ -251,6 +265,7 @@
     if (key === 'sections') { loadHomeHero(); loadSections(); }
     if (key === 'heroes') loadHeroes();
     if (key === 'collections') loadCollections();
+    if (key === 'tags') loadTags();
     if (key === 'overrides') loadOverrides();
     if (key === 'picks') loadPicks();
     if (key === 'settings') loadHero();
@@ -307,8 +322,8 @@
   const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
   const HOME_MOVIE_CATS = ['popular', 'top-rated', 'upcoming', 'now-playing'];
   const HOME_TV_CATS = ['popular', 'top-rated', 'on-the-air', 'airing-today'];
-  const HOME_SOURCE_TYPES = ['trending', 'movies', 'tv', 'anime', 'search', 'ids', 'genre', 'collection'];
-  const COL_SOURCE_TYPES = ['trending', 'popular', 'top-rated', 'now-playing', 'discover', 'genre', 'year', 'search', 'custom'];
+  const HOME_SOURCE_TYPES = ['trending', 'movies', 'tv', 'anime', 'search', 'ids', 'genre', 'collection', 'tag'];
+  const COL_SOURCE_TYPES = ['trending', 'popular', 'top-rated', 'now-playing', 'discover', 'genre', 'year', 'search', 'custom', 'tag'];
   const OVERRIDE_FIELDS = ['title', 'name', 'overview', 'description', 'poster_path', 'backdrop_path', 'vote_average', 'release_date', 'first_air_date', 'featured', 'custom_badge'];
 
   function vSlug(v) {
@@ -360,6 +375,12 @@
       if (s.length > 64 || !SLUG_RE.test(s)) return 'collection slug must match [a-z0-9-] (lowercase, max 64 chars)';
       return null;
     }
+    if (t === 'tag') {
+      const s = String(src.tag || '').trim().toLowerCase();
+      if (!s) return 'tag source needs a tag';
+      if (s.length > 64 || !SLUG_RE.test(s)) return 'tag slug must match [a-z0-9-] (lowercase, max 64 chars)';
+      return null;
+    }
     if (t === 'year' && !/^\d{4}$/.test(String(src.year || '').trim())) return 'year must be YYYY';
     if ((t === 'ids' || t === 'custom') && (!Array.isArray(src.items) || !src.items.length)) return 'source needs at least one item';
     if (t === 'movies' && HOME_MOVIE_CATS.indexOf(String(src.category || 'popular').toLowerCase()) < 0 && allowed === HOME_SOURCE_TYPES) return 'unknown movies category';
@@ -399,6 +420,7 @@
     if (!src || typeof src.type !== 'string') return '—';
     const bits = [src.type];
     if (src.slug) bits.push('/collection/' + src.slug);
+    if (src.tag) bits.push('tag ' + src.tag);
     if (src.category) bits.push(src.category);
     if (src.kind) bits.push(src.kind);
     if (src.media) bits.push(src.media);
@@ -744,6 +766,49 @@
         }).then(fillSelect, () => {
           api(API.collections).then(fillSelect, fillText);
         });
+      } else if (t === 'tag') {
+        const cur = String(val('tag', '') || '').trim().toLowerCase();
+        const tagHost = el('div', '');
+        tagHost.style.cssText = 'display:grid;gap:.7rem';
+        sub.appendChild(tagHost);
+        tagHost.appendChild(el('p', 'muted text-sm', 'Loading tags…'));
+        const stillCurrent = () => {
+          try {
+            if (!tagHost.isConnected) return false;
+            if (typeSel.value !== 'tag') return false;
+          } catch { /* noop */ }
+          return true;
+        };
+        const labelOf = (g) => (g && typeof g.slug === 'string' && g.slug)
+          ? (g.name ? g.slug + ' — ' + g.name : g.slug)
+          : '';
+        const fillTagSelect = (list) => {
+          if (!stillCurrent()) return;
+          tagHost.innerHTML = '';
+          const arr = Array.isArray(list) ? list.filter((g) => g && typeof g.slug === 'string' && g.slug) : [];
+          if (arr.length) {
+            const opts = arr.map((g) => [g.slug, labelOf(g)]);
+            if (cur && !opts.some(([v]) => v === cur)) opts.unshift([cur, cur + ' (current)']);
+            tagHost.appendChild(fieldRow('Tag (existing)', selectInput(prefix + '-tag', opts, cur || opts[0][0])));
+          } else {
+            tagHost.appendChild(fieldRow('Tag slug', textInput(prefix + '-tag', cur, 'kids-fav')));
+          }
+          tagHost.appendChild(el('p', 'muted text-sm', 'Membership order is the content order (tag order). The section/collection limit still applies; pins still lead and excludes still drop in collections. Manage titles in Content → Tags.'));
+        };
+        const fillTagText = () => {
+          if (!stillCurrent()) return;
+          tagHost.innerHTML = '';
+          tagHost.appendChild(fieldRow('Tag slug', textInput(prefix + '-tag', cur, 'kids-fav')));
+          tagHost.appendChild(el('p', 'muted text-sm', 'Type an existing tag slug (e.g. kids-fav). Unknown or hidden tags skip the shelf instead of rendering a broken row.'));
+        };
+        // Public list needs no auth and shows what the site can actually
+        // resolve; fall back to the authed list (hidden tags included).
+        fetch('/api/config/tags', { headers: { accept: 'application/json' } }).then((r) => {
+          if (!r.ok) throw new Error('no public list');
+          return r.json();
+        }).then(fillTagSelect, () => {
+          api(API.tags).then(fillTagSelect, fillTagText);
+        });
       }
     };
     typeSel.onchange = paint;
@@ -772,6 +837,7 @@
     if (document.getElementById(prefix + '-genre') && !src.genre) { const n = numOrEmpty(v(prefix + '-genre')); if (n !== '') src.genre = n; }
     if (document.getElementById(prefix + '-year')) { const n = numOrEmpty(v(prefix + '-year')); if (n !== '') src.year = n; }
     if (document.getElementById(prefix + '-collection')) { const s = String(v(prefix + '-collection') || '').trim().toLowerCase(); if (s) src.slug = s; }
+    if (document.getElementById(prefix + '-tag')) { const s = String(v(prefix + '-tag') || '').trim().toLowerCase(); if (s) src.tag = s; }
     if (document.getElementById(prefix + '-items')) {
       const parsed = parseEntryLines(v(prefix + '-items'));
       if (!parsed.ok) throw { message: parsed.error };
@@ -1365,6 +1431,18 @@
     if (t === 'custom') {
       return resolvePreviewIdItems(src.items);
     }
+    if (t === 'tag') {
+      const slug = String(src.tag || '').trim().toLowerCase();
+      if (!slug) return Promise.reject(new Error('Tag source needs a tag.'));
+      // Same rule as the public shelf: visible tag's ordered membership,
+      // first page only (resolvePreviewIdItems already caps at 24).
+      return fetchJsonGet('/api/config/tags').then((list) => {
+        const arr = Array.isArray(list) ? list : [];
+        const tag = arr.find((g) => g && g.slug === slug) || null;
+        if (!tag) throw new Error('Tag not found or hidden: ' + slug);
+        return resolvePreviewIdItems(tag.members);
+      });
+    }
     return Promise.reject(new Error('Unknown source type: ' + t));
   }
 
@@ -1883,6 +1961,699 @@
     } catch (e) {
       notice('err', e.message || e);
     }
+  }
+
+  /* ================= TAGS (Part 4.5: custom editorial content groups) ================= */
+  // Tags are Greybox-owned content groups: { slug, name, description,
+  // visible, badge } + ordered membership [{ media, id }]. Membership is
+  // identity only — titles/posters resolve live through the Greybox API and
+  // are NEVER stored. One title can belong to many tags; each tag resolves
+  // its own list (no cross-tag contamination).
+  let tagCache = []; // GET /api/admin/tags summaries (with counts, no members)
+  let tagEditing = null; // slug being edited, or null for create
+  let tagSlugTouched = false; // true once the operator edits the slug by hand
+  let tagDetail = null; // fresh GET /api/admin/tags/:slug for Manage Titles
+  let tagDetailGen = 0; // stale guard for detail loads + title resolution
+  let tagAddGen = 0; // stale guard for add-titles searches
+  const tagTitleCache = {}; // 'media:id' -> { title, year, poster } (session only, never stored)
+
+  // Display name → stable slug suggestion (admin-side only; the server
+  // re-validates — an invalid suggestion is a 400, never stored).
+  function slugifyTag(name) {
+    return String(name == null ? '' : name).trim().toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 64);
+  }
+
+  function tagCounts(t) {
+    const n = t && t.member_count != null ? t.member_count : ((t && Array.isArray(t.members)) ? t.members.length : 0);
+    const mv = t && t.movie_count != null ? t.movie_count : 0;
+    const tv = t && t.tv_count != null ? t.tv_count : 0;
+    return n + (n === 1 ? ' title' : ' titles') + ' · ' + mv + ' movies · ' + tv + ' TV';
+  }
+
+  function filteredTags() {
+    const q = String(($('tag-search') && $('tag-search').value) || '').trim().toLowerCase();
+    const f = ($('tag-filter') && $('tag-filter').value) || 'all';
+    return tagCache.filter((t) => {
+      if (f === 'visible' && t.visible === false) return false;
+      if (f === 'hidden' && t.visible !== false) return false;
+      if (!q) return true;
+      const hay = (t.slug + ' ' + (t.name || '') + ' ' + (t.description || '')).toLowerCase();
+      return hay.indexOf(q) >= 0;
+    });
+  }
+
+  // Stable subset comparison for save → read-back verification (same
+  // endpoint, same D1 tags row). Key order + unknown keys ignored.
+  function stableTagJson(t) {
+    try {
+      const x = (t && typeof t === 'object') ? t : {};
+      return JSON.stringify({
+        slug: x.slug || null,
+        name: x.name || null,
+        description: x.description != null ? x.description : null,
+        visible: x.visible !== false,
+        badge: x.badge === true,
+        members: Array.isArray(x.members) ? x.members : null,
+      });
+    } catch { return null; }
+  }
+
+  async function loadTags() {
+    const host = $('tag-list');
+    if (!host) return;
+    stateBox(host, 'loading', 'Loading tags…');
+    try {
+      const list = await api(API.tags);
+      tagCache = Array.isArray(list) ? list : [];
+      renderTags();
+    } catch (e) {
+      host.innerHTML = '';
+      notice('err', 'Tags failed to load: ' + (e.message || e));
+    }
+  }
+
+  function renderTags() {
+    const host = $('tag-list');
+    if (!host) return;
+    const list = filteredTags();
+    const countEl = $('tag-count');
+    if (countEl) {
+      const total = tagCache.length;
+      countEl.textContent = total
+        ? (list.length === total
+          ? total + (total === 1 ? ' Tag' : ' Tags')
+          : list.length + ' of ' + total + ' tags')
+        : '';
+    }
+    host.innerHTML = '';
+    if (!tagCache.length) {
+      const box = stateBox(host, 'empty', 'No tags yet', 'Create the first editorial content group — then use it as a Custom Tag source in any Home section or Collection.');
+      const b = el('button', 'btn btn-primary btn-sm', '+ New Tag');
+      b.type = 'button';
+      b.addEventListener('click', () => openTagEditor(null));
+      box.appendChild(b);
+      return;
+    }
+    if (!list.length) {
+      stateBox(host, 'empty', 'No matches', 'Try a different search or filter.');
+      return;
+    }
+    list.forEach((t) => {
+      const card = el('div', 'data-row col-card');
+      const head = el('div', 'row-top');
+      head.appendChild(el('span', 'row-title', t.name || t.slug));
+      head.appendChild(statusBadge(t));
+      if (t.badge === true) head.appendChild(el('span', 'badge badge-pick', 'Badge on'));
+      card.appendChild(head);
+      card.appendChild(el('p', 'row-mono muted', t.slug));
+      if (t.description) card.appendChild(el('p', 'row-meta', t.description));
+      card.appendChild(el('p', 'row-meta', tagCounts(t)));
+      card.appendChild(rowButtons([
+        ['Edit', 'go', () => openTagEditor(t)],
+        ['Manage Titles', '', () => openTagMembers(t.slug), 'Add, remove and reorder titles in this tag'],
+        [t.visible === false ? 'Show' : 'Hide', '', () => toggleTag(t), t.visible === false ? 'Make usable by public sources' : 'Remove from all public surfaces'],
+        ['Delete', 'danger', () => deleteTag(t), 'Delete tag'],
+      ]));
+      host.appendChild(card);
+    });
+  }
+
+  function tagEditorNode(item) {
+    const f = document.createElement('form');
+    f.id = 'tag-form';
+    f.autocomplete = 'off';
+    f.style.cssText = 'display:grid;gap:.8rem';
+    f.appendChild(groupBox('Identity', [
+      fieldRow('Name (display name — safe to rename anytime)', textInput('t-name', item ? item.name || '' : '', 'Kids Fav')),
+      fieldRow('Slug (stable identity; set once — rename = delete + create)', textInput('t-slug', item ? item.slug : '', 'kids-fav')),
+      fieldRow('Description (optional, operators only)', textInput('t-desc', item ? item.description || '' : '', 'Movies and shows for younger viewers.')),
+    ]));
+    f.appendChild(groupBox('Presentation', [
+      checkInput('t-visible', item ? item.visible !== false : true, 'Visible — usable by public content sources'),
+      el('p', 'muted text-sm', 'Hidden tags resolve to nothing everywhere: no shelf content, no badges. Membership is kept, so re-showing restores everything.'),
+      checkInput('t-badge', !!(item && item.badge === true), 'Show as card badge — tag name on member titles'),
+      el('p', 'muted text-sm', 'Badge display is separate from membership: a tag works as a content group with this off. Never replaces the override badge (custom_badge); both can show.'),
+    ]));
+    const usageBox = el('div', '');
+    usageBox.id = 'tag-usage';
+    f.appendChild(groupBox('Usage', [usageBox]));
+    const row = el('div', '');
+    row.style.cssText = 'display:flex;gap:.5rem;flex-wrap:wrap';
+    const save = el('button', 'btn btn-primary btn-sm', item ? 'Save Changes' : 'Create tag');
+    save.type = 'submit';
+    const cancel = el('button', 'btn btn-ghost btn-sm', 'Discard');
+    cancel.type = 'button';
+    cancel.addEventListener('click', closeDrawer);
+    row.appendChild(save);
+    row.appendChild(cancel);
+    if (item && item.slug) {
+      const manage = el('button', 'btn btn-secondary btn-sm', 'Manage Titles');
+      manage.type = 'button';
+      manage.addEventListener('click', () => openTagMembers(item.slug));
+      row.appendChild(manage);
+    }
+    f.appendChild(row);
+    f.addEventListener('submit', (e) => { e.preventDefault(); saveTag(); });
+    // Slug suggestion while pristine: typing the name proposes a slug until
+    // the operator touches the slug field by hand (never silently rewrites).
+    const nameEl = f.querySelector('#t-name');
+    const slugEl = f.querySelector('#t-slug');
+    if (nameEl && slugEl && !item) {
+      tagSlugTouched = false;
+      slugEl.addEventListener('input', () => { tagSlugTouched = true; });
+      nameEl.addEventListener('input', () => {
+        if (!tagSlugTouched) slugEl.value = slugifyTag(nameEl.value);
+      });
+    }
+    return f;
+  }
+
+  function renderTagUsage(box, usedBy) {
+    if (!box) return;
+    box.innerHTML = '';
+    const u = usedBy && typeof usedBy === 'object' ? usedBy : { sections: [], collections: [] };
+    const secs = Array.isArray(u.sections) ? u.sections : [];
+    const cols = Array.isArray(u.collections) ? u.collections : [];
+    if (!secs.length && !cols.length) {
+      box.appendChild(el('p', 'muted text-sm', 'Not used as a content source yet. Reference this tag from a Home section or Collection with source “Custom Tag”.'));
+      return;
+    }
+    box.appendChild(el('p', 'muted text-sm', 'Used by (real references — edit those first before deleting):'));
+    secs.forEach((s) => {
+      const p = el('p', 'row-meta', 'Home: ' + (s.title || s.id) + ' (' + s.id + ')');
+      box.appendChild(p);
+    });
+    cols.forEach((c) => {
+      const p = el('p', 'row-meta', 'Collection: ' + (c.title || c.slug) + ' (/collection/' + c.slug + ')');
+      box.appendChild(p);
+    });
+  }
+
+  function openTagEditor(item) {
+    tagEditing = item ? item.slug : null;
+    tagDetailGen++; // invalidate any stale detail flight
+    const node = tagEditorNode(item);
+    openDrawer({
+      kicker: 'Tags',
+      title: item ? 'Edit tag' : 'New tag',
+      sub: item ? item.slug + ' — renaming the display name never loses titles.' : 'Editorial content groups reusable as Custom Tag sources.',
+      node,
+      form: node,
+    });
+    const slugEl = $('t-slug');
+    if (slugEl && item) slugEl.disabled = true;
+    // Fresh usage for existing tags (best-effort, stale-guarded).
+    if (item && item.slug) {
+      const myGen = tagDetailGen;
+      const slug = item.slug;
+      api(API.tags + '/' + encodeURIComponent(slug)).then(
+        (d) => { if (myGen === tagDetailGen && d && d.slug === slug) renderTagUsage($('tag-usage'), d.used_by); },
+        () => { if (myGen === tagDetailGen) renderTagUsage($('tag-usage'), null); }
+      );
+    } else {
+      renderTagUsage($('tag-usage'), null);
+    }
+  }
+
+  function readTagForm() {
+    const name = $('t-name').value.trim();
+    if (!name) throw { message: 'Name is required.' };
+    if (name.length > 120) throw { message: 'Name must be at most 120 characters.' };
+    let slug = '';
+    if (tagEditing) {
+      slug = tagEditing;
+    } else {
+      const err = vSlug($('t-slug').value.trim().toLowerCase());
+      if (err) throw { message: err };
+      slug = $('t-slug').value.trim().toLowerCase();
+    }
+    const desc = $('t-desc').value;
+    if (desc.length > 500) throw { message: 'Description must be at most 500 characters.' };
+    return {
+      slug,
+      name,
+      description: desc.trim(),
+      visible: $('t-visible').checked,
+      badge: $('t-badge').checked,
+    };
+  }
+
+  async function saveTag() {
+    const form = $('tag-form');
+    setFormSaving(form, true);
+    try {
+      const body = readTagForm();
+      let saved;
+      if (tagEditing) {
+        // Full update carries the current server membership through so a
+        // field-only edit never wipes titles (read-modify-write).
+        const cur = await api(API.tags + '/' + encodeURIComponent(tagEditing));
+        saved = await api(API.tags + '/' + encodeURIComponent(tagEditing), {
+          method: 'PUT',
+          body: { ...body, slug: tagEditing, members: Array.isArray(cur.members) ? cur.members : [] },
+        });
+      } else {
+        saved = await api(API.tags, { method: 'POST', body: { ...body, members: [] } });
+      }
+      // Never trust the 200 alone: read the row back and compare.
+      const readBack = await api(API.tags + '/' + encodeURIComponent(saved && saved.slug ? saved.slug : body.slug));
+      if (stableTagJson(saved) !== stableTagJson(readBack)) {
+        notice('err', 'Tag saved, but a fresh read-back differs — not showing success. Refresh and retry.');
+      } else {
+        notice('ok', tagEditing ? 'Tag updated.' : 'Tag created.');
+      }
+      tagEditing = null;
+      closeDrawer();
+      await loadTags();
+      if (currentView === 'dashboard') loadDashboard();
+    } catch (e) {
+      notice('err', (e.message || e));
+    } finally {
+      setFormSaving(form, false);
+    }
+  }
+
+  async function toggleTag(t) {
+    try {
+      const cur = await api(API.tags + '/' + encodeURIComponent(t.slug));
+      await api(API.tags + '/' + encodeURIComponent(t.slug), {
+        method: 'PUT',
+        body: { ...cur, slug: t.slug, visible: !(cur.visible !== false) },
+      });
+      notice('ok', (t.visible === false ? 'Tag shown — usable by public sources.' : 'Tag hidden — removed from all public surfaces.'));
+      await loadTags();
+    } catch (e) {
+      notice('err', e.message || e);
+    }
+  }
+
+  async function deleteTag(t) {
+    const label = t.name || t.slug;
+    // Fresh detail first so the confirm shows real counts + real usage —
+    // and blocks client-side when referenced (server 409s regardless).
+    let detail = null;
+    try {
+      detail = await api(API.tags + '/' + encodeURIComponent(t.slug));
+    } catch (e) {
+      notice('err', 'Could not load tag details: ' + (e.message || e));
+      return;
+    }
+    const n = detail && Array.isArray(detail.members) ? detail.members.length : 0;
+    const u = (detail && detail.used_by) || { sections: [], collections: [] };
+    const refs = (u.sections || []).length + (u.collections || []).length;
+    if (refs) {
+      const where = []
+        .concat((u.sections || []).map((s) => 'Home: ' + (s.title || s.id)))
+        .concat((u.collections || []).map((c) => 'Collection: ' + (c.title || c.slug)));
+      notice('err', 'Tag "' + label + '" is still used as a content source (' + where.join('; ') + '). Remove it from those first — deletion is blocked while referenced.');
+      return;
+    }
+    const ok = await confirmDialog({
+      title: 'Delete tag?',
+      message: 'Delete tag "' + label + '" (' + t.slug + ', ' + n + (n === 1 ? ' title' : ' titles') + ')? Membership is identity-only — no titles, overrides, picks or TMDB data are touched. This cannot be undone.',
+      okLabel: 'Delete',
+    });
+    if (!ok) return;
+    try {
+      await api(API.tags + '/' + encodeURIComponent(t.slug), { method: 'DELETE' });
+      if (tagEditing === t.slug) tagEditing = null;
+      notice('ok', 'Tag deleted.');
+      await loadTags();
+      if (currentView === 'dashboard') loadDashboard();
+    } catch (e) {
+      // 409 race (referenced between detail load and DELETE) surfaces the
+      // server's real reference list instead of a bare failure.
+      if (e && e.status === 409) {
+        notice('err', (e.message || 'Tag is still referenced.') + ' Remove it from those sources first.');
+        await loadTags();
+        return;
+      }
+      notice('err', e.message || e);
+    }
+  }
+
+  /* ---------- Manage Titles (per-tag membership workspace) ---------- */
+
+  function tagMemberKey(m) { return (m.media === 'tv' ? 'tv' : 'movie') + ':' + m.id; }
+
+  // Progressive title resolution for member rows: chunked detail fetches
+  // (12 at a time, session-cached) so a 200-title tag never fires 200
+  // requests at once. Stale-guarded: only the current drawer generation
+  // paints. Identity-keyed: a response can only fill its own media:id row.
+  async function resolveTagMemberTitles(members, myGen, onChunk) {
+    const missing = (members || []).filter((m) => m && m.id > 0 && !tagTitleCache[tagMemberKey(m)]);
+    for (let i = 0; i < missing.length; i += 12) {
+      if (myGen !== tagDetailGen) return; // drawer moved on — drop the rest
+      const chunk = missing.slice(i, i + 12);
+      const settled = await Promise.allSettled(chunk.map((m) =>
+        colDetailFetch(m.media, m.id).then((d) => ({ key: tagMemberKey(m), d }))
+      ));
+      if (myGen !== tagDetailGen) return;
+      for (const s of settled) {
+        if (s.status !== 'fulfilled' || !s.value) continue;
+        const { key, d } = s.value;
+        if (!d) continue;
+        tagTitleCache[key] = {
+          title: d.title || 'Untitled',
+          poster: d.poster_path || d.backdrop_path || null,
+        };
+      }
+      if (typeof onChunk === 'function') { try { onChunk(); } catch { /* noop */ } }
+    }
+  }
+
+  function tagMemberRow(m, idx, total, onChange) {
+    const key = tagMemberKey(m);
+    const known = tagTitleCache[key] || null;
+    const card = el('div', 'data-row ov-card');
+    const thumb = document.createElement('img');
+    thumb.className = 'ov-thumb';
+    thumb.loading = 'lazy';
+    thumb.alt = '';
+    thumb.src = (known && known.poster ? COL_PREVIEW_IMG + known.poster : 'https://via.placeholder.com/48x72?text=?');
+    card.appendChild(thumb);
+    const main = el('div', 'ov-card-main');
+    const head = el('div', 'row-top');
+    head.appendChild(el('span', 'row-mono muted', String(idx + 1) + '.'));
+    head.appendChild(el('span', 'row-title', (known && known.title) || (key + (known ? '' : ' — loading…'))));
+    head.appendChild(el('span', 'badge', m.media === 'tv' ? 'TV' : 'Movie'));
+    main.appendChild(head);
+    main.appendChild(el('p', 'row-mono muted', key));
+    main.appendChild(rowButtons([
+      ['↑ Up', '', () => onChange('move', idx, -1), idx === 0 ? 'Already first' : 'Move up', idx === 0],
+      ['↓ Down', '', () => onChange('move', idx, 1), idx === total - 1 ? 'Already last' : 'Move down', idx === total - 1],
+      ['Remove', 'danger', () => onChange('remove', idx), 'Remove from this tag only'],
+    ]));
+    card.appendChild(main);
+    return card;
+  }
+
+  // Single write path for membership mutations (add/remove/reorder):
+  // full-replace PUT of the ordered list + read-back verify. Positions are
+  // list order (gapless) — the server normalizes the same way.
+  async function putTagMembers(slug, members, successMsg) {
+    const cur = await api(API.tags + '/' + encodeURIComponent(slug));
+    const saved = await api(API.tags + '/' + encodeURIComponent(slug), {
+      method: 'PUT',
+      body: { slug, name: cur.name, description: cur.description || '', visible: cur.visible !== false, badge: cur.badge === true, members },
+    });
+    const readBack = await api(API.tags + '/' + encodeURIComponent(slug));
+    if (stableTagJson(saved) !== stableTagJson(readBack)) {
+      throw { message: 'Saved, but a fresh read-back differs — refresh and retry.' };
+    }
+    tagDetail = readBack;
+    const idx = tagCache.findIndex((t) => t && t.slug === slug);
+    if (idx >= 0) {
+      tagCache[idx] = {
+        ...tagCache[idx],
+        member_count: Array.isArray(readBack.members) ? readBack.members.length : 0,
+        movie_count: (readBack.members || []).filter((m) => m.media === 'movie').length,
+        tv_count: (readBack.members || []).filter((m) => m.media === 'tv').length,
+      };
+    }
+    if (successMsg) notice('ok', successMsg);
+    return readBack;
+  }
+
+  function renderTagMembers() {
+    const host = $('tag-members-list');
+    if (!host || !tagDetail) return;
+    const members = Array.isArray(tagDetail.members) ? tagDetail.members : [];
+    const q = String(($('tag-members-search') && $('tag-members-search').value) || '').trim().toLowerCase();
+    host.innerHTML = '';
+    const countEl = $('tag-members-count');
+    if (countEl) {
+      const mv = members.filter((m) => m.media === 'movie').length;
+      countEl.textContent = members.length
+        ? members.length + (members.length === 1 ? ' title' : ' titles') + ' · ' + mv + ' movies · ' + (members.length - mv) + ' TV'
+        : '';
+    }
+    if (!members.length) {
+      const box = stateBox(host, 'empty', 'No titles assigned', 'Search TMDB below and add titles — membership is identity-only, order is editorial.');
+      void box;
+      return;
+    }
+    const rows = members
+      .map((m, i) => ({ m, i }))
+      .filter(({ m }) => {
+        if (!q) return true;
+        const key = tagMemberKey(m);
+        const known = tagTitleCache[key];
+        const hay = (key + ' ' + ((known && known.title) || '')).toLowerCase();
+        return hay.indexOf(q) >= 0;
+      });
+    if (!rows.length) {
+      stateBox(host, 'empty', 'No matches', 'Try a different search.');
+      return;
+    }
+    const onChange = (op, idx, dir) => mutateTagMembers(op, idx, dir);
+    rows.forEach(({ m, i }) => host.appendChild(tagMemberRow(m, i, members.length, onChange)));
+  }
+
+  async function mutateTagMembers(op, idx, dir) {
+    if (!tagDetail) return;
+    const slug = tagDetail.slug;
+    const members = Array.isArray(tagDetail.members) ? tagDetail.members.slice() : [];
+    if (op === 'remove') {
+      const m = members[idx];
+      if (!m) return;
+      const ok = await confirmDialog({
+        title: 'Remove title?',
+        message: 'Remove ' + tagMemberKey(m) + ' from tag "' + (tagDetail.name || slug) + '"? Only the membership is removed — nothing else is touched.',
+        okLabel: 'Remove',
+      });
+      if (!ok) return;
+      members.splice(idx, 1);
+      try {
+        await putTagMembers(slug, members, 'Title removed.');
+        renderTagMembers();
+        renderTags();
+      } catch (e) { notice('err', (e.message || e)); }
+      return;
+    }
+    if (op === 'move') {
+      const j = idx + dir;
+      if (j < 0 || j >= members.length) return;
+      const tmp = members[idx];
+      members[idx] = members[j];
+      members[j] = tmp;
+      try {
+        document.querySelectorAll('#tag-members-list button').forEach((b) => { b.disabled = true; });
+        await putTagMembers(slug, members, 'Order updated.');
+        renderTagMembers();
+      } catch (e) {
+        notice('err', (e.message || e));
+        renderTagMembers();
+      }
+      return;
+    }
+  }
+
+  async function searchTagTitles() {
+    const host = $('tag-add-results');
+    const qEl = $('tag-add-q');
+    const q = qEl ? String(qEl.value || '').trim() : '';
+    if (!q) { if (host) host.innerHTML = '<p class="muted text-sm">Type a title first.</p>'; return; }
+    if (q.length > 120) { if (host) host.innerHTML = '<p class="muted text-sm">Query must be at most 120 characters.</p>'; return; }
+    const myGen = ++tagAddGen;
+    if (host) host.innerHTML = '<p class="muted text-sm">Searching TMDB…</p>';
+    try {
+      const raw = await tmdbSearchFetch(q);
+      if (myGen !== tagAddGen) return; // stale: a newer query owns the list
+      const rows = normalizeTmdbSearchResults(raw).slice(0, 8);
+      if (!host || myGen !== tagAddGen) return;
+      host.innerHTML = '';
+      if (!rows.length) { host.innerHTML = '<p class="muted text-sm">No matches. Try another spelling.</p>'; return; }
+      const inTag = (media, id) => (tagDetail && Array.isArray(tagDetail.members)
+        ? tagDetail.members.some((m) => m.media === media && m.id === id)
+        : false);
+      const isSel = (media, id) => tagAddSel.some((s) => s.media === media && s.id === id);
+      rows.forEach((r) => {
+        const row = el('div', 'hero-pick-result');
+        const box = document.createElement('input');
+        box.type = 'checkbox';
+        box.checked = isSel(r.media, r.id);
+        box.disabled = inTag(r.media, r.id);
+        box.setAttribute('aria-label', 'Select ' + r.title + ' (' + r.media + ':' + r.id + ')');
+        box.addEventListener('change', () => {
+          if (box.checked) {
+            if (!isSel(r.media, r.id)) tagAddSel.push({ media: r.media, id: r.id });
+          } else {
+            tagAddSel = tagAddSel.filter((s) => !(s.media === r.media && s.id === r.id));
+          }
+          refreshTagAddBar();
+          // No dirty flag: selection alone saves nothing (Add N Titles does
+          // an immediate verified PUT), so the drawer savebar stays out.
+        });
+        row.appendChild(box);
+        const img = document.createElement('img');
+        img.loading = 'lazy';
+        img.alt = '';
+        img.src = tmdbPosterUrl(r.poster) || 'https://via.placeholder.com/48x72?text=?';
+        row.appendChild(img);
+        const body = el('div', '');
+        body.style.cssText = 'min-width:0;flex:1';
+        body.appendChild(el('p', 'row-title', r.title));
+        body.appendChild(el('p', 'muted text-sm', (r.media === 'tv' ? 'TV' : 'Movie') + ' · ' + (r.year || '—') + ' · TMDB ' + r.media + ':' + r.id + (inTag(r.media, r.id) ? ' · already in tag' : '')));
+        row.appendChild(body);
+        host.appendChild(row);
+      });
+      refreshTagAddBar();
+    } catch (e) {
+      if (host && myGen === tagAddGen) host.innerHTML = '<p class="muted text-sm">Search failed: ' + esc((e && e.message) || e) + '</p>';
+    }
+  }
+
+  function refreshTagAddBar() {
+    const bar = $('tag-add-bar');
+    if (!bar) return;
+    bar.innerHTML = '';
+    if (!tagAddSel.length) {
+      bar.appendChild(el('span', 'muted text-sm', 'Tick titles above to select more than one, then add them together.'));
+      return;
+    }
+    bar.appendChild(el('span', 'muted text-sm', tagAddSel.length + (tagAddSel.length === 1 ? ' title' : ' titles') + ' selected'));
+    const add = el('button', 'btn btn-primary btn-sm', 'Add ' + tagAddSel.length + (tagAddSel.length === 1 ? ' Title' : ' Titles'));
+    add.type = 'button';
+    add.addEventListener('click', addSelectedTagTitles);
+    bar.appendChild(add);
+    const clear = el('button', 'btn btn-ghost btn-sm', 'Clear');
+    clear.type = 'button';
+    clear.addEventListener('click', () => { tagAddSel = []; refreshTagAddBar(); });
+    bar.appendChild(clear);
+  }
+
+  async function addSelectedTagTitles() {
+    if (!tagDetail || !tagAddSel.length) return;
+    const slug = tagDetail.slug;
+    const members = Array.isArray(tagDetail.members) ? tagDetail.members.slice() : [];
+    const seen = new Set(members.map(tagMemberKey));
+    let added = 0;
+    for (const s of tagAddSel) {
+      const k = tagMemberKey(s);
+      if (seen.has(k)) continue; // duplicate-safe: re-adding never doubles
+      seen.add(k);
+      members.push({ media: s.media, id: s.id });
+      added++;
+    }
+    if (!added) {
+      notice('err', 'Those titles are already in this tag — no duplicates added.');
+      tagAddSel = [];
+      refreshTagAddBar();
+      return;
+    }
+    try {
+      document.querySelectorAll('#tag-members-list button, #tag-add-bar button').forEach((b) => { b.disabled = true; });
+      await putTagMembers(slug, members, added + (added === 1 ? ' title added.' : ' titles added.'));
+      tagAddSel = [];
+      const res = $('tag-add-results');
+      if (res) res.innerHTML = '<p class="muted text-sm">Added — search again to add more.</p>';
+      refreshTagAddBar();
+      renderTagMembers();
+      renderTags();
+      const myGen = tagDetailGen;
+      resolveTagMemberTitles(tagDetail.members, myGen, () => { if (myGen === tagDetailGen) renderTagMembers(); });
+    } catch (e) {
+      notice('err', (e.message || e));
+      renderTagMembers();
+    }
+  }
+
+  async function openTagMembers(slug) {
+    const myGen = ++tagDetailGen;
+    tagAddSel = [];
+    openDrawer({
+      kicker: 'Tags',
+      title: 'Manage titles',
+      sub: slug + ' — loading…',
+      node: (() => {
+        const w = el('div', '');
+        w.style.cssText = 'display:grid;gap:.8rem';
+        w.appendChild(el('div', 'hero-preview-body', ''));
+        return w;
+      })(),
+      form: null,
+    });
+    // Replace the placeholder with the real workspace once fresh detail lands.
+    let detail = null;
+    try {
+      detail = await api(API.tags + '/' + encodeURIComponent(slug));
+    } catch (e) {
+      if (myGen !== tagDetailGen) return;
+      notice('err', 'Could not load tag: ' + (e.message || e));
+      closeDrawer();
+      return;
+    }
+    if (myGen !== tagDetailGen) return; // stale: a newer drawer owns the view
+    tagDetail = detail;
+    const body = $('drawer-body');
+    if (!body) return;
+    body.innerHTML = '';
+    const wrap = el('div', '');
+    wrap.style.cssText = 'display:grid;gap:.8rem';
+    const head = el('div', '');
+    head.appendChild(el('p', 'row-title', detail.name || detail.slug));
+    const mv = (detail.members || []).filter((m) => m.media === 'movie').length;
+    const n = (detail.members || []).length;
+    head.appendChild(el('p', 'muted text-sm', detail.slug + ' · ' + n + (n === 1 ? ' title' : ' titles') + ' · ' + mv + ' movies · ' + (n - mv) + ' TV'));
+    wrap.appendChild(head);
+    const usage = el('div', '');
+    usage.id = 'tag-members-usage';
+    wrap.appendChild(groupBox('Used by', [usage]));
+    renderTagUsage(usage, detail.used_by);
+    const searchRow = el('div', '');
+    searchRow.style.cssText = 'display:flex;gap:.5rem';
+    const q = textInput('tag-add-q', '', 'Search TMDB to add…');
+    q.setAttribute('aria-label', 'Search TMDB titles to add');
+    const go = el('button', 'btn btn-secondary btn-sm', 'Search TMDB');
+    go.type = 'button';
+    searchRow.appendChild(q);
+    searchRow.appendChild(go);
+    const res = el('div', 'hero-pick-results');
+    res.id = 'tag-add-results';
+    const bar = el('div', 'ov-pick-row');
+    bar.id = 'tag-add-bar';
+    bar.appendChild(el('span', 'muted text-sm', 'Tick titles above to select more than one, then add them together.'));
+    const runSearch = () => searchTagTitles();
+    go.addEventListener('click', runSearch);
+    q.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runSearch(); } });
+    wrap.appendChild(groupBox('Add Titles', [searchRow, res, bar]));
+    const listHead = el('div', '');
+    const msq = textInput('tag-members-search', '', 'Filter assigned titles…');
+    msq.setAttribute('aria-label', 'Filter assigned titles');
+    msq.addEventListener('input', renderTagMembers);
+    listHead.appendChild(msq);
+    const cnt = el('p', 'muted text-sm', '');
+    cnt.id = 'tag-members-count';
+    listHead.appendChild(cnt);
+    const list = el('div', 'row-list');
+    list.id = 'tag-members-list';
+    wrap.appendChild(groupBox('Assigned Titles', [listHead, list]));
+    const row = el('div', '');
+    row.style.cssText = 'display:flex;gap:.5rem;flex-wrap:wrap';
+    const editBtn = el('button', 'btn btn-secondary btn-sm', 'Edit Tag');
+    editBtn.type = 'button';
+    editBtn.addEventListener('click', () => openTagEditor({ slug: detail.slug, name: detail.name, description: detail.description, visible: detail.visible, badge: detail.badge }));
+    const done = el('button', 'btn btn-ghost btn-sm', 'Done');
+    done.type = 'button';
+    done.addEventListener('click', closeDrawer);
+    row.appendChild(editBtn);
+    row.appendChild(done);
+    wrap.appendChild(row);
+    body.appendChild(wrap);
+    // Titles resolve progressively (chunked, cached, stale-guarded) —
+    // rows are usable (media:id + reorder + remove) before titles land.
+    renderTagMembers();
+    resolveTagMemberTitles(detail.members, myGen, () => { if (myGen === tagDetailGen) renderTagMembers(); });
+    try {
+      const sub = $('drawer-sub');
+      if (sub) sub.textContent = detail.slug + ' — ' + n + (n === 1 ? ' title' : ' titles') + ', tag order is the content order.';
+      const title = $('drawer-title');
+      if (title) title.textContent = 'Manage titles — ' + (detail.name || detail.slug);
+    } catch { /* chrome optional */ }
   }
 
   /* ================= OVERRIDES ================= */
@@ -3784,23 +4555,26 @@
     const cfg = $('dash-config');
     if (!cards || !cfg) return;
     cards.innerHTML = '';
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 5; i++) {
       const sk = el('div', 'skel');
       cards.appendChild(sk);
     }
-    dashSkeletonRows(cfg, 4);
-    const [secRes, colRes, ovRes, heroRes] = await Promise.allSettled([
+    dashSkeletonRows(cfg, 5);
+    const [secRes, colRes, tagRes, ovRes, heroRes] = await Promise.allSettled([
       api(API.homeSections),
       api(API.collections),
+      api(API.tags),
       api(API.overrides),
       api(API.hero),
     ]);
     const secs = secRes.status === 'fulfilled' && Array.isArray(secRes.value) ? secRes.value : null;
     const cols = colRes.status === 'fulfilled' && Array.isArray(colRes.value) ? colRes.value : null;
+    const tags = tagRes.status === 'fulfilled' && Array.isArray(tagRes.value) ? tagRes.value : null;
     const ovs = ovRes.status === 'fulfilled' && Array.isArray(ovRes.value) ? ovRes.value : null;
     const hero = heroRes.status === 'fulfilled' ? heroRes.value : null;
     if (secs) secCache = secs;
     if (cols) colCache = cols;
+    if (tags) tagCache = tags;
     if (ovs) ovCache = ovs;
 
     const count = (a) => (Array.isArray(a) ? a.length : null);
@@ -3811,6 +4585,7 @@
     const stats = [
       { label: 'Home Sections', n: fmt(count(secs)), sub: secs ? visCount(secs) + ' visible · ' + (secs.length - visCount(secs)) + ' hidden' : 'Unavailable', view: 'sections' },
       { label: 'Collections', n: fmt(count(cols)), sub: cols ? visCount(cols) + ' visible · ' + (cols.length - visCount(cols)) + ' hidden' : 'Unavailable', view: 'collections' },
+      { label: 'Tags', n: fmt(count(tags)), sub: tags ? visCount(tags) + ' visible · ' + tags.reduce((a, t) => a + (t.member_count || 0), 0) + ' titles' : 'Unavailable', view: 'tags' },
       { label: 'Overrides', n: fmt(count(ovs)), sub: ovs ? picks + ' ★ picks' : 'Unavailable', view: 'overrides' },
       { label: 'Hero Mode', n: hero && hero.mode ? hero.mode : '—', sub: hero ? 'pick ' + (hero.pick != null ? hero.pick : 0) + (hero.badge ? ' · ' + hero.badge : '') : 'Unavailable', view: 'heroes' },
     ];
@@ -3827,7 +4602,7 @@
     });
 
     cfg.innerHTML = '';
-    if (!secs && !cols && !ovs && !hero) {
+    if (!secs && !cols && !tags && !ovs && !hero) {
       const box = stateBox(cfg, 'error', 'Configuration unavailable', 'The management API could not be reached. Check the connection and retry.');
       const retry = el('button', 'btn btn-secondary btn-sm', 'Retry');
       retry.type = 'button';
@@ -3847,6 +4622,11 @@
     if (cols) {
       const v = visCount(cols);
       dashRow(cfg, 'Collections', cols.length ? v + ' published' + (cols.length - v ? ' · ' + (cols.length - v) + ' hidden' : '') : 'None yet', 'Open', () => showView('collections'));
+    }
+    if (tags) {
+      const v = visCount(tags);
+      const titles = tags.reduce((a, t) => a + (t.member_count || 0), 0);
+      dashRow(cfg, 'Tags', tags.length ? v + ' visible · ' + titles + (titles === 1 ? ' title' : ' titles') : 'None yet', 'Open', () => showView('tags'));
     }
     if (ovs) {
       dashRow(cfg, 'Overrides', ovs.length ? ovs.length + ' configured · ' + picks + ' ★ picks' : 'None yet', 'Open', () => showView('overrides'));
@@ -3875,6 +4655,7 @@
         const k = b.dataset.quickNew;
         if (k === 'section') openSectionEditor(null);
         else if (k === 'collection') openCollectionEditor(null);
+        else if (k === 'tag') openTagEditor(null);
         else if (k === 'override') openOverrideEditor(null);
       });
     });
@@ -3885,12 +4666,16 @@
     if (secNew) secNew.addEventListener('click', () => openSectionEditor(null));
     const colNew = $('col-new');
     if (colNew) colNew.addEventListener('click', () => openCollectionEditor(null));
+    const tagNew = $('tag-new');
+    if (tagNew) tagNew.addEventListener('click', () => openTagEditor(null));
     const ovNew = $('ov-new');
     if (ovNew) ovNew.addEventListener('click', () => openOverrideEditor(null));
     const sr = $('sec-refresh');
     if (sr) sr.addEventListener('click', loadSections);
     const cr = $('col-refresh');
     if (cr) cr.addEventListener('click', loadCollections);
+    const tr = $('tag-refresh');
+    if (tr) tr.addEventListener('click', loadTags);
     const orr = $('ov-refresh');
     if (orr) orr.addEventListener('click', loadOverrides);
     const dr = $('dash-refresh');
@@ -3929,6 +4714,10 @@
     }
     const cm = $('col-media');
     if (cm) cm.addEventListener('change', renderCollections);
+    const ts = $('tag-search');
+    if (ts) ts.addEventListener('input', renderTags);
+    const tf = $('tag-filter');
+    if (tf) tf.addEventListener('change', renderTags);
     const os = $('ov-search');
     if (os) os.addEventListener('input', renderOverrides);
     const om = $('ov-media');
@@ -4028,6 +4817,7 @@
       stableCollectionJson, refreshCollectionPreview,
       fillOverrideForm, readOverrideForm, readHeroForm,
       ovDisplayLabel, ovEffective, stableOverrideJson, ovRowHasFields,
+      slugifyTag, tagCounts, stableTagJson, tagMemberKey,
       fetchGenres, genreName, GENRE_CACHE,
       PICK_BADGE, isGreyboxPick, validPickTarget,
       markGreyboxPick, unmarkGreyboxPick, toggleGreyboxPick,

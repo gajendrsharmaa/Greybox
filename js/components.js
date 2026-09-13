@@ -43,11 +43,24 @@
       `<div class="gx-card-media"><img loading="lazy" decoding="async" src="${poster}" alt="${escapeHtml(title)}"/>` +
       `<div class="gx-card-shade" aria-hidden="true"></div>` +
       (item.custom_badge ? `<span class="gx-card-badge">${escapeHtml(item.custom_badge)}</span>` : '') +
+      tagBadgesHTML(item) +
       `<button class="list-btn gx-card-list${inList ? ' is-in-list' : ''}" data-id="${item.id}" data-type="${mt}" title="My List" aria-label="Toggle My List">${star}</button>` +
       (item.vote_average ? `<span class="gx-card-rating"><span class="gx-star" aria-hidden="true">★</span> ${Number(item.vote_average).toFixed(1)}</span>` : '') +
       `</div><div class="gx-card-body"><div class="font-semibold gx-card-title">${escapeHtml(title)}</div>` +
       `<div class="gx-card-sub">${year ? year + ' · ' : ''}${mt === 'movie' ? 'Movie' : 'TV'}</div>` +
       `<a class="gx-card-detail" href="${escapeHtml(detailHref)}" data-detail-link aria-label="Open details page for ${escapeHtml(label)}">Details</a></div></div>`;
+  }
+
+  // Tag badges: extra editorial badges from visible, badge-enabled custom
+  // tags containing this identity (data.js tag_badges, alongside — never
+  // replacing — custom_badge). Capped at 3 so crowded cards stay readable;
+  // the full list still resolves on the title's detail view.
+  function tagBadgesHTML(item) {
+    const list = Array.isArray(item.tag_badges) ? item.tag_badges.filter((n) => typeof n === 'string' && n.trim()).slice(0, 3) : [];
+    if (!list.length) return '';
+    return `<span class="gx-card-tagbadges" aria-hidden="true">` +
+      list.map((n) => `<span class="gx-card-badge gx-card-tagbadge">${escapeHtml(n.trim().slice(0, 40))}</span>`).join('') +
+      `</span>`;
   }
 
   function cardsHTML(items, isInList) {
@@ -208,6 +221,10 @@
     if (poster) { poster.removeAttribute('src'); poster.style.display = 'none'; }
     const badge = $('m-badge');
     if (badge) { badge.textContent = ''; badge.classList.add('hidden'); }
+    try {
+      const head = badge && badge.parentElement;
+      if (head) head.querySelectorAll('.gx-detail-tagbadge').forEach((n) => n.remove());
+    } catch { /* decorative only */ }
     const back = $('m-back');
     if (back) back.classList.add('hidden');
   }

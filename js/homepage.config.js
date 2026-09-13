@@ -1,7 +1,11 @@
 /* Greybox homepage configuration — YOU control the homepage here, not TMDB.
  *
- * No database, no admin panel, no build step: edit this file, redeploy
- * (Cloudflare Pages / Vercel serve it as static JS), hard-refresh.
+ * D1 (`home_sections` + `settings.home_hero`, managed through /api/admin/*
+ * and the Admin Home workspace) is the live source of truth. THIS FILE is
+ * the offline fallback: it is used only when D1 is unreachable (static
+ * preview, Vercel without D1, binding missing) — see js/data.js
+ * preloadGreyboxConfig. Keep it representative; never paste TMDB metadata
+ * here — just structure.
  *
  * Architecture:
  *   this file (structure: order, titles, limits, visibility, sources)
@@ -29,6 +33,7 @@
  *   { type: 'ids', items: [{ media: 'movie'|'tv', id: 550 }] }  // hand-picked TMDB IDs, in YOUR order
  *   { type: 'genre', media: 'movie'|'tv', genreId: 28, sort: 'popularity.desc' }
  *   { type: 'collection', slug: 'kids' }                   // expandable shelf: preview + View All → /collection/kids share the SAME collection rule
+ *   { type: 'tag', tag: 'kids-fav' }                      // editorial shelf: ordered custom-tag membership (Admin → Tags), in tag order, no View All page
  *
  * TMDB genre IDs (commonly used): Action 28, Adventure 12, Animation 16,
  * Comedy 35, Crime 80, Documentary 99, Drama 18, Family 10751, Fantasy 14,

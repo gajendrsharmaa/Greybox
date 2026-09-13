@@ -45,6 +45,7 @@
  *   { type: 'search', query: 'dune' }                            // TMDB text search
  *   { type: 'custom', items: [{ media: 'movie'|'tv', id: 550 }] }// hand-picked TMDB IDs, in YOUR order
  *       // shorthand: a bare number means { media: 'movie', id: <number> }
+ *   { type: 'tag', tag: 'kids-fav' }                            // reusable custom tag (Admin → Tags): membership order, pins still lead, excludes still drop
  *
  * TMDB genre IDs (commonly used): Action 28, Adventure 12, Animation 16,
  * Comedy 35, Crime 80, Documentary 99, Drama 18, Family 10751, Fantasy 14,

@@ -81,6 +81,9 @@
 
 .gx-detail-badge.hidden { display: none; }
 
+/* Custom-tag badges: same pill, dimmer — secondary to the override badge. */
+.gx-detail-tagbadge { margin-right: 0.4rem; color: var(--gx-text-dim); border-color: var(--gx-border-faint); }
+
 .gx-detail-actions { align-items: center; }
 
 /* Visible keyboard focus inside the detail shell (global rule fallback). */

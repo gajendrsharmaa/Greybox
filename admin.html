@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Greybox Admin — Control Center</title>
-<meta name="description" content="Greybox Control Center. Manage homepage sections, collections, metadata overrides and settings." />
+<meta name="description" content="Greybox Control Center. Manage homepage sections, collections, tags, metadata overrides and settings." />
 <meta name="robots" content="noindex, nofollow" />
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
@@ -70,6 +70,7 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
       <button class="nav-item" data-view="sections"><span class="nav-dot" aria-hidden="true"></span>Home</button>
       <button class="nav-item" data-view="heroes"><span class="nav-dot" aria-hidden="true"></span>Heroes</button>
       <button class="nav-item" data-view="collections"><span class="nav-dot" aria-hidden="true"></span>Collections</button>
+      <button class="nav-item" data-view="tags"><span class="nav-dot" aria-hidden="true"></span>Tags</button>
       <button class="nav-item" data-view="overrides"><span class="nav-dot" aria-hidden="true"></span>Overrides</button>
       <button class="nav-item is-disabled" data-view="blocked" disabled aria-disabled="true" title="Coming soon — permanent blocklist is a later increment"><span class="nav-dot" aria-hidden="true"></span>Blocked Titles<span class="badge badge-soon">Soon</span></button>
       <button class="nav-item" data-view="search"><span class="nav-dot" aria-hidden="true"></span>TMDB Search</button>
@@ -133,6 +134,7 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
           <div class="page-actions">
             <button class="btn btn-primary btn-sm" data-quick-new="section">+ New Section</button>
             <button class="btn btn-secondary btn-sm" data-quick-new="collection">+ New Collection</button>
+            <button class="btn btn-secondary btn-sm" data-quick-new="tag">+ New Tag</button>
             <button class="btn btn-secondary btn-sm" data-quick-new="override">+ New Override</button>
           </div>
         </div>
@@ -147,6 +149,7 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
             <div class="quick-grid">
               <button class="quick-card" data-quick-new="section"><strong>+ New Section</strong><span>Add a homepage shelf</span></button>
               <button class="quick-card" data-quick-new="collection"><strong>+ New Collection</strong><span>Add a rule-based row</span></button>
+              <button class="quick-card" data-quick-new="tag"><strong>+ New Tag</strong><span>Add an editorial content group</span></button>
               <button class="quick-card" data-quick-new="override"><strong>+ New Override</strong><span>Fix a title's metadata</span></button>
               <button class="quick-card" data-goto="search"><strong>Search TMDB</strong><span>Find movies &amp; TV</span></button>
             </div>
@@ -222,6 +225,30 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
         </div>
         <p id="col-count" class="muted text-sm" style="margin-bottom:.6rem" aria-live="polite"></p>
         <div id="col-list" class="row-list col-workspace"></div>
+      </section>
+
+      <!-- TAGS -->
+      <section id="view-tags" class="admin-view hidden" aria-labelledby="tag-title">
+        <div class="page-head">
+          <div>
+            <h1 id="tag-title" class="page-title">Tags</h1>
+            <p class="page-desc">Manage your editorial tags and the titles assigned to them. Tags are reusable content groups — use one as a <code>Custom Tag</code> source in any Home section or Collection. Identity is always <code>media:TMDB ID</code>, never title text.</p>
+          </div>
+          <div class="page-actions">
+            <button id="tag-new" class="btn btn-primary btn-sm">+ New Tag</button>
+            <button id="tag-refresh" class="btn btn-secondary btn-sm">Refresh</button>
+          </div>
+        </div>
+        <div class="toolbar" role="search">
+          <input id="tag-search" class="input" type="search" placeholder="Search tags…" aria-label="Search tags" autocomplete="off" />
+          <select id="tag-filter" class="input input-select" aria-label="Filter tags by visibility">
+            <option value="all">All statuses</option>
+            <option value="visible">Visible</option>
+            <option value="hidden">Hidden</option>
+          </select>
+        </div>
+        <p id="tag-count" class="muted text-sm" style="margin-bottom:.6rem" aria-live="polite"></p>
+        <div id="tag-list" class="row-list col-workspace"></div>
       </section>
 
       <!-- OVERRIDES -->
@@ -312,7 +339,7 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
       <!-- PLACEHOLDER for disabled/soon views (never linked from enabled nav) -->
       <section id="view-soon" class="admin-view hidden" aria-labelledby="soon-title">
         <div class="page-head"><div><h1 id="soon-title" class="page-title">Coming soon</h1><p class="page-desc">This area is scaffolded for a later increment. No placeholder controls were added on purpose.</p></div></div>
-        <div class="empty"><p class="empty-title">Not built yet</p><p class="empty-desc">This area is reserved for a later increment. Dashboard, Home, Collections, Overrides, Greybox Picks, TMDB Search and General Settings are live.</p><button class="btn btn-secondary btn-sm" data-goto="dashboard">Back to Dashboard</button></div>
+        <div class="empty"><p class="empty-title">Not built yet</p><p class="empty-desc">This area is reserved for a later increment. Dashboard, Home, Collections, Tags, Overrides, Greybox Picks, TMDB Search and General Settings are live.</p><button class="btn btn-secondary btn-sm" data-goto="dashboard">Back to Dashboard</button></div>
       </section>
     </main>
 
@@ -320,7 +347,7 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
   </div>
 </div>
 
-<!-- EDITOR DRAWER (reusable surface for Sections / Collections / Overrides) -->
+<!-- EDITOR DRAWER (reusable surface for Sections / Collections / Tags / Overrides) -->
 <div id="drawer-scrim" class="drawer-scrim hidden" aria-hidden="true"></div>
 <div id="editor-drawer" class="drawer hidden" role="dialog" aria-modal="true" aria-labelledby="drawer-title" aria-hidden="true">
   <div class="drawer-head">

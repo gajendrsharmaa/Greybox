@@ -2,7 +2,7 @@
  * Greybox D1 access layer — the ONLY place that contains raw SQL.
  *
  * Reads Greybox-OWNED configuration (homepage structure, collections,
- * explicit metadata overrides). Never touches TMDB data or secrets; those
+ * explicit metadata overrides, custom editorial tags). Never touches TMDB data or secrets; those
  * keep flowing through functions/lib/greybox.js + TMDB credentials.
  *
  * Every helper returns plain config-shaped JSON (the same shape as the
@@ -306,6 +306,218 @@ export async function deleteOverride(db, media, tmdbId) {
     .bind(media, tmdbId)
     .run();
   return changesOf(out) > 0;
+}
+
+/* ---------------- custom editorial tags (Part 4.5) ----------------
+ *
+ * Tags are Greybox-owned content groups: { slug, name, description,
+ * visible, badge } + ordered membership [{ media, id }]. Membership holds
+ * identity only (media + TMDB ID) — never titles, posters, or TMDB data.
+ * Deletion removes members explicitly first (SQLite FK enforcement is not
+ * relied upon), then the tag row.
+ */
+
+function rowToTagSummary(r, counts) {
+  const c = (counts && counts[r.slug]) || { n: 0, movies: 0, tv: 0 };
+  return {
+    slug: r.slug,
+    name: r.name,
+    description: r.description || '',
+    visible: asBool(r.visible, true),
+    badge: asBool(r.badge, false),
+    member_count: c.n,
+    movie_count: c.movies,
+    tv_count: c.tv,
+  };
+}
+
+async function tagMemberCounts(db) {
+  // One grouped query for every tag's counts (no N+1 on list).
+  const { results } = await db
+    .prepare(
+      'SELECT tag_slug AS slug, COUNT(*) AS n, ' +
+        "SUM(CASE WHEN media = 'movie' THEN 1 ELSE 0 END) AS movies, " +
+        "SUM(CASE WHEN media = 'tv' THEN 1 ELSE 0 END) AS tv " +
+        'FROM tag_members GROUP BY tag_slug',
+    )
+    .all();
+  const out = {};
+  for (const r of results || []) {
+    out[r.slug] = {
+      n: asInt(r.n, 0),
+      movies: asInt(r.movies, 0),
+      tv: asInt(r.tv, 0),
+    };
+  }
+  return out;
+}
+
+/** All tags in display order, each with member counts (no member lists). */
+export async function readTags(db) {
+  const { results } = await db
+    .prepare(
+      'SELECT slug, name, description, visible, badge ' +
+        'FROM tags ORDER BY sort_order ASC, slug ASC',
+    )
+    .all();
+  const counts = await tagMemberCounts(db);
+  return (results || []).map((r) => rowToTagSummary(r, counts));
+}
+
+/** Ordered members [{ media, id }] for one tag slug (position order). */
+export async function readTagMembers(db, slug) {
+  const s = String(slug || '').trim().toLowerCase();
+  if (!s) return [];
+  const { results } = await db
+    .prepare(
+      'SELECT media, tmdb_id AS id FROM tag_members ' +
+        'WHERE tag_slug = ? ORDER BY position ASC, media ASC, tmdb_id ASC',
+    )
+    .bind(s)
+    .all();
+  return (results || [])
+    .filter((r) => (r.media === 'movie' || r.media === 'tv') && Number.isInteger(r.id) && r.id > 0)
+    .map((r) => ({ media: r.media, id: r.id }));
+}
+
+/** Single tag with ordered members, or null when missing. */
+export async function readTag(db, slug) {
+  const s = String(slug || '').trim().toLowerCase();
+  if (!s) return null;
+  const row = await db
+    .prepare('SELECT slug, name, description, visible, badge FROM tags WHERE slug = ?')
+    .bind(s)
+    .first();
+  if (!row) return null;
+  return {
+    slug: row.slug,
+    name: row.name,
+    description: row.description || '',
+    visible: asBool(row.visible, true),
+    badge: asBool(row.badge, false),
+    members: await readTagMembers(db, s),
+  };
+}
+
+/** Public tag list: visible tags with ordered members, in display order.
+ *  Two queries total (tags + all members) regardless of tag count. */
+export async function readPublicTags(db) {
+  const { results } = await db
+    .prepare(
+      'SELECT slug, name, description, badge FROM tags ' +
+        'WHERE visible = 1 ORDER BY sort_order ASC, slug ASC',
+    )
+    .all();
+  const tags = results || [];
+  if (!tags.length) return [];
+  const { results: mrows } = await db
+    .prepare(
+      'SELECT tag_slug, media, tmdb_id AS id FROM tag_members ' +
+        'ORDER BY tag_slug ASC, position ASC, media ASC, tmdb_id ASC',
+    )
+    .all();
+  const bySlug = {};
+  for (const r of mrows || []) {
+    if (r.media !== 'movie' && r.media !== 'tv') continue;
+    if (!Number.isInteger(r.id) || r.id < 1) continue;
+    (bySlug[r.tag_slug] = bySlug[r.tag_slug] || []).push({ media: r.media, id: r.id });
+  }
+  return tags.map((t) => ({
+    slug: t.slug,
+    name: t.name,
+    description: t.description || '',
+    badge: asBool(t.badge, false),
+    members: bySlug[t.slug] || [],
+  }));
+}
+
+// Write the member list for a tag: explicit positions 0..n-1 (gapless),
+// callers pass already-validated [{ media, id }] (dedupe keeps first).
+async function writeTagMembers(db, slug, members) {
+  await db.prepare('DELETE FROM tag_members WHERE tag_slug = ?').bind(slug).run();
+  const list = Array.isArray(members) ? members : [];
+  let pos = 0;
+  for (const m of list) {
+    if (!m || (m.media !== 'movie' && m.media !== 'tv')) continue;
+    if (!Number.isInteger(m.id) || m.id < 1) continue;
+    await db
+      .prepare('INSERT OR IGNORE INTO tag_members (tag_slug, media, tmdb_id, position) VALUES (?, ?, ?, ?)')
+      .bind(slug, m.media, m.id, pos)
+      .run();
+    pos++;
+  }
+}
+
+/** Insert a validated tag ({ slug, name, description, visible, badge, members?, sort_order? }). Throws { status: 409 } on duplicate slug. */
+export async function createTag(db, t) {
+  const existing = await readTag(db, t.slug);
+  if (existing) throw { status: 409, message: 'Tag already exists: ' + t.slug };
+  const order = t.sort_order != null ? t.sort_order : await nextSortOrder(db, 'tags');
+  await db
+    .prepare(
+      'INSERT INTO tags (slug, name, description, visible, badge, sort_order) ' +
+        'VALUES (?, ?, ?, ?, ?, ?)',
+    )
+    .bind(t.slug, t.name, t.description || '', t.visible ? 1 : 0, t.badge ? 1 : 0, order)
+    .run();
+  await writeTagMembers(db, t.slug, t.members);
+  return readTag(db, t.slug);
+}
+
+/** Full-update a tag by slug (fields + ordered members replaced). Returns the stored row, or null if missing. */
+export async function updateTag(db, slug, t) {
+  const existing = await readTag(db, slug);
+  if (!existing) return null;
+  let order = t.sort_order;
+  if (order == null) {
+    const cur = await db.prepare('SELECT sort_order AS n FROM tags WHERE slug = ?').bind(slug).first();
+    order = (cur && Number.isFinite(cur.n)) ? cur.n : 0;
+  }
+  await db
+    .prepare(
+      'UPDATE tags SET name = ?, description = ?, visible = ?, badge = ?, ' +
+        'sort_order = ?, updated_at = CURRENT_TIMESTAMP WHERE slug = ?',
+    )
+    .bind(t.name, t.description || '', t.visible ? 1 : 0, t.badge ? 1 : 0, order, slug)
+    .run();
+  await writeTagMembers(db, slug, t.members);
+  return readTag(db, slug);
+}
+
+/** Delete a tag and its memberships. Returns true when a tag row was removed. */
+export async function deleteTag(db, slug) {
+  await db.prepare('DELETE FROM tag_members WHERE tag_slug = ?').bind(slug).run();
+  const out = await db.prepare('DELETE FROM tags WHERE slug = ?').bind(slug).run();
+  return changesOf(out) > 0;
+}
+
+/** Where a tag slug is referenced as a content source: home section ids +
+ *  collection slugs whose source_json is {"type":"tag","tag":"<slug>"}.
+ *  Used for usage display and delete protection (real references only). */
+export async function findTagUsage(db, slug) {
+  const s = String(slug || '').trim().toLowerCase();
+  if (!s) return { sections: [], collections: [] };
+  // Slug charset [a-z0-9-] is LIKE-safe (no % or _ possible).
+  const typePat = '%"type":"tag"%';
+  const tagPat = '%"tag":"' + s + '"%';
+  const sec = await db
+    .prepare(
+      'SELECT id, title FROM home_sections ' +
+        'WHERE source_json LIKE ? AND source_json LIKE ? ORDER BY sort_order ASC, id ASC',
+    )
+    .bind(typePat, tagPat)
+    .all();
+  const col = await db
+    .prepare(
+      'SELECT slug, title FROM collections ' +
+        'WHERE source_json LIKE ? AND source_json LIKE ? ORDER BY sort_order ASC, slug ASC',
+    )
+    .bind(typePat, tagPat)
+    .all();
+  return {
+    sections: (sec.results || []).map((r) => ({ id: r.id, title: r.title })),
+    collections: (col.results || []).map((r) => ({ slug: r.slug, title: r.title })),
+  };
 }
 
 /** Raw setting value (parsed JSON) by key, or null when absent/unparseable. */

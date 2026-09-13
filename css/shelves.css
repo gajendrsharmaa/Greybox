@@ -286,6 +286,24 @@
   -webkit-backdrop-filter: blur(8px);
 }
 
+/* Custom-tag badges stack below the override badge (never over it):
+ * static flow inside an absolute wrapper, dimmer treatment. */
+.gx-card-tagbadges {
+  position: absolute;
+  left: 0.5rem;
+  top: 2.15rem;
+  display: grid;
+  gap: 0.25rem;
+  justify-items: start;
+  max-width: calc(100% - 1rem);
+}
+.gx-card-badge.gx-card-tagbadge {
+  position: static;
+  max-width: 100%;
+  color: var(--gx-text-dim);
+  border-color: var(--gx-border-faint);
+}
+
 .gx-card-list {
   position: absolute;
   top: 0.45rem;

@@ -34,7 +34,10 @@ functions/api/config/home.js          # Cloudflare: GET /api/config/home (D1 hom
 functions/api/config/collections.js   # Cloudflare: GET /api/config/collections (D1, display order)
 functions/api/config/collections/[slug].js  # Cloudflare: GET /api/config/collections/:slug (404 if hidden/unknown)
 functions/api/config/overrides.js     # Cloudflare: GET /api/config/overrides (override fields only)
-migrations/0001_schema.sql, migrations/0002_seed.sql  # D1 schema + seed (mirrors js/*.config.js)
+functions/api/config/tags.js          # Cloudflare: GET /api/config/tags (visible tags with ordered members)
+functions/api/admin/tags.js, functions/api/admin/tags/[slug].js  # Cloudflare: tag CRUD + membership (requireAdmin)
+js/tags.config.js                 # Offline tag fallback (window.GreyboxTags, starts empty)
+migrations/0001_schema.sql, migrations/0002_seed.sql, migrations/0003_tags.sql  # D1 schema + seed + tags (mirrors js/*.config.js)
 wrangler.toml                     # Pages + D1 binding (DB); secrets stay in .dev.vars / dashboard
 api/trending.js, api/search.js, api/movies/[category].js, api/movie/[id].js, api/anime/[kind].js, api/tv/[...rest].js
                         # Vercel equivalents of the same Greybox contract
@@ -120,6 +123,8 @@ in bulk, never API secrets:
 | `home_sections` | Homepage shelf order, titles, visibility, limits, rule sources |
 | `collections` | Collection rules, ordering, pins/excludes, visibility |
 | `overrides` | Explicit per-title field overrides (`media`, `tmdb_id`, override fields only) |
+| `tags` | Custom editorial tags (`slug`, `name`, `description`, `visible`, `badge`) |
+| `tag_members` | Ordered tag membership (identity only: `media` + `tmdb_id`, never titles/posters) |
 | `settings` | Single-row settings: `home_hero` (the ONE authoritative Home Hero config) and `collection_heroes` (separate per-collection scope) |
 
 Authoritative Home Hero (`settings.home_hero` — the Admin and the public
@@ -153,6 +158,31 @@ brand-free player — a watermark/"Watch on YouTube" affordance can still
 exist inside the video frame; what is guaranteed is no visible playback
 controls over the hero.
 
+Custom editorial tags (`tags` + `tag_members` — Admin → Tags, offline
+fallback `js/tags.config.js`):
+
+- A tag is a Greybox-owned content group: `{ slug, name, description,
+  visible, badge }` plus an ordered membership list of `media + TMDB ID`
+  identities (never title text, never posters — TMDB supplies those live).
+  One title can belong to many tags; each tag resolves its own list.
+- This is NOT the override badge: `custom_badge` stays a single per-title
+  visual label. Tag membership is the content group; the tag's `badge`
+  flag only controls the extra card/detail badge, and the two can show
+  together. A tag works as a content group with `badge` off.
+- Visibility has one meaning: `visible: false` removes the tag from ALL
+  public surfaces (shelves resolve empty/skipped, badges hidden).
+  Membership is kept, so re-showing restores everything.
+- Order is editorial: list position is the content order (gapless,
+  deduped — re-adding a title never doubles it). Empty tags are valid
+  drafts; public shelves skip them like any empty source.
+- Reusable source: `{ type: 'tag', tag: 'kids-fav' }` works in Home
+  sections AND Collections (same `resolveTagItems` rule both places —
+  membership order, section limit applies, collection pins still lead and
+  excludes still drop). Unknown/hidden tags skip the shelf instead of
+  rendering a broken row. Slugs are permanent (rename = delete + create);
+  deletion is blocked (409) while any section/collection references the
+  tag — the API returns the real reference list.
+
 Flow: browser → `GET /api/config/*` (Cloudflare Pages Functions, same-origin)
 → D1 read via `functions/lib/db.js` (the only file with raw SQL) → frontend
 `js/data.js` preloads once at boot, then all existing getters, merge logic
@@ -166,9 +196,10 @@ Local D1 development (secret stays server-side via `.dev.vars`):
 npx wrangler d1 create greybox          # once: paste the id into wrangler.toml
 npx wrangler d1 execute greybox-db --local --file=migrations/0001_schema.sql
 npx wrangler d1 execute greybox-db --local --file=migrations/0002_seed.sql
+npx wrangler d1 execute greybox-db --local --file=migrations/0003_tags.sql
 npx wrangler pages dev .
 # verify: curl /api/config/home, /api/config/collections,
-#         /api/config/collections/science-fiction, /api/config/overrides
+#         /api/config/collections/science-fiction, /api/config/overrides, /api/config/tags
 # edit check: wrangler d1 execute greybox-db --local --command="UPDATE home_sections SET title='X' WHERE id='popular-movies'"
 #             → hard-refresh shows the new title (config cache is ~60s)
 ```
@@ -195,6 +226,7 @@ no accounts and no login flow beyond the token.
 | `/api/admin/collections`, `/api/admin/collections/:slug` | list · read · create (201) · full update · delete (204) |
 | `/api/admin/home-sections`, `/api/admin/home-sections/:id` | list · read · create (201) · full update · delete (204) |
 | `/api/admin/overrides`, `/api/admin/overrides/:media/:id` | list · read · create (201) · replace fields · delete (204) |
+| `/api/admin/tags`, `/api/admin/tags/:slug` | list (with counts) · read (members + usage) · create (201) · full update incl. members · delete (204, 409 while referenced) |
 | `/api/admin/settings/home-hero` | read · replace hero setting (PUT is full-replace: send the complete hero object) |
 | `/api/admin/settings/collection-heroes` | read · replace the collection-heroes map (read-modify-write so other collections are never clobbered) |
 
@@ -253,6 +285,20 @@ everywhere, including their public URL); ordering is the existing
 no new model); slugs are permanent (rename = delete + create); deletes also
 remove that slug's hero override through the existing collection-heroes API
 so no stale custom hero survives.
+
+Tags workspace (`/admin` → Tags): cards with live title counts (movies/TV
+split), real local search + visibility filter, and per-tag Edit / Manage
+Titles / Show-Hide / Delete. Tag creation is top-level (+ New Tag with
+name → slug suggestion; slugs permanent). Manage Titles is the central
+place per tag: TMDB search with multi-select + Add N Titles (duplicate
+safe), progressive title resolution (chunked, cached, stale-guarded —
+rows stay usable as `media:id` before titles land), ↑/↓ reorder and
+per-row Remove (membership only — never touches titles, overrides, picks
+or TMDB). Real usage info (referencing Home sections/Collections) shows
+in the editor and blocks deletion (409) while referenced. Home and
+Collection editors gained a `tag` (Custom Tag) source type with a tag picker;
+collection previews resolve tag sources through the same public rule.
+Saves verify with a fresh GET; membership writes verify with read-back.
 
 Overrides workspace (`/admin` → Overrides): cards with poster thumbnails
 (rendered from override artwork with zero per-row fetches), live counts

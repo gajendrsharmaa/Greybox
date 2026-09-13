@@ -619,6 +619,24 @@
       if (d.custom_badge) { badge.textContent = d.custom_badge; badge.classList.remove('hidden'); }
       else { badge.textContent = ''; badge.classList.add('hidden'); }
     }
+    // Custom-tag badges: one pill per badged tag containing this identity,
+    // alongside (never replacing) the override badge above. Created +
+    // removed here so stale pills can never leak across titles.
+    try {
+      const head = badge && badge.parentElement ? badge.parentElement : null;
+      if (head) head.querySelectorAll('.gx-detail-tagbadge').forEach((n) => n.remove());
+      const tags = Array.isArray(d.tag_badges) ? d.tag_badges.filter((n) => typeof n === 'string' && n.trim()) : [];
+      if (head && tags.length) {
+        // Escape via textContent (never innerHTML) — badge text is operator input.
+        tags.slice(0, 6).forEach((n) => {
+          const s = document.createElement('span');
+          s.className = 'gx-detail-badge gx-detail-tagbadge';
+          s.textContent = n.trim().slice(0, 40);
+          if (badge.nextSibling) head.insertBefore(s, badge.nextSibling);
+          else head.appendChild(s);
+        });
+      }
+    } catch { /* badges are decorative — a title never breaks on them */ }
     // Full overview belongs on a detail page; absent overview omits the
     // section cleanly instead of printing a placeholder sentence.
     const ov = $('m-overview');
@@ -724,6 +742,10 @@
     // Person reuses the title shell: clear title-only furniture (badge,
     // poster, error route-back) so nothing stale carries over.
     if ($('m-badge')) { $('m-badge').textContent = ''; $('m-badge').classList.add('hidden'); }
+    try {
+      const head = $('m-badge') && $('m-badge').parentElement;
+      if (head) head.querySelectorAll('.gx-detail-tagbadge').forEach((n) => n.remove());
+    } catch { /* decorative only */ }
     setDetailArtwork('m-poster', '', '');
     if ($('m-back')) $('m-back').classList.add('hidden');
     $('m-title').textContent = person.name || 'Untitled';

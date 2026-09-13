@@ -178,6 +178,13 @@ export function validateHomeSource(src) {
     // list system. Existence is render-time (unknown/hidden skips the shelf),
     // so validation only checks slug shape to keep create order flexible.
     clean.slug = validateSlug(src.slug);
+  } else if (type === 'tag') {
+    // Editorial shelf: references an existing custom tag slug. The tag's
+    // ordered membership resolves through the SAME rule the public renderer
+    // uses (resolveTagItems) — no second list system. Existence/visibility
+    // is render-time (unknown/hidden tags skip the shelf), so validation
+    // only checks slug shape to keep create order flexible.
+    clean.tag = validateSlug(src.tag);
   } else {
     fail('unknown home source type: ' + type);
   }
@@ -234,6 +241,12 @@ export function validateCollectionSource(src) {
   } else if (type === 'custom') {
     clean.items = validateIdList(src.items, 'source.items');
     if (!clean.items.length) fail('source.items needs at least one valid item');
+  } else if (type === 'tag') {
+    // Reusable editorial group: references a custom tag slug. Membership
+    // order is the content order (pins still lead, excludes still drop —
+    // same collection rules as every other source). Existence/visibility is
+    // render-time; validation only checks slug shape.
+    clean.tag = validateSlug(src.tag);
   } else {
     fail('unknown collection source type: ' + type);
   }
@@ -365,6 +378,54 @@ export function validateOverrideFields(raw) {
   }
   if (Object.keys(fields).length === 0) fail('at least one overridable field is required');
   return fields;
+}
+
+/* ---------------- custom editorial tags (Part 4.5) ---------------- */
+
+export const TAG_MEMBERS_MAX = 200;
+
+/**
+ * Validate ordered tag membership: [{ media, id }]. Duplicates (same
+ * media + id) collapse to the first occurrence so re-adding a title can
+ * never create a double membership. Empty arrays are ALLOWED (an empty
+ * tag is a valid draft — public shelves skip it like any empty source).
+ */
+export function validateTagMembers(v) {
+  if (v === undefined || v === null) return [];
+  if (!Array.isArray(v)) fail('members must be an array');
+  if (v.length > TAG_MEMBERS_MAX) fail(`members must have at most ${TAG_MEMBERS_MAX} entries`);
+  const seen = new Set();
+  const out = [];
+  for (const it of v) {
+    if (!isObj(it)) fail('members entries need { media, id }');
+    const media = reqMedia(it.media);
+    const id = reqTmdbId(it.id);
+    const key = media + ':' + id;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ media, id });
+  }
+  return out;
+}
+
+/**
+ * Validate a full tag body (POST create, PUT full update — members
+ * included, positions are list order). Returns the normalized object
+ * ready for storage.
+ */
+export function validateTagBody(body) {
+  if (!isObj(body)) fail('body must be a JSON object');
+  const slug = validateSlug(body.slug);
+  const name = reqStr(body.name, 'name', { min: 1, max: 120 });
+  return {
+    slug,
+    name,
+    description: (body.description === undefined || body.description === null) ? '' : reqStr(body.description, 'description', { min: 0, max: 500 }),
+    visible: body.visible === undefined ? true : reqBool(body.visible, 'visible'),
+    badge: body.badge === undefined ? false : reqBool(body.badge, 'badge'),
+    members: validateTagMembers(body.members),
+    sort_order: body.sort_order === undefined || body.sort_order === null ? undefined : reqInt(body.sort_order, 'sort_order', { min: 0, max: 100000 }),
+  };
 }
 
 /**

@@ -64,11 +64,13 @@
       load('/api/config/home'),
       load('/api/config/collections'),
       load('/api/config/overrides'),
-    ]).then(([home, collections, overrides]) => {
+      load('/api/config/tags'),
+    ]).then(([home, collections, overrides, tags]) => {
       _remoteConfig = {
         home: (home && typeof home === 'object' && !Array.isArray(home)) ? home : null,
         collections: Array.isArray(collections) ? collections : null,
         overrides: Array.isArray(overrides) ? overrides : null,
+        tags: Array.isArray(tags) ? tags : null,
       };
       return _remoteConfig;
     });
@@ -343,6 +345,15 @@
       const slug = normalizeSlug(src.slug);
       if (!slug) { console.warn('[home] collection source needs slug:', id); return null; }
       clean.source.slug = slug;
+    } else if (type === 'tag') {
+      // Editorial shelf: references an existing custom tag slug. The tag's
+      // ordered membership resolves through the SAME rule collections use
+      // (resolveTagItems) — no second content system, no View All page.
+      // Unknown/hidden tags skip the shelf at render time (see
+      // resolveHomeSection), so only the slug shape is checked here.
+      const tag = normalizeSlug(src.tag);
+      if (!tag) { console.warn('[home] tag source needs tag slug:', id); return null; }
+      clean.source.tag = tag;
     } else {
       console.warn('[home] unknown source type:', type);
       return null;
@@ -406,6 +417,15 @@
       if (!slug) return Promise.reject(new Error('Invalid collection slug'));
       return resolveCollection(slug).then(({ collection, items }) => ({
         section, items: (items || []).slice(0, limit), collection,
+      }));
+    }
+    if (src.type === 'tag') {
+      const tag = normalizeSlug(src.tag);
+      if (!tag) return Promise.reject(new Error('Invalid tag slug'));
+      // Unknown/hidden tags reject so the shelf is skipped instead of
+      // rendering an empty or broken row (same rule as collections).
+      return resolveTagItems(tag).then((items) => ({
+        section, items: (items || []).slice(0, limit), tag: getTag(tag, { includeHidden: true }),
       }));
     }
     let p;
@@ -590,6 +610,14 @@
       const items = (Array.isArray(src.items) ? src.items : []).map(normalizeCollectionItem).filter(Boolean);
       if (!items.length) { console.warn('[collections] custom source needs at least one valid item:', slug); return null; }
       clean.items = items;
+    } else if (type === 'tag') {
+      // Reusable editorial group: references a custom tag slug. Membership
+      // order IS the content order (pins still lead, excludes still drop —
+      // same collection rules as every other source). Unknown/hidden tags
+      // fail resolution at render time; only the slug shape is checked here.
+      const tag = normalizeSlug(src.tag);
+      if (!tag) { console.warn('[collections] tag source needs tag slug:', slug); return null; }
+      clean.tag = tag;
     } else {
       console.warn('[collections] unknown source type:', type);
       return null;
@@ -766,6 +794,11 @@
     if (src.type === 'custom') {
       return resolveIdItems(src.items).then((results) => ({ results }));
     }
+    if (src.type === 'tag') {
+      // Finite editorial list like `custom`: tag membership order, dead IDs
+      // dropped by the shared resolver (see resolveTagItems).
+      return resolveTagItems(src.tag).then((results) => ({ results }));
+    }
     return Promise.reject(new Error('Unknown collection source type: ' + src.type));
   }
 
@@ -841,7 +874,8 @@
   // Same Greybox rules as resolveCollection (pins lead on page 1 only,
   // excludes drop out, media_type preserved) but exactly one TMDB page per
   // call — the controller appends and dedupes across pages itself.
-  // Custom (hand-picked ID) collections are finite: page 1 carries everything.
+  // Custom (hand-picked ID) and tag (editorial membership) collections are
+  // finite: page 1 carries everything.
   // Accepts a slug or a normalized collection. Rejects when not found.
   // Resolves { collection, items, page, totalPages }.
   function resolveCollectionPage(slugOrCollection, page) {
@@ -850,9 +884,12 @@
       : getCollection(slugOrCollection);
     if (!c || !c.source) return Promise.reject(new Error('Collection not found'));
     const p = parsePage(page);
-    if (c.source.type === 'custom') {
+    if (c.source.type === 'custom' || c.source.type === 'tag') {
       if (p > 1) return Promise.resolve({ collection: c, items: [], page: p, totalPages: 1 });
-      return resolveIdItems(c.source.items).then((results) => ({ collection: c, items: results, page: 1, totalPages: 1 }));
+      const base = c.source.type === 'tag'
+        ? resolveTagItems(c.source.tag)
+        : resolveIdItems(c.source.items);
+      return base.then((results) => ({ collection: c, items: results, page: 1, totalPages: 1 }));
     }
     const pins = (p === 1 && c.pin && c.pin.length)
       ? resolveIdItems(c.pin)
@@ -884,11 +921,14 @@
     if (!c || !c.source) return Promise.reject(new Error('Collection not found'));
     const limit = normalizeCollectionLimit(c.limit);
     // Custom lists are hand-sized: resolve every listed ID (failures drop),
-    // then cap — a dead ID never eats a display slot. Dynamic sources page
+    // then cap — a dead ID never eats a display slot. Tag memberships work
+    // the same way (ordered editorial lists). Dynamic sources page
     // only until the cap is filled.
     const base = c.source.type === 'custom'
       ? resolveIdItems(c.source.items).then((results) => ({ results }))
-      : resolveCollectionSource(c.source, limit);
+      : (c.source.type === 'tag'
+        ? resolveTagItems(c.source.tag).then((results) => ({ results }))
+        : resolveCollectionSource(c.source, limit));
     const pins = (c.pin && c.pin.length)
       ? resolveIdItems(c.pin)
       : Promise.resolve([]);
@@ -905,6 +945,127 @@
       }
       return { collection: c, items: items.slice(0, limit) };
     });
+  }
+
+  /* ---------------- Greybox custom tags (D1 first, local file fallback) ---------------- */
+
+  // A tag: { slug, name, description, visible, badge, members } where members
+  // is the ordered [{ media, id }] membership list (identity only — TMDB
+  // supplies titles/posters at render time, exactly like `custom` sources).
+  // Tags are content groups first: `badge` only controls the extra card /
+  // detail badge, never membership. Hidden tags resolve to nothing anywhere.
+
+  function getTagConfig() {
+    if (_remoteConfig && _remoteConfig.tags) return _remoteConfig.tags;
+    const raw = window.GreyboxTags;
+    return Array.isArray(raw) ? raw : [];
+  }
+
+  // Returns a clean tag or null (malformed → console.warn, page survives).
+  function normalizeTag(raw) {
+    if (!raw || typeof raw !== 'object') { console.warn('[tags] dropping malformed tag:', raw); return null; }
+    const slug = normalizeSlug(raw.slug);
+    const name = String(raw.name || '').trim();
+    if (!slug || !name) { console.warn('[tags] tag needs slug + name:', raw); return null; }
+    const members = (Array.isArray(raw.members) ? raw.members : [])
+      .map((it) => {
+        if (!it || typeof it !== 'object') return null;
+        const mid = parseId(it.id);
+        const media = it.media === 'tv' ? 'tv' : (it.media === 'movie' ? 'movie' : null);
+        return (mid && media) ? { media, id: mid } : null;
+      })
+      .filter(Boolean);
+    // Membership dedupe (first wins) so a double-added title can never
+    // render twice — mirrors the server-side PUT dedupe.
+    const seen = new Set();
+    const deduped = members.filter((m) => {
+      const k = m.media + ':' + m.id;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+    return {
+      slug,
+      name: name.slice(0, 120),
+      description: typeof raw.description === 'string' ? raw.description : '',
+      visible: raw.visible !== false,
+      badge: raw.badge === true,
+      members: deduped,
+    };
+  }
+
+  // All valid tags in config order; duplicate slugs keep the first.
+  // Source: D1 once preloaded, else the local js/tags.config.js.
+  function getTags() {
+    const raw = getTagConfig();
+    const list = Array.isArray(raw) ? raw : [];
+    const seen = new Set();
+    const out = [];
+    for (const r of list) {
+      const t = normalizeTag(r);
+      if (!t) continue;
+      if (seen.has(t.slug)) { console.warn('[tags] duplicate slug ignored:', t.slug); continue; }
+      seen.add(t.slug);
+      out.push(t);
+    }
+    return out;
+  }
+
+  // Visible tag by slug, or null (unknown, malformed, or hidden — hidden
+  // tags produce no public content anywhere, URL included).
+  function getTag(slug, opts) {
+    const s = normalizeSlug(slug);
+    if (!s) return null;
+    const found = getTags().find((t) => t.slug === s) || null;
+    if (found && found.visible === false && !(opts && opts.includeHidden)) return null;
+    return found;
+  }
+
+  // Resolve a tag's ordered membership to renderable items through the
+  // Greybox API (the SAME resolveIdItems every hand-picked source uses —
+  // config order preserved, failed IDs dropped, overrides applied).
+  // Rejects when the tag is unknown or hidden.
+  function resolveTagItems(slugOrTag) {
+    const t = (slugOrTag && typeof slugOrTag === 'object')
+      ? slugOrTag
+      : getTag(slugOrTag);
+    if (!t || !Array.isArray(t.members)) return Promise.reject(new Error('Tag not found'));
+    return resolveIdItems(t.members);
+  }
+
+  // Badge lookup, memoized on the config array identity (same pattern as
+  // the override map): media:id -> [tag names] for visible tags with
+  // badge enabled. A title in several badged tags collects every name —
+  // no cross-tag contamination, and membership alone never shows a badge.
+  let _tagBadgeCacheRef = null;
+  let _tagBadgeCacheMap = null;
+
+  function tagBadgeMap() {
+    const raw = getTagConfig();
+    if (raw !== _tagBadgeCacheRef) {
+      const map = new Map();
+      for (const entry of (Array.isArray(raw) ? raw : [])) {
+        const t = normalizeTag(entry);
+        if (!t || t.visible === false || t.badge !== true) continue;
+        for (const m of t.members) {
+          const key = m.media + ':' + m.id;
+          const arr = map.get(key) || [];
+          if (arr.indexOf(t.name) < 0) arr.push(t.name);
+          map.set(key, arr);
+        }
+      }
+      _tagBadgeCacheRef = raw;
+      _tagBadgeCacheMap = map;
+    }
+    return _tagBadgeCacheMap;
+  }
+
+  // Badge names for one identity, or [] (never null — renderers map it).
+  function getTagBadges(media, id) {
+    const mt = media === 'tv' ? 'tv' : (media === 'movie' ? 'movie' : null);
+    const clean = parseId(id);
+    if (!mt || !clean) return [];
+    return tagBadgeMap().get(mt + ':' + clean) || [];
   }
 
   /* ---------------- Greybox metadata overrides (D1 first, local file fallback) ---------------- */
@@ -977,9 +1138,11 @@
   }
 
   // TMDB data in, final resolved object out. Only explicitly overridden fields
-  // are replaced; everything else passes through untouched. Returns the
-  // ORIGINAL object when nothing matches (no copy, no mutation), so renderers
-  // receive the final object without knowing any value's source.
+  // are replaced; everything else passes through untouched. Tag badges
+  // (visible, badge-enabled tags containing this identity) ride along as
+  // `tag_badges: [names]` — additive, alongside (never replacing)
+  // `custom_badge`. Returns the ORIGINAL object when neither an override
+  // nor badges match (no copy, no mutation).
   function applyOverrides(item, fallbackMedia) {
     if (!item || typeof item !== 'object') return item;
     // Identity fallback: shaped items alias title/name on both media types,
@@ -990,15 +1153,19 @@
       : (fallbackMedia === 'tv' || fallbackMedia === 'movie' ? fallbackMedia
       : ((item.title && !item.first_air_date) ? 'movie' : 'tv'));
     const o = getOverride(media, item.id);
-    if (!o) return item;
-    const out = { ...item, media_type: media };
-    for (const k of Object.keys(o.fields)) {
-      if (k === 'description') out.overview = o.fields[k];
-      else out[k] = o.fields[k];
+    const badges = getTagBadges(media, item.id);
+    if (!o && !badges.length) return item;
+    const out = o ? { ...item, media_type: media } : { ...item };
+    if (o) {
+      for (const k of Object.keys(o.fields)) {
+        if (k === 'description') out.overview = o.fields[k];
+        else out[k] = o.fields[k];
+      }
+      // The codebase treats title/name as aliases (gbItem sets both) — keep them in sync.
+      if (out.title != null) out.name = out.title;
+      else if (out.name != null) out.title = out.name;
     }
-    // The codebase treats title/name as aliases (gbItem sets both) — keep them in sync.
-    if (out.title != null) out.name = out.title;
-    else if (out.name != null) out.title = out.name;
+    if (badges.length) out.tag_badges = badges.slice();
     return out;
   }
 
@@ -1071,6 +1238,11 @@
     getCollection,
     resolveCollection,
     resolveCollectionPage,
+    normalizeTag,
+    getTags,
+    getTag,
+    resolveTagItems,
+    getTagBadges,
     OVERRIDABLE_FIELDS,
     getOverrides,
     getOverride,
