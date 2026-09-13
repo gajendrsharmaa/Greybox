@@ -355,9 +355,72 @@ Hero consistency (Admin ↔ public homepage share one source of truth):
 
 - **Browse/search**: `GET /api/trending`, `/api/movies/popular`, `/api/tv/popular`, `/api/search?q=...` — see `js/app.js:load()`. The Greybox backend (`functions/lib/greybox.js` + `functions/api/*`) calls TMDB internally and returns only the fields the UI needs.
 - **Details**: `GET /api/movie/{id}?region=US` or `/api/tv/{id}?region=US` — one bundle with detail + cast + `trailer_key` (YouTube) + region-filtered `providers` (+ `seasons` for TV). Episodes via `GET /api/tv/{id}/season/{n}` with stills.
-- **Player engine** (`js/stream.js`): embed pages in `<iframe>`, direct files in `<video>` (HLS via hls.js with native fallback), loading spinner, error overlay + retry, resume-from-position (localStorage), auto-next episode, prev/next episode bar.
+- **Player engine** (`js/stream.js` + `js/greybox-player.js`, §6.1): direct files (`.m3u8` / `.mp4` you own or license) play in the Greybox-owned HTML5 player — one `<video>` driven by native HLS where supported, otherwise HLS.js, with the Plyr control UI under a Greybox skin (`css/player.css`). The previously configured-host embed page still loads in `#embed-frame` for backward compatibility; the Greybox Player itself never uses an iframe and never loads another site's player. Loading spinner, error overlay + retry, resume-from-position (localStorage), auto-next episode, prev/next episode bar are unchanged.
 - **Source slot — change ONE line** (`Stream.EMBED.base` in `js/stream.js`, marked PUT YOUR OFFICIAL API STREAMING LINK HERE): everything derives from it — `{base}/embed/movie/{tmdb_id}` and `{base}/embed/tv/{tmdb_id}/{season}/{episode}`. While it points at `example.com`, Watch buttons show "No stream source configured". Point it only at a host you own or license.
 - **Free films**: `https://archive.org/metadata/{id}` → smallest MP4 → plays through the same engine with resume support.
+
+## 6.1) Greybox Player (custom HLS player, no iframe, no third-party player)
+
+```
+Greybox
+ → normalized playback source ({ title, sub, url, mode, ... } — unchanged contract)
+ → Greybox Player (js/greybox-player.js)
+ → HTML5 <video>
+ → native HLS  OR  HLS.js
+ → Plyr UI (Greybox skin, css/player.css)
+```
+
+Provider resolution stays separate from the player: `Stream.EMBED` /
+`getMovieUrl` / `getEpisodeUrl` / `isConfigured` in `js/stream.js` resolve
+*where* to play from (untouched — same hosts, same URL shapes, same priority);
+the Greybox Player only knows *how* to play a direct file URL it is handed.
+It is provider-agnostic (no host-specific logic, no branding, no ads) and
+accepts the existing normalized source via a small isolated adapter
+(`normalizeSource` — also passes through caller-supplied subtitle tracks
+under `subtitles` / `tracks` / `captions`; nothing is invented).
+
+- **Libraries** (pinned official CDN, no framework): Plyr 3.7.8
+  (`cdn.plyr.io`, UI/controls only) + HLS.js (`cdn.jsdelivr.net`, HLS engine
+  only). If the Plyr CDN is blocked the player falls back to native controls
+  rather than breaking.
+- **Native HLS detection**: `video.canPlayType('application/vnd.apple.mpegurl')`
+  (`probably`/`maybe`, plus the legacy `application/x-mpegURL` alias). Native
+  path sets `video.src` directly; otherwise HLS.js (`Hls.isSupported()` →
+  `loadSource` + `attachMedia`) drives the same `<video>` Plyr wraps.
+- **Controls**: play/pause, timeline/seek, current time, duration, volume,
+  mute, fullscreen, playback speed (0.5–2x), PiP/airplay where supported,
+  keyboard controls (scoped, not global), mobile-friendly layout, buffering
+  indicator (existing `#player-loading`), clean error overlay (existing
+  `#player-error`, no stack traces). Rows with no data never show (no quality
+  menu for single-level streams, no caption menu without supplied tracks).
+- **Quality**: offered only when the manifest exposes 2+ distinct levels
+  (taken from the manifest, never assumed) — `Auto` (HLS.js ABR) plus each
+  height; switching sets `hls.currentLevel` (`-1` = Auto).
+- **Lifecycle**: `open()` fully destroys the previous HLS.js instance, Plyr
+  instance, injected `<track>` nodes, and listeners before attaching the new
+  source. Every open/destroy bumps a sequence so a stale manifest/metadata
+  callback can never overwrite the current episode; rapid episode switching is
+  additionally guarded in `js/stream.js` (`playerGen`). `routeGen`/`modalGen`
+  routing protections are untouched. `Stream.Player.open/close/current/retry`
+  keep their exact contract, so all existing callers (`app.js` movie/episode/
+  custom-file, hero Watch) work unchanged.
+- **Errors** (clean Greybox copy, URLs redacted in logs): unsupported source,
+  HLS engine unavailable, manifest load failure, network failure, media error.
+- **Dev-only test**: `js/greybox-test-source.js` holds one replaceable
+  legitimate public test manifest (Mux HLS test stream, published for player
+  testing — no scraping, no auth/DRM/referer bypass). Open the site with
+  `?play-test=1` to play it through the normal `Stream.Player.open` file
+  contract. To remove: delete that file + its one `<script>` tag in
+  `index.html`.
+- **Automated checks**: `node tests/greybox-player.test.cjs` (73 assertions:
+  adapter units, native/HLS.js/Plyr wiring, quality/subtitle rules, lifecycle
+  + stale safety, `Player.open()` compatibility, provider-resolution and
+  routing untouched, no iframe/provider logic/secrets in the player).
+  Browser-only items (real play/pause, seek, volume, fullscreen, speed, PiP,
+  mobile controls) need one manual pass with `?play-test=1`.
+- **Limitation**: native-HLS browsers (Safari) use platform-managed quality
+  (no custom quality menu there); the legacy configured-host embed page is
+  retained for compatibility and is NOT part of the Greybox Player.
 
 ## 7) Going further (all legal, all Pages-compatible)
 

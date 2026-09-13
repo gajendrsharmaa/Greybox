@@ -10,6 +10,8 @@
 tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a12' } } } }
 </script>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<script src="https://cdn.plyr.io/3.7.8/plyr.polyfilled.js"></script>
+<link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
 <link rel="stylesheet" href="/css/tokens.css" />
 <link rel="stylesheet" href="/css/style.css" />
 <link rel="stylesheet" href="/css/navbar.css" />
@@ -17,6 +19,7 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
 <link rel="stylesheet" href="/css/shelves.css" />
 <link rel="stylesheet" href="/css/collection.css" />
 <link rel="stylesheet" href="/css/detail.css" />
+<link rel="stylesheet" href="/css/player.css" />
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 </head>
 <body class="min-h-screen">
@@ -219,7 +222,9 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
     <button id="player-close" class="bg-white/10 rounded-full w-10 h-10 shrink-0">✕</button>
   </div>
   <div class="relative">
-    <video id="video" class="w-full h-[calc(100vh-121px)] bg-black" controls playsinline></video>
+    <div class="gx-player-stage">
+      <video id="video" class="w-full h-full bg-black" playsinline crossorigin="anonymous"></video>
+    </div>
     <iframe id="embed-frame" title="Stream player" class="hidden w-full h-[calc(100vh-121px)] bg-black" allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowfullscreen></iframe>
     <div id="player-loading" class="hidden absolute inset-0 flex items-center justify-center bg-black/60 text-sm text-zinc-300">Loading…</div>
     <div id="player-error" class="hidden absolute inset-x-0 top-0 mx-auto mt-6 max-w-lg bg-red-950/95 border border-red-500/40 rounded-xl p-4 text-sm">
@@ -288,7 +293,8 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
 
 <script src="/js/api.js?v=5"></script>
 <script src="/js/router.js?v=1"></script>
-<script src="/js/stream.js?v=4"></script>
+<script src="/js/greybox-player.js?v=1"></script>
+<script src="/js/stream.js?v=5"></script>
 <script src="/js/homepage.config.js?v=1"></script>
 <script src="/js/collections.config.js?v=1"></script>
 <script src="/js/overrides.config.js?v=1"></script>
@@ -298,6 +304,7 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
 <script src="/js/pages.js?v=1"></script>
 <script src="/js/hero.js?v=1"></script>
 <script src="/js/app.js?v=9"></script>
+<script src="/js/greybox-test-source.js?v=1"></script>
 <script src="/js/collections-nav.js?v=1"></script>
 <script src="/js/navbar.js?v=1"></script>
 <script src="/js/shelves.js?v=1"></script>

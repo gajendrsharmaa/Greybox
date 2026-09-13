@@ -94,11 +94,20 @@
     return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(sec).padStart(2, '0');
   }
 
-  /* ---- player (modes: 'file' = <video> HLS/MP4, 'embed' = <iframe>) ---- */
-  let hls = null;
-  let ctx = null;          // { title, sub, url, mode, progressKey, onEnded, showPrevNext }
+  /* ---- player ----
+   * Modes: 'file'  = direct HLS/MP4 in <video>, owned by the Greybox Player
+   *                  (js/greybox-player.js: HLS.js or native HLS + Plyr UI).
+   *                  This file only passes the normalized source through and
+   *                  keeps resume / progress / auto-next / modal chrome.
+   *          'embed' = legacy provider page in <iframe> (kept for backward
+   *                  compatibility with configured EMBED hosts; the Greybox
+   *                  Player itself never touches the iframe).
+   */
+  let ctx = null;          // { title, sub, url, mode, progressKey, onEnded, showPrevNext, subtitles|tracks|captions }
   let saveTimer = 0;
   let listenersBound = false;
+  let playerGen = 0;       // bumped on every open/close: stale-attach guard
+  let resumeHandler = null;
 
   function el(id) { return document.getElementById(id); }
 
@@ -117,10 +126,15 @@
   }
 
   function teardown() {
+    playerGen++; // invalidate any in-flight file-mode open()
     const v = el('video'), f = el('embed-frame');
     if (saveTimer) { clearInterval(saveTimer); saveTimer = 0; }
-    if (hls) { try { hls.destroy(); } catch { /* noop */ } hls = null; }
-    if (v) { try { v.pause(); } catch { /* noop */ } v.removeAttribute('src'); v.load(); }
+    if (v && resumeHandler) { try { v.removeEventListener('loadedmetadata', resumeHandler); } catch { /* noop */ } }
+    resumeHandler = null;
+    // The Greybox Player owns HLS.js/Plyr teardown (destroys previous HLS
+    // instance, Plyr instance, injected tracks, and its own listeners).
+    try { if (window.GreyboxPlayer) window.GreyboxPlayer.destroy(); } catch { /* noop */ }
+    if (v) { try { v.pause(); } catch { /* noop */ } try { v.removeAttribute('src'); } catch { /* noop */ } try { v.load(); } catch { /* noop */ } }
     if (f) { try { f.removeAttribute('src'); } catch { /* noop */ } }
   }
 
@@ -134,6 +148,7 @@
     v.addEventListener('playing', () => { showLoading(false); showError(null); });
     v.addEventListener('error', () => {
       if (!ctx) return;
+      if (ctx.mode === 'file') return; // file mode: Greybox Player reports errors (cleaner, source-specific)
       showError('This file could not be played. Check the source URL / CORS, or try another title.');
     });
     v.addEventListener('ended', () => {
@@ -156,6 +171,8 @@
       teardown();
       showError(null);
       showLoading(true);
+      const gxStage = document.querySelector('.gx-player-stage');
+      if (gxStage) gxStage.classList.add('hidden');
       if (v) v.classList.add('hidden');
       if (f) {
         f.classList.remove('hidden');
@@ -163,40 +180,70 @@
       }
       return;
     }
-    // File mode: direct HLS/MP4 in <video> (archive.org, custom URL).
+    // File mode: direct HLS/MP4 in <video> via the Greybox Player
+    // (native HLS or HLS.js + Plyr UI). Subtitle tracks ride along when the
+    // caller supplied them (c.subtitles | c.tracks | c.captions); when absent
+    // the player simply runs without a caption menu. Nothing is invented here.
     const v = el('video'), f = el('embed-frame');
     if (!v) throw new Error('Missing <video id="video"> element.');
     teardown();
+    const myGen = playerGen;
     if (f) f.classList.add('hidden');
+    const stage = document.querySelector('.gx-player-stage');
+    if (stage) stage.classList.remove('hidden');
     v.classList.remove('hidden');
     showError(null);
     showLoading(true);
-    const isHls = /\.m3u8(\?|#|$)/i.test(url);
-    if (isHls && window.Hls && Hls.isSupported()) {
-      hls = new Hls({ maxBufferLength: 30 });
-      hls.on(Hls.Events.ERROR, (_ev, data) => {
-        if (!data || !data.fatal) return;
-        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) { try { hls.startLoad(); } catch { /* noop */ } return; }
-        showError('Stream error (' + (data.details || 'fatal') + '). The source may be offline or blocking hotlink/CORS.');
-      });
-      hls.loadSource(url);
-      hls.attachMedia(v);
-    } else {
-      v.src = url; // native MP4, or Safari native HLS
-    }
-    // resume
+    // resume position (same keys as before)
     let startAt = 0;
     if (ctx && ctx.progressKey) {
       const p = Progress.load(ctx.progressKey);
       if (p && p.t > 10) startAt = p.t;
     }
-    const begin = () => {
-      try { if (startAt) v.currentTime = startAt; } catch { /* noop */ }
+    if (startAt) {
+      resumeHandler = () => {
+        if (myGen !== playerGen) return;
+        try { v.currentTime = startAt; } catch { /* noop */ }
+      };
+      try {
+        if (v.readyState >= 1) resumeHandler();
+        else v.addEventListener('loadedmetadata', resumeHandler, { once: true });
+      } catch { /* noop */ }
+    }
+    const GBP = window.GreyboxPlayer;
+    if (!GBP || typeof GBP.open !== 'function') {
+      // Local player layer failed to load: minimal native fallback so a
+      // direct file can still play (no HLS engine, no Plyr skin).
+      try { v.setAttribute('controls', ''); } catch { /* noop */ }
+      v.src = url;
       const pr = v.play();
-      if (pr && pr.catch) pr.catch(() => showLoading(false)); // autoplay blocked: user presses play
-    };
-    if (v.readyState >= 1) begin();
-    else v.addEventListener('loadedmetadata', begin, { once: true });
+      if (pr && pr.catch) pr.catch(() => showLoading(false));
+    } else {
+      try {
+        GBP.open(v, {
+          url,
+          title: ctx && ctx.title,
+          subtitles: (ctx && (ctx.subtitles || ctx.tracks || ctx.captions)) || [],
+        }, {
+          autoplay: true,
+          onError: (err) => {
+            if (myGen !== playerGen) return; // stale source: never paint over the current one
+            showError((err && err.message) || 'Playback failed. Try another title.');
+          },
+        }).then((res) => {
+          if (myGen !== playerGen || !res || res.stale) return;
+          if (res.error) { showLoading(false); return; }
+          // Success: the 'playing' event hides the spinner; when autoplay was
+          // blocked the video stays paused — don't leave it spinning.
+          try { if (v.paused) showLoading(false); } catch { /* noop */ }
+        }).catch(() => {
+          if (myGen !== playerGen) return;
+          showLoading(false);
+        });
+      } catch (e) {
+        if (myGen === playerGen) showError('Playback failed to start. Reload and try again.');
+      }
+    }
     // progress autosave
     saveTimer = setInterval(() => {
       if (ctx && ctx.progressKey && !v.paused && isFinite(v.currentTime)) {
