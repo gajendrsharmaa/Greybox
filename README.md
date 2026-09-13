@@ -254,6 +254,32 @@ no new model); slugs are permanent (rename = delete + create); deletes also
 remove that slug's hero override through the existing collection-heroes API
 so no stale custom hero survives.
 
+Overrides workspace (`/admin` → Overrides): cards with poster thumbnails
+(rendered from override artwork with zero per-row fetches), live counts
+(`N Overrides · M ★ Picks`, same predicate as the Dashboard), and real
+local search plus media-type and Pick-state filters (all evaluated against
+stored row data — no TMDB request per keystroke). Creation is
+search-first: Search TMDB (existing server-side proxy) → Select a result
+→ media + TMDB ID locks as the identity → override only needed fields.
+The editor is grouped (Identity / Metadata / Artwork / Editorial) over
+exactly the 11 allowlisted keys (`title, name, overview, description,
+poster_path, backdrop_path, vote_average, release_date, first_air_date,
+featured, custom_badge` — title/name sync as aliases and `description`
+wins as the synopsis when both text keys are set, exactly as
+`applyOverrides` resolves them). Each field shows Using-TMDB vs
+Override-active status with a true Reset (clearing a field removes it on
+save — PUT replaces all fields and empties are dropped server-side too),
+plus an unsaved TMDB-vs-GREYBOX preview (text rows + same-identity
+artwork thumbs + Pick state) from one stale-guarded detail fetch per
+identity. A Greybox Pick is exactly `featured + custom_badge:
+"Greybox Pick"` on the same row (ON/OFF switch, no second system).
+Saves verify with a fresh GET (mismatch is reported, never shown as
+success); deletes verify with a read-back 404; identity is permanent
+(rename = delete + create, future Blocked Titles will reuse
+`media + TMDB ID`). Overrides apply everywhere TMDB data renders (lists,
+collections, detail pages, search, Heroes) via `applyOverrides` — Heroes
+and Collections configuration itself is never touched.
+
 Authentication is a **memory-only session**: paste the token once per tab; it
 lives in a single JS variable, is sent as an `Authorization: Bearer` header,
 and is never written to source, git, D1, cookies, `localStorage`,

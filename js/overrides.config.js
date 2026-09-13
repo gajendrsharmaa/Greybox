@@ -1,7 +1,11 @@
 /* Greybox metadata overrides — selected Greybox values win over TMDB.
  *
- * No database, no admin panel, no build step: edit this file, redeploy
- * (Cloudflare Pages / Vercel serve it as static JS), hard-refresh.
+ * D1 (`overrides` table, managed through /api/admin/overrides and the
+ * Admin Overrides workspace) is the live source of truth. THIS FILE is the
+ * offline fallback: it is used only when D1 is unreachable (static preview,
+ * Vercel without D1, binding missing) — see js/data.js preloadGreyboxConfig.
+ * Keep it representative; never paste TMDB metadata here beyond explicit
+ * override fields.
  *
  * Pipeline:
  *   TMDB data

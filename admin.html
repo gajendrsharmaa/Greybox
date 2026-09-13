@@ -228,8 +228,8 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
       <section id="view-overrides" class="admin-view hidden" aria-labelledby="ov-title">
         <div class="page-head">
           <div>
-            <h1 id="ov-title" class="page-title">Metadata Overrides</h1>
-            <p class="page-desc">Explicit per-title fixes. Anything absent falls back to live TMDB data.</p>
+            <h1 id="ov-title" class="page-title">Overrides</h1>
+            <p class="page-desc">Control metadata, artwork and editorial presentation for individual titles. Anything absent falls back to live TMDB data — identity is always <code>media:TMDB ID</code>.</p>
           </div>
           <div class="page-actions">
             <button id="ov-new" class="btn btn-primary btn-sm">+ New Override</button>
@@ -237,15 +237,20 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
           </div>
         </div>
         <div class="toolbar" role="search">
-          <input id="ov-search" class="input" type="search" placeholder="Search media:id or field…" aria-label="Search overrides" autocomplete="off" />
-          <select id="ov-filter" class="input input-select" aria-label="Filter overrides">
-            <option value="all">All overrides</option>
-            <option value="picks">★ Greybox Picks</option>
+          <input id="ov-search" class="input" type="search" placeholder="Search title, media:id or field…" aria-label="Search overrides" autocomplete="off" />
+          <select id="ov-media" class="input input-select" aria-label="Filter overrides by media type">
+            <option value="all">All media</option>
             <option value="movie">Movies</option>
-            <option value="tv">TV</option>
+            <option value="tv">TV Shows</option>
+          </select>
+          <select id="ov-pick" class="input input-select" aria-label="Filter overrides by Greybox Pick state">
+            <option value="all">All states</option>
+            <option value="picks">★ Greybox Picks</option>
+            <option value="not">Not Picks</option>
           </select>
         </div>
-        <div id="ov-list" class="row-list"></div>
+        <p id="ov-count" class="muted text-sm" style="margin-bottom:.6rem" aria-live="polite"></p>
+        <div id="ov-list" class="row-list ov-workspace"></div>
       </section>
 
       <!-- HEROES (Part 2 Hero Control Center) -->

@@ -30,6 +30,17 @@
  * verification, hero-override cleanup on delete. No new backend: same
  * /api/admin/collections + /api/admin/settings/collection-heroes routes,
  * same D1 collections table, same visible/hidden + sort_order semantics.
+ *
+ * PART 4 — Overrides Control Center: workspace cards (poster thumb from
+ * override artwork with zero per-row fetches, media + Pick filters on real
+ * row data, live counts), TMDB search-first creation (identity locked to
+ * media + TMDB ID, stale-guarded), grouped editor (Identity / Metadata /
+ * Artwork / Editorial) over exactly the 11 allowlisted keys, per-field
+ * TMDB-vs-override status with true Reset (clear = field removed on save),
+ * unsaved TMDB-vs-GREYBOX preview mirroring applyOverrides, Pick ON/OFF
+ * switch on the same row (no second Pick system), save read-back
+ * verification and delete-then-404 verification. No new backend: same
+ * /api/admin/overrides routes, same D1 overrides table.
  */
 (function () {
   'use strict';
@@ -194,6 +205,8 @@
     drawerForm = null;
     previewReader = null;
     colPreviewGen++;
+    ovGen++;
+    ovSearchGen++;
     try { if (drawerPrevFocus && drawerPrevFocus.focus) drawerPrevFocus.focus(); } catch { /* noop */ }
     drawerPrevFocus = null;
   }
@@ -1874,71 +1887,581 @@
 
   /* ================= OVERRIDES ================= */
   let ovEditing = null; // { media, id } being edited, or null
+  let ovIsNew = false; // true = POST on save, false = PUT on save
+  let ovBaseline = null; // live TMDB detail bundle for the edited identity (preview/status baseline only)
+  let ovBaselineFor = ''; // 'media:id' the baseline belongs to — never applied to another identity
+  let ovGen = 0; // stale-guard generation for baseline fetches
+  let ovSearchGen = 0; // stale-guard generation for in-editor TMDB searches
+  const OV_IMG_SM = 'https://image.tmdb.org/t/p/w200';
 
-  function overrideEditorNode(item) {
-    const f = document.createElement('form');
-    f.id = 'ov-form';
-    f.autocomplete = 'off';
-    f.style.cssText = 'display:grid;gap:.8rem';
-    f.appendChild(fieldRow('Media', selectInput('o-media', [['movie', 'movie'], ['tv', 'tv']], item ? item.media : 'movie')));
-    f.appendChild(fieldRow('TMDB ID', numInput('o-id', item ? item.tmdb_id : '', '550')));
-    for (const k of OVERRIDE_FIELDS) {
-      if (k === 'featured') {
-        f.appendChild(checkInput('o-featured', !!(item && item[k]), 'featured'));
-      } else if (k === 'vote_average') {
-        f.appendChild(fieldRow('vote_average (number)', numInput('o-vote_average', item && item[k] != null ? item[k] : '', '8.5')));
-      } else if (k === 'overview' || k === 'description') {
-        f.appendChild(fieldRow(k + ' (optional)', areaInput('o-' + k, item && item[k] != null ? item[k] : '', '', 2)));
-      } else {
-        f.appendChild(fieldRow(k + ' (optional)', textInput('o-' + k, item && item[k] != null ? item[k] : '', '')));
-      }
+  // Grouped presentation of the 11 real overridable keys (the allowlist in
+  // functions/lib/validate.js — nothing invented, nothing hidden). `base`
+  // maps each key to the TMDB detail-bundle field shown as its baseline.
+  const OV_FIELD_GROUPS = [
+    {
+      title: 'Metadata',
+      note: 'Title and name are aliases in public rendering (kept in sync); description is Greybox’s name for the synopsis — when both overview and description are set, description wins.',
+      fields: [
+        { key: 'title', label: 'Title override', kind: 'text', base: 'title' },
+        { key: 'name', label: 'Alt. name override', kind: 'text', base: 'name', hint: 'Rarely needed — public rendering syncs title ⇄ name.' },
+        { key: 'overview', label: 'Synopsis override (overview)', kind: 'area', base: 'overview' },
+        { key: 'description', label: 'Synopsis override (Greybox description)', kind: 'area', base: 'overview', hint: 'Wins over overview when both are set.' },
+        { key: 'vote_average', label: 'Rating override', kind: 'number', base: 'vote_average', hint: 'Numeric, e.g. 8.5.' },
+        { key: 'release_date', label: 'Release date override', kind: 'text', base: 'release_date', hint: 'Primary for Movies (YYYY-MM-DD).' },
+        { key: 'first_air_date', label: 'First-air date override', kind: 'text', base: 'first_air_date', hint: 'Primary for TV Shows (YYYY-MM-DD).' },
+      ],
+    },
+    {
+      title: 'Artwork',
+      note: 'TMDB-style image paths (e.g. /abc123.jpg). Thumbnails below resolve against the same identity — never mixed across titles.',
+      fields: [
+        { key: 'poster_path', label: 'Poster override', kind: 'text', base: 'poster_path', art: 'poster' },
+        { key: 'backdrop_path', label: 'Backdrop override', kind: 'text', base: 'backdrop_path', art: 'backdrop' },
+      ],
+    },
+    {
+      title: 'Editorial',
+      note: 'A Greybox Pick is exactly featured + the “Greybox Pick” badge on the stored row. The switch below drives both without touching other fields.',
+      fields: [
+        { key: 'featured', label: 'Featured flag', kind: 'check' },
+        { key: 'custom_badge', label: 'Badge override', kind: 'text', hint: 'Shown on cards and the detail page.' },
+      ],
+    },
+  ];
+
+  function ovFieldDef(key) {
+    for (const g of OV_FIELD_GROUPS) {
+      for (const f of g.fields) if (f.key === key) return f;
     }
-    f.appendChild(el('p', 'muted text-sm', 'Only filled fields are stored — clearing a field removes that override. Editing replaces all fields. Tip: use “Fill Greybox Pick” for featured + badge without typing them.'));
+    return null;
+  }
+
+  // Display label for a stored row: stored title/name win, otherwise the
+  // bare identity (never invent a title from elsewhere).
+  function ovDisplayLabel(o) {
+    if (!o) return '';
+    const t = String(o.title || o.name || '').trim();
+    if (t) return t.slice(0, 200);
+    return (o.media || '?') + ':' + (o.tmdb_id != null ? o.tmdb_id : '?');
+  }
+
+  // Lenient read of the current editor inputs (never throws for preview/
+  // status purposes): { media, id, values } with values keyed by field.
+  function readOvInputs() {
+    const out = { media: null, id: 0, values: {} };
+    try {
+      const mEl = $('o-media');
+      const idEl = $('o-id');
+      const m = mEl ? mEl.value : '';
+      out.media = (m === 'tv' || m === 'movie') ? m : null;
+      out.id = idEl ? parseInt(idEl.value, 10) : NaN;
+      for (const g of OV_FIELD_GROUPS) {
+        for (const f of g.fields) {
+          const n = document.getElementById('o-' + f.key);
+          if (!n) continue;
+          if (f.kind === 'check') out.values[f.key] = !!n.checked;
+          else out.values[f.key] = String(n.value == null ? '' : n.value).trim();
+        }
+      }
+    } catch { /* preview/status must never break editing */ }
+    return out;
+  }
+
+  function ovInputIsSet(key, values) {
+    const v = values[key];
+    if (key === 'featured') return v === true;
+    return typeof v === 'string' && v !== '';
+  }
+
+  // Effective public value for one field (mirrors applyOverrides in
+  // js/data.js): form value wins, otherwise the TMDB baseline.
+  function ovEffective(key, values, base) {
+    const b = base && typeof base === 'object' ? base : {};
+    if (key === 'title' || key === 'name') {
+      if (values.title) return values.title;
+      if (values.name) return values.name;
+      return String(b.title || b.name || '');
+    }
+    if (key === 'overview' || key === 'description') {
+      if (values.description) return values.description;
+      if (values.overview) return values.overview;
+      return String(b.overview || '');
+    }
+    if (key === 'vote_average') {
+      if (values.vote_average !== '') {
+        const n = Number(values.vote_average);
+        if (Number.isFinite(n)) return String(n);
+      }
+      return (b.vote_average != null && b.vote_average !== '') ? String(b.vote_average) : '';
+    }
+    if (key === 'featured') return values.featured === true ? 'On' : 'Off (TMDB default)';
+    if (key === 'custom_badge') return values.custom_badge || '';
+    return values[key] || String(b[key] != null ? b[key] : '');
+  }
+
+  function ovArtUrl(path, size) {
+    if (typeof path !== 'string' || !path) return '';
+    if (!tmdbPosterUrl(path)) return '';
+    return (size === 'sm' ? OV_IMG_SM : TMDB_IMG) + path;
+  }
+
+  // Live TMDB baseline for exactly one identity, stale-guarded: a slow
+  // response for a previously selected title can never paint into the
+  // current one (identity + generation both checked on arrival).
+  async function ovLoadBaseline(media, id) {
+    const key = media + ':' + id;
+    const myGen = ++ovGen;
+    ovBaseline = null;
+    ovBaselineFor = '';
+    refreshOvIdentity();
+    refreshOvStatuses();
+    refreshOvPreview();
+    try {
+      const d = await fetchJsonGet('/api/' + media + '/' + id);
+      if (myGen !== ovGen) return; // stale: a newer identity owns the editor
+      const cur = readOvInputs();
+      if ((cur.media + ':' + cur.id) !== key) return; // identity changed mid-flight
+      ovBaseline = d && typeof d === 'object' ? d : null;
+      ovBaselineFor = key;
+    } catch (e) {
+      if (myGen !== ovGen) return;
+      ovBaseline = { _error: (e && e.message) || String(e) };
+      ovBaselineFor = key;
+    }
+    refreshOvIdentity();
+    refreshOvStatuses();
+    refreshOvPreview();
+  }
+
+  function ovSetIdentity(media, id, opts) {
+    const mEl = $('o-media');
+    const idEl = $('o-id');
+    if (mEl) { mEl.value = media; mEl.disabled = true; }
+    if (idEl) { idEl.value = String(id); idEl.disabled = true; }
+    const choose = $('ov-choose');
+    if (choose) choose.classList.add('hidden');
+    const idBox = $('ov-identity');
+    if (idBox) idBox.classList.remove('hidden');
+    setDrawerDirty(true);
+    if (!(opts && opts.skipBaseline)) ovLoadBaseline(media, id);
+    else { refreshOvIdentity(); refreshOvStatuses(); refreshOvPreview(); }
+  }
+
+  function ovClearIdentity() {
+    const mEl = $('o-media');
+    const idEl = $('o-id');
+    if (mEl) { mEl.disabled = false; }
+    if (idEl) { idEl.disabled = false; idEl.value = ''; }
+    ovGen++; // invalidate any baseline flight for the previous identity
+    ovBaseline = null;
+    ovBaselineFor = '';
+    const choose = $('ov-choose');
+    if (choose) choose.classList.remove('hidden');
+    const idBox = $('ov-identity');
+    if (idBox) idBox.classList.add('hidden');
+    setDrawerDirty(true);
+    refreshOvStatuses();
+    refreshOvPreview();
+  }
+
+  async function ovSearchTitles() {
+    const qEl = $('ov-tmdb-q');
+    const host = $('ov-tmdb-results');
+    const q = qEl ? String(qEl.value || '').trim() : '';
+    if (!q) { if (host) host.innerHTML = '<p class="muted text-sm">Type a title first.</p>'; return; }
+    if (q.length > 120) { if (host) host.innerHTML = '<p class="muted text-sm">Query must be at most 120 characters.</p>'; return; }
+    const myGen = ++ovSearchGen;
+    if (host) host.innerHTML = '<p class="muted text-sm">Searching TMDB…</p>';
+    try {
+      const raw = await tmdbSearchFetch(q);
+      if (myGen !== ovSearchGen) return; // stale: a newer query owns the list
+      const rows = normalizeTmdbSearchResults(raw).slice(0, 8);
+      if (!host || myGen !== ovSearchGen) return;
+      host.innerHTML = '';
+      if (!rows.length) { host.innerHTML = '<p class="muted text-sm">No matches. Try another spelling.</p>'; return; }
+      rows.forEach((r) => {
+        const row = el('div', 'hero-pick-result');
+        const img = document.createElement('img');
+        img.loading = 'lazy';
+        img.alt = '';
+        img.src = tmdbPosterUrl(r.poster) || 'https://via.placeholder.com/48x72?text=?';
+        row.appendChild(img);
+        const body = el('div', '');
+        body.style.cssText = 'min-width:0;flex:1';
+        body.appendChild(el('p', 'row-title', r.title));
+        body.appendChild(el('p', 'muted text-sm', (r.media === 'tv' ? 'TV' : 'Movie') + ' · ' + (r.year || '—') + ' · TMDB ' + r.media + ':' + r.id));
+        row.appendChild(body);
+        const sel = el('button', 'rowbtn go', 'Select');
+        sel.type = 'button';
+        sel.setAttribute('aria-label', 'Select ' + r.title + ' (' + r.media + ':' + r.id + ')');
+        sel.addEventListener('click', () => ovSetIdentity(r.media, r.id));
+        row.appendChild(sel);
+        host.appendChild(row);
+      });
+    } catch (e) {
+      if (host && myGen === ovSearchGen) host.innerHTML = '<p class="muted text-sm">Search failed: ' + esc((e && e.message) || e) + '</p>';
+    }
+  }
+
+  function ovChooserNode() {
+    const wrap = el('div', '');
+    wrap.id = 'ov-choose';
+    wrap.style.cssText = 'display:grid;gap:.7rem';
+    wrap.appendChild(el('span', 'flabel', 'Find the title on TMDB (no need to know its ID)'));
     const row = el('div', '');
-    row.style.cssText = 'display:flex;gap:.5rem;flex-wrap:wrap';
-    const pickFill = el('button', 'btn btn-secondary btn-sm', '★ Fill Greybox Pick');
-    pickFill.type = 'button';
-    pickFill.title = 'Set featured + custom_badge without typing them';
-    pickFill.addEventListener('click', () => {
+    row.style.cssText = 'display:flex;gap:.5rem';
+    const q = textInput('ov-tmdb-q', '', 'Fight Club');
+    q.setAttribute('aria-label', 'Search TMDB titles');
+    const go = el('button', 'btn btn-secondary btn-sm', 'Search TMDB');
+    go.type = 'button';
+    row.appendChild(q);
+    row.appendChild(go);
+    wrap.appendChild(row);
+    const res = el('div', 'hero-pick-results');
+    res.id = 'ov-tmdb-results';
+    wrap.appendChild(res);
+    const run = () => ovSearchTitles();
+    go.addEventListener('click', run);
+    q.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); run(); } });
+    wrap.appendChild(el('p', 'muted text-sm', 'Selecting a result locks media + TMDB ID as this override’s identity. Search uses the existing server-side proxy — no key in the browser.'));
+    return wrap;
+  }
+
+  // Identity header: baseline title/artwork for the locked identity, or the
+  // loading/error state. Reads only ovBaselineFor — never another title.
+  function refreshOvIdentity() {
+    const box = $('ov-identity');
+    if (!box) return;
+    box.innerHTML = '';
+    const cur = readOvInputs();
+    if (!cur.media || !(cur.id > 0)) {
+      box.classList.add('hidden');
+      return;
+    }
+    box.classList.remove('hidden');
+    const key = cur.media + ':' + cur.id;
+    const top = el('div', 'ov-id-top');
+    const b = (ovBaselineFor === key && ovBaseline && !ovBaseline._error) ? ovBaseline : null;
+    const bErr = (ovBaselineFor === key && ovBaseline && ovBaseline._error) ? ovBaseline._error : '';
+    const img = document.createElement('img');
+    img.className = 'ov-id-thumb';
+    img.loading = 'lazy';
+    img.alt = '';
+    const art = b ? (b.poster_path || b.backdrop_path) : '';
+    img.src = ovArtUrl(art, 'sm') || 'https://via.placeholder.com/48x72?text=?';
+    top.appendChild(img);
+    const body = el('div', '');
+    body.style.cssText = 'min-width:0;flex:1';
+    const title = b ? String(b.title || b.name || 'Untitled') : 'Loading TMDB data…';
+    body.appendChild(el('p', 'row-title', title));
+    const year = b ? String(b.release_date || b.first_air_date || '').slice(0, 4) : '';
+    body.appendChild(el('p', 'muted text-sm', (cur.media === 'tv' ? 'TV Show' : 'Movie') + (year ? ' · ' + year : '') + ' · ' + key));
+    if (bErr) body.appendChild(el('p', 'muted text-sm', 'TMDB baseline unavailable: ' + bErr));
+    top.appendChild(body);
+    box.appendChild(top);
+    const actions = el('div', '');
+    actions.style.cssText = 'display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.5rem';
+    const open = el('button', 'btn btn-secondary btn-sm', 'Open ↗');
+    open.type = 'button';
+    open.title = 'Open the public page for ' + key;
+    open.addEventListener('click', () => { try { window.open(detailUrlFor(cur.media, cur.id), '_blank', 'noopener'); } catch { /* noop */ } });
+    actions.appendChild(open);
+    if (ovIsNew) {
+      const diff = el('button', 'btn btn-ghost btn-sm', '← Choose different title');
+      diff.type = 'button';
+      diff.addEventListener('click', ovClearIdentity);
+      actions.appendChild(diff);
+    }
+    box.appendChild(actions);
+  }
+
+  // One grouped field row: label + live status pill + Reset + input +
+  // baseline line. Reset clears the input (empty = field removed on save —
+  // real backend semantics: PUT replaces all fields, empties are dropped).
+  function ovFieldRow(f, item) {
+    const wrap = el('div', '');
+    wrap.dataset.ovField = f.key;
+    const head = el('div', 'ov-field-head');
+    head.appendChild(el('span', 'flabel', f.label));
+    const pill = el('span', 'badge', 'TMDB');
+    pill.dataset.ovPill = f.key;
+    head.appendChild(pill);
+    const reset = el('button', 'rowbtn', 'Reset');
+    reset.type = 'button';
+    reset.title = 'Clear this field — falls back to TMDB on save';
+    reset.dataset.ovReset = f.key;
+    reset.addEventListener('click', () => {
+      const n = document.getElementById('o-' + f.key);
+      if (!n) return;
+      if (f.kind === 'check') n.checked = false;
+      else n.value = '';
+      setDrawerDirty(true);
+      refreshOvStatuses();
+      refreshOvPreview();
+    });
+    head.appendChild(reset);
+    wrap.appendChild(head);
+    let input;
+    const cur = item && item[f.key] != null ? item[f.key] : '';
+    if (f.kind === 'check') input = checkInput('o-' + f.key, cur === true, f.key);
+    else if (f.kind === 'number') input = numInput('o-' + f.key, cur, '8.5');
+    else if (f.kind === 'area') input = areaInput('o-' + f.key, cur, '', 2);
+    else input = textInput('o-' + f.key, cur, f.art ? '/abc123.jpg' : '');
+    wrap.appendChild(input);
+    if (f.hint) wrap.appendChild(el('p', 'muted text-sm', f.hint));
+    const base = el('p', 'muted text-sm ov-base');
+    base.dataset.ovBase = f.key;
+    wrap.appendChild(base);
+    return wrap;
+  }
+
+  function ovBaseLine(f, base) {
+    if (!base || base._error) return '';
+    if (f.key === 'featured' || f.key === 'custom_badge') return '';
+    if (f.art) return base[f.base] ? 'TMDB: ' + base[f.base] : 'TMDB: (no artwork)';
+    if (f.key === 'vote_average') return 'TMDB: ' + (base.vote_average != null ? base.vote_average : '—');
+    const v = base[f.base];
+    if (typeof v === 'string' && v.trim()) return 'TMDB: ' + v.trim().slice(0, 140);
+    return 'TMDB: —';
+  }
+
+  // Per-field Using-TMDB vs Override-active pills + baseline lines. Baseline
+  // applies only when it belongs to the currently entered identity.
+  function refreshOvStatuses() {
+    const cur = readOvInputs();
+    const key = cur.media && cur.id > 0 ? cur.media + ':' + cur.id : '';
+    const base = (ovBaselineFor === key && ovBaseline && !ovBaseline._error) ? ovBaseline : null;
+    document.querySelectorAll('[data-ov-pill]').forEach((pill) => {
+      const k = pill.getAttribute('data-ov-pill');
+      const on = ovInputIsSet(k, cur.values);
+      pill.textContent = on ? 'Override' : 'TMDB';
+      pill.className = 'badge ' + (on ? 'badge-pick' : '');
+    });
+    document.querySelectorAll('[data-ov-base]').forEach((p) => {
+      const k = p.getAttribute('data-ov-base');
+      const f = ovFieldDef(k);
+      p.textContent = f ? ovBaseLine(f, base) : '';
+    });
+    const pickState = $('ov-pick-state');
+    if (pickState) {
+      const on = cur.values.custom_badge === PICK_BADGE;
+      pickState.textContent = on ? '★ GREYBOX PICK — ON' : 'Greybox Pick — off';
+      pickState.className = 'badge ' + (on ? 'badge-pick' : 'badge-soon');
+    }
+  }
+
+  // TMDB vs GREYBOX preview (unsaved): effective values mirror
+  // applyOverrides exactly (title/name sync, description wins as overview).
+  // Artwork thumbs resolve both sides for the SAME identity only.
+  function refreshOvPreview() {
+    const body = $('ov-preview-body');
+    if (!body) return;
+    const cur = readOvInputs();
+    if (!cur.media || !(cur.id > 0)) {
+      body.innerHTML = '<p class="muted text-sm">Select a TMDB title above to preview TMDB vs Greybox.</p>';
+      return;
+    }
+    const key = cur.media + ':' + cur.id;
+    const base = (ovBaselineFor === key && ovBaseline && !ovBaseline._error) ? ovBaseline : null;
+    if (!base) {
+      const err = (ovBaselineFor === key && ovBaseline && ovBaseline._error) ? ovBaseline._error : 'loading…';
+      body.innerHTML = '';
+      body.appendChild(el('p', 'muted text-sm', 'Loading TMDB baseline (' + err + ') — the Greybox column below is live as you type.'));
+      return;
+    }
+    const rows = [
+      { label: 'Title', tmdb: String(base.title || base.name || '—'), grey: ovEffective('title', cur.values, base) || '—', over: ovInputIsSet('title', cur.values) || ovInputIsSet('name', cur.values) },
+      { label: 'Synopsis', tmdb: String(base.overview || '—').slice(0, 220), grey: String(ovEffective('overview', cur.values, base) || '—').slice(0, 220), over: ovInputIsSet('overview', cur.values) || ovInputIsSet('description', cur.values) },
+      { label: 'Rating', tmdb: String(base.vote_average != null ? base.vote_average : '—'), grey: ovEffective('vote_average', cur.values, base) || '—', over: ovInputIsSet('vote_average', cur.values) },
+      { label: 'Release date', tmdb: String(base.release_date || '—'), grey: cur.values.release_date || String(base.release_date || '—'), over: ovInputIsSet('release_date', cur.values) },
+      { label: 'First-air date', tmdb: String(base.first_air_date || '—'), grey: cur.values.first_air_date || String(base.first_air_date || '—'), over: ovInputIsSet('first_air_date', cur.values) },
+    ];
+    body.innerHTML = '';
+    for (const r of rows) {
+      const row = el('div', 'ov-compare' + (r.over ? ' is-over' : ''));
+      row.appendChild(el('span', 'ov-compare-label', r.label));
+      const vals = el('div', 'ov-compare-vals');
+      vals.appendChild(el('p', 'muted text-sm', 'TMDB: ' + r.tmdb));
+      const g = el('p', 'ov-compare-grey', 'GREYBOX: ' + r.grey + (r.over ? ' (override)' : ' (TMDB)'));
+      vals.appendChild(g);
+      row.appendChild(vals);
+      body.appendChild(row);
+    }
+    // Artwork: both thumbs for this identity, override side live.
+    const art = el('div', 'ov-compare');
+    art.appendChild(el('span', 'ov-compare-label', 'Artwork'));
+    const thumbs = el('div', 'ov-art-compare');
+    const posterEff = cur.values.poster_path || base.poster_path || '';
+    const backEff = cur.values.backdrop_path || base.backdrop_path || '';
+    const mkThumb = (path, cap, overridden) => {
+      const cell = el('div', 'col-preview-cell');
+      const img = document.createElement('img');
+      img.loading = 'lazy';
+      img.alt = '';
+      img.src = ovArtUrl(path, 'sm') || 'https://via.placeholder.com/100x150?text=?';
+      img.onerror = function () { try { img.src = 'https://via.placeholder.com/100x150?text=?'; } catch (e) { /* noop */ } };
+      cell.appendChild(img);
+      cell.appendChild(el('p', 'col-preview-cap', cap + (overridden ? ' (override)' : ' (TMDB)')));
+      return cell;
+    };
+    thumbs.appendChild(mkThumb(posterEff, 'Poster', ovInputIsSet('poster_path', cur.values)));
+    thumbs.appendChild(mkThumb(backEff, 'Backdrop', ovInputIsSet('backdrop_path', cur.values)));
+    art.appendChild(thumbs);
+    body.appendChild(art);
+    // Editorial: the exact public Pick state from the badge value.
+    const pickOn = cur.values.custom_badge === PICK_BADGE;
+    const ed = el('div', 'ov-compare' + (pickOn || cur.values.featured ? ' is-over' : ''));
+    ed.appendChild(el('span', 'ov-compare-label', 'Editorial'));
+    const edVals = el('div', 'ov-compare-vals');
+    edVals.appendChild(el('p', 'ov-compare-grey', pickOn ? 'GREYBOX: ★ Greybox Pick' : 'GREYBOX: not a Pick'));
+    const badgeTxt = cur.values.custom_badge ? cur.values.custom_badge : String(base.custom_badge || '—');
+    edVals.appendChild(el('p', 'muted text-sm', 'Badge: ' + badgeTxt + ' · Featured: ' + (cur.values.featured ? 'on' : 'off')));
+    ed.appendChild(edVals);
+    body.appendChild(ed);
+  }
+
+  function ovPreviewNode() {
+    const wrap = el('div', 'hero-preview');
+    const bar = el('div', 'hero-preview-bar');
+    bar.appendChild(el('span', 'badge badge-soon', 'Preview'));
+    bar.appendChild(el('span', 'muted text-sm', 'TMDB vs Greybox — unsaved.'));
+    wrap.appendChild(bar);
+    const body = el('div', 'hero-preview-body');
+    body.id = 'ov-preview-body';
+    wrap.appendChild(body);
+    return wrap;
+  }
+
+  function ovPickSwitchNode() {
+    const wrap = el('div', 'ov-pick-row');
+    const state = el('span', 'badge badge-soon', 'Greybox Pick — off');
+    state.id = 'ov-pick-state';
+    wrap.appendChild(state);
+    const on = el('button', 'rowbtn go', '★ Pick ON');
+    on.type = 'button';
+    on.title = 'Enable Greybox Pick (featured + badge)';
+    on.addEventListener('click', () => {
       const feat = document.getElementById('o-featured');
       const badge = document.getElementById('o-custom_badge');
       if (feat) feat.checked = true;
       if (badge) badge.value = PICK_BADGE;
       setDrawerDirty(true);
+      refreshOvStatuses();
+      refreshOvPreview();
     });
-    const save = el('button', 'btn btn-primary btn-sm', item ? 'Save Changes' : 'Create override');
+    const off = el('button', 'rowbtn', 'Pick OFF');
+    off.type = 'button';
+    off.title = 'Disable Greybox Pick (keeps other override fields)';
+    off.addEventListener('click', () => {
+      const feat = document.getElementById('o-featured');
+      const badge = document.getElementById('o-custom_badge');
+      if (feat) feat.checked = false;
+      // Clear only the Pick badge — a custom non-Pick badge is preserved.
+      if (badge && badge.value.trim() === PICK_BADGE) badge.value = '';
+      setDrawerDirty(true);
+      refreshOvStatuses();
+      refreshOvPreview();
+    });
+    wrap.appendChild(on);
+    wrap.appendChild(off);
+    wrap.appendChild(el('span', 'muted text-sm', 'Same override row — no second Pick system.'));
+    return wrap;
+  }
+
+  function overrideEditorNode(item) {
+    const isEdit = !!(!ovIsNew && item && item.media && item.tmdb_id);
+    const f = document.createElement('form');
+    f.id = 'ov-form';
+    f.autocomplete = 'off';
+    f.style.cssText = 'display:grid;gap:.8rem';
+    f.appendChild(ovPreviewNode());
+    // IDENTITY — media + TMDB ID inputs keep their stable IDs (headless
+    // read/write compat); the chooser writes into them for new overrides.
+    const idNodes = [
+      fieldRow('Media', selectInput('o-media', [['movie', 'Movie'], ['tv', 'TV show']], item ? item.media : 'movie')),
+      fieldRow('TMDB ID', numInput('o-id', item ? item.tmdb_id : '', '550')),
+    ];
+    if (!isEdit) idNodes.push(ovChooserNode());
+    const idBox = el('div', '');
+    idBox.id = 'ov-identity';
+    idBox.className = 'ov-identity';
+    idNodes.push(idBox);
+    idNodes.push(el('p', 'muted text-sm', 'Identity is locked once chosen — media + TMDB ID is this override’s primary key (rename = delete + create). Empty inputs below mean “not overridden”: clearing a field removes that override on save and TMDB becomes the fallback again.'));
+    f.appendChild(groupBox('Identity', idNodes));
+    for (const g of OV_FIELD_GROUPS) {
+      const nodes = g.fields.map((fld) => ovFieldRow(fld, item));
+      if (g.note) nodes.push(el('p', 'muted text-sm', g.note));
+      if (g.title === 'Editorial') nodes.unshift(ovPickSwitchNode());
+      f.appendChild(groupBox(g.title, nodes));
+    }
+    const row = el('div', '');
+    row.style.cssText = 'display:flex;gap:.5rem;flex-wrap:wrap';
+    const save = el('button', 'btn btn-primary btn-sm', isEdit && !ovIsNew ? 'Save Changes' : 'Create override');
     save.type = 'submit';
     const cancel = el('button', 'btn btn-ghost btn-sm', 'Discard');
     cancel.type = 'button';
-    cancel.addEventListener('click', closeDrawer);
+    cancel.addEventListener('click', () => {
+      // Never silently discard: confirm when the form is dirty. (Drawer
+      // scrim/Escape still close globally — Part 0 infrastructure.)
+      if (drawerDirty) {
+        confirmDialog({ title: 'Discard changes?', message: 'You have unsaved override changes. Discard them?', okLabel: 'Discard' })
+          .then((ok) => { if (ok) closeDrawer(); });
+        return;
+      }
+      closeDrawer();
+    });
     row.appendChild(save);
-    row.appendChild(pickFill);
     row.appendChild(cancel);
     f.appendChild(row);
     f.addEventListener('submit', (e) => { e.preventDefault(); saveOverride(); });
+    // Live status + preview as the operator types (no network per keystroke —
+    // the baseline was fetched once for this identity).
+    f.addEventListener('input', () => { refreshOvStatuses(); refreshOvPreview(); });
+    f.addEventListener('change', () => { refreshOvStatuses(); refreshOvPreview(); });
     return f;
   }
 
-  function openOverrideEditor(item) {
-    ovEditing = item ? { media: item.media, id: item.tmdb_id } : null;
-    const node = overrideEditorNode(item);
+  // hasFields: does the row carry stored override keys (vs a bare identity)?
+  function ovRowHasFields(item) {
+    if (!item || typeof item !== 'object') return false;
+    return OVERRIDE_FIELDS.some((k) => item[k] !== undefined && item[k] !== null && String(item[k]).trim() !== '');
+  }
+
+  function openOverrideEditor(item, opts) {
+    const o = opts && typeof opts === 'object' ? opts : {};
+    const hasIdentity = !!(item && (item.media === 'movie' || item.media === 'tv') && parseInt(item.tmdb_id, 10) > 0);
+    ovEditing = hasIdentity ? { media: item.media, id: parseInt(item.tmdb_id, 10) } : null;
+    // Explicit flag wins (the Search flow knows existence); otherwise a row
+    // with stored fields is an edit and a bare identity is a create. This
+    // fixes the old path where creating via Search issued a PUT that 404’d.
+    ovIsNew = (o.isNew !== undefined) ? !!o.isNew : (hasIdentity ? !ovRowHasFields(item) : true);
+    ovGen++; // invalidate any baseline flight from a previous edit
+    ovBaseline = null;
+    ovBaselineFor = '';
+    const node = overrideEditorNode(hasIdentity ? item : null);
     openDrawer({
       kicker: 'Overrides',
-      title: item ? 'Edit override' : 'New override',
-      sub: item ? item.media + ':' + item.tmdb_id + ' — TMDB stays the fallback for everything else.' : 'TMDB stays the fallback for everything else.',
+      title: !ovIsNew && hasIdentity ? 'Edit override' : 'New override',
+      sub: hasIdentity ? item.media + ':' + parseInt(item.tmdb_id, 10) + ' — TMDB stays the fallback for everything else.' : 'Search TMDB, pick a title, override only what you need.',
       node,
       form: node,
     });
     const mEl = $('o-media');
     const idEl = $('o-id');
-    if (mEl && item) mEl.disabled = true;
-    if (idEl && item) idEl.disabled = true;
+    if (mEl && hasIdentity) mEl.disabled = true;
+    if (idEl && hasIdentity) idEl.disabled = true;
+    const choose = $('ov-choose');
+    if (choose && hasIdentity) choose.classList.add('hidden');
+    if (hasIdentity) ovLoadBaseline(item.media, parseInt(item.tmdb_id, 10));
+    else { refreshOvIdentity(); refreshOvStatuses(); refreshOvPreview(); }
   }
 
   function buildOverrideForm() { /* built on demand in the drawer */ }
   function fillOverrideForm(item) {
     if (!ADMIN_TOKEN || !$('admin-app') || $('admin-app').classList.contains('hidden')) {
-      ovEditing = item ? { media: item.media, id: item.tmdb_id } : null;
+      const hasIdentity = !!(item && (item.media === 'movie' || item.media === 'tv') && parseInt(item.tmdb_id, 10) > 0);
+      ovEditing = hasIdentity ? { media: item.media, id: parseInt(item.tmdb_id, 10) } : null;
+      ovIsNew = hasIdentity ? !ovRowHasFields(item) : true;
       let host = $('ov-form-host-test');
       if (!host) { host = document.createElement('div'); host.id = 'ov-form-host-test'; host.style.display = 'none'; document.body.appendChild(host); }
       host.innerHTML = '';
@@ -1978,19 +2501,58 @@
     return { media, tmdb_id: id, fields };
   }
 
+  // Stable subset comparison for save → read-back verification: the write
+  // echo and a fresh GET must describe the same stored row (same endpoint,
+  // same D1 overrides row). Key order ignored.
+  function stableOverrideJson(row) {
+    try {
+      const r = (row && typeof row === 'object') ? row : {};
+      const fields = {};
+      for (const k of OVERRIDE_FIELDS) {
+        if (r[k] !== undefined) fields[k] = r[k];
+      }
+      return JSON.stringify({ media: r.media || null, tmdb_id: r.tmdb_id != null ? r.tmdb_id : null, fields });
+    } catch { return null; }
+  }
+
   function filteredOverrides() {
     const list = Array.isArray(ovCache) ? ovCache : [];
     const q = String(($('ov-search') && $('ov-search').value) || '').trim().toLowerCase();
-    const f = ($('ov-filter') && $('ov-filter').value) || 'all';
+    // Two real filters on actual row data: media identity + Pick state.
+    // (The old single combined select is gone — see admin.html.)
+    const m = ($('ov-media') && $('ov-media').value) || 'all';
+    const p = ($('ov-pick') && $('ov-pick').value) || 'all';
     return list.filter((o) => {
-      if (f === 'picks' && !isGreyboxPick(o)) return false;
-      if (f === 'movie' && o.media !== 'movie') return false;
-      if (f === 'tv' && o.media !== 'tv') return false;
+      if ((m === 'movie' || m === 'tv') && o.media !== m) return false;
+      if (p === 'picks' && !isGreyboxPick(o)) return false;
+      if (p === 'not' && isGreyboxPick(o)) return false;
       if (!q) return true;
       const keys = Object.keys(o).filter((k) => k !== 'media' && k !== 'tmdb_id');
-      const hay = (o.media + ':' + o.tmdb_id + ' ' + keys.join(' ') + ' ' + keys.map((k) => String(o[k])).join(' ')).toLowerCase();
+      const hay = (o.media + ':' + o.tmdb_id + ' ' + (o.title || '') + ' ' + (o.name || '') + ' ' + keys.join(' ') + ' ' + keys.map((k) => String(o[k])).join(' ')).toLowerCase();
       return hay.indexOf(q) >= 0;
     });
+  }
+
+  // Poster thumb for a workspace card: the override's own poster/backdrop
+  // path renders with zero fetches; rows without override artwork get a
+  // neutral identity tile (no per-row TMDB requests, ever).
+  function ovCardThumb(o) {
+    const path = (o && typeof o.poster_path === 'string' && o.poster_path)
+      ? o.poster_path
+      : ((o && typeof o.backdrop_path === 'string' && o.backdrop_path) ? o.backdrop_path : '');
+    const url = tmdbPosterUrl(path);
+    if (url) {
+      const img = document.createElement('img');
+      img.className = 'ov-thumb';
+      img.loading = 'lazy';
+      img.alt = '';
+      img.src = url;
+      img.onerror = function () { try { img.style.display = 'none'; } catch (e) { /* noop */ } };
+      return img;
+    }
+    const tile = el('div', 'ov-thumb ov-thumb-empty', (o && o.media === 'tv' ? 'TV' : 'MV'));
+    tile.setAttribute('aria-hidden', 'true');
+    return tile;
   }
 
   async function loadOverrides() {
@@ -2012,9 +2574,19 @@
     if (!host) return;
     const all = Array.isArray(ovCache) ? ovCache : [];
     const list = filteredOverrides();
+    // Workspace count: totals plus the Pick count the Dashboard mirrors
+    // (same isGreyboxPick predicate everywhere).
+    const countEl = $('ov-count');
+    if (countEl) {
+      const picks = all.filter(isGreyboxPick).length;
+      const base = all.length
+        ? all.length + (all.length === 1 ? ' Override' : ' Overrides') + ' · ' + picks + ' ★ Picks'
+        : '';
+      countEl.textContent = !all.length ? '' : (list.length === all.length ? base : list.length + ' of ' + base);
+    }
     host.innerHTML = '';
     if (!all.length) {
-      const box = stateBox(host, 'empty', 'No overrides yet', 'Create one — TMDB stays the fallback for everything else.');
+      const box = stateBox(host, 'empty', 'No overrides yet', 'Create the first one — search TMDB, pick a title, override only what you need. TMDB stays the fallback for everything else.');
       const b = el('button', 'btn btn-primary btn-sm', '+ New Override');
       b.type = 'button';
       b.addEventListener('click', () => openOverrideEditor(null));
@@ -2027,18 +2599,24 @@
     }
     for (const o of list) {
       const keys = Object.keys(o).filter((k) => k !== 'media' && k !== 'tmdb_id');
-      const card = el('div', 'data-row');
+      const card = el('div', 'data-row ov-card');
+      card.appendChild(ovCardThumb(o));
+      const main = el('div', 'ov-card-main');
       const head = el('div', 'row-top');
-      head.appendChild(el('span', 'row-title row-mono', o.media + ':' + o.tmdb_id));
+      head.appendChild(el('span', 'row-title', ovDisplayLabel(o)));
       if (isGreyboxPick(o)) head.appendChild(el('span', 'badge badge-pick', '★ Greybox Pick'));
-      head.appendChild(el('span', 'muted text-sm', keys.join(', ') || '(no fields)'));
-      card.appendChild(head);
+      head.appendChild(el('span', 'badge', o.media === 'tv' ? 'TV' : 'Movie'));
+      main.appendChild(head);
+      main.appendChild(el('p', 'row-mono muted', o.media + ':' + o.tmdb_id));
+      main.appendChild(el('p', 'row-meta', keys.length ? keys.length + ' overridden: ' + keys.join(', ') : '(no fields)'));
       const marked = isGreyboxPick(o);
-      card.appendChild(rowButtons([
-        ['Edit', 'go', () => openOverrideEditor(o)],
+      main.appendChild(rowButtons([
+        ['Edit', 'go', () => openOverrideEditor(o, { isNew: false })],
         [marked ? '☆ Unmark Pick' : '★ Mark Pick', '', () => togglePickFromOverrides(o), marked ? 'Remove Greybox Pick badge' : 'Mark as Greybox Pick'],
+        ['Open ↗', '', () => { try { window.open(detailUrlFor(o.media, o.tmdb_id), '_blank', 'noopener'); } catch { /* noop */ } }, 'Open public page'],
         ['Delete', 'danger', () => deleteOverride(o), 'Delete override'],
       ]));
+      card.appendChild(main);
       host.appendChild(card);
     }
   }
@@ -2061,17 +2639,29 @@
     setFormSaving(form, true);
     try {
       const { media, tmdb_id, fields } = readOverrideForm();
-      if (ovEditing) {
-        await api(API.overrides + '/' + media + '/' + tmdb_id, { method: 'PUT', body: { media, tmdb_id, ...fields } });
-        notice('ok', 'Override updated.');
+      const isNew = ovIsNew || !ovEditing;
+      let saved;
+      if (isNew) {
+        saved = await api(API.overrides, { method: 'POST', body: { media, tmdb_id, ...fields } });
       } else {
-        await api(API.overrides, { method: 'POST', body: { media, tmdb_id, ...fields } });
-        notice('ok', 'Override created.');
+        saved = await api(API.overrides + '/' + media + '/' + tmdb_id, { method: 'PUT', body: { media, tmdb_id, ...fields } });
+      }
+      // Never trust the 200 alone: read the row back and compare against
+      // what the server stored before showing success.
+      const readBack = await api(API.overrides + '/' + media + '/' + tmdb_id);
+      const want = stableOverrideJson({ media, tmdb_id, ...fields });
+      if (stableOverrideJson(saved) !== stableOverrideJson(readBack) || stableOverrideJson(readBack) !== want) {
+        notice('err', 'Override saved, but a fresh read-back differs — not showing success. Refresh and retry.');
+      } else {
+        notice('ok', isNew ? 'Override created.' : 'Override updated.');
       }
       ovEditing = null;
+      ovIsNew = false;
+      ovGen++;
       closeDrawer();
       await loadOverrides();
-      if (currentView === 'dashboard' || currentView === 'picks') loadDashboard();
+      if (currentView === 'dashboard') loadDashboard();
+      if (currentView === 'picks') loadPicks();
     } catch (e) {
       notice('err', (e.message || e));
     } finally {
@@ -2080,12 +2670,20 @@
   }
 
   async function deleteOverride(o) {
-    const ok = await confirmDialog({ title: 'Delete override?', message: 'Delete override ' + o.media + ':' + o.tmdb_id + '? TMDB data becomes the fallback again.', okLabel: 'Delete' });
+    const label = ovDisplayLabel(o);
+    const ok = await confirmDialog({ title: 'Delete override?', message: 'Delete override for "' + label + '" (' + o.media + ':' + o.tmdb_id + ')? The public site falls back to normal TMDB data. This cannot be undone.', okLabel: 'Delete' });
     if (!ok) return;
     try {
       await api(API.overrides + '/' + o.media + '/' + o.tmdb_id, { method: 'DELETE' });
-      if (ovEditing && ovEditing.media === o.media && ovEditing.id === o.tmdb_id) ovEditing = null;
-      notice('ok', 'Override deleted.');
+      // Verify removal: the row must read back 404, otherwise local state
+      // would lie about the public fallback.
+      const gone = await readOverrideRow(o.media, o.tmdb_id);
+      if (gone) {
+        notice('err', 'Delete reported success, but the override still reads back — not showing success. Refresh and retry.');
+      } else {
+        notice('ok', 'Override deleted.');
+      }
+      if (ovEditing && ovEditing.media === o.media && ovEditing.id === o.tmdb_id) { ovEditing = null; ovIsNew = false; }
       await loadOverrides();
       if (currentView === 'picks') loadPicks();
       if (currentView === 'dashboard') loadDashboard();
@@ -2911,7 +3509,9 @@
     const t = validPickTarget(media, id);
     const known = findCachedOverride(t.media, t.id);
     const apply = (row) => {
-      openOverrideEditor(row || { media: t.media, tmdb_id: t.id });
+      // Existence is known here: pass it explicitly so a new override
+      // POSTs instead of PUT-404ing.
+      openOverrideEditor(row || { media: t.media, tmdb_id: t.id }, { isNew: !row });
     };
     if (known) { apply(known); return Promise.resolve(); }
     return readOverrideRow(t.media, t.id).then(apply, (e) => { notice('err', (e && e.message) || e); });
@@ -3331,8 +3931,10 @@
     if (cm) cm.addEventListener('change', renderCollections);
     const os = $('ov-search');
     if (os) os.addEventListener('input', renderOverrides);
-    const of = $('ov-filter');
-    if (of) of.addEventListener('change', renderOverrides);
+    const om = $('ov-media');
+    if (om) om.addEventListener('change', renderOverrides);
+    const op = $('ov-pick');
+    if (op) op.addEventListener('change', renderOverrides);
   }
 
   function bindChrome() {
@@ -3425,6 +4027,7 @@
       collectionScopeLabel, collectionTargetsMedia, colHeroSummary,
       stableCollectionJson, refreshCollectionPreview,
       fillOverrideForm, readOverrideForm, readHeroForm,
+      ovDisplayLabel, ovEffective, stableOverrideJson, ovRowHasFields,
       fetchGenres, genreName, GENRE_CACHE,
       PICK_BADGE, isGreyboxPick, validPickTarget,
       markGreyboxPick, unmarkGreyboxPick, toggleGreyboxPick,

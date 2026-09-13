@@ -5,7 +5,10 @@
  *          409 on duplicate, 400 on bad input
  *
  * Entire namespace is gated by requireAdmin(): anonymous requests get
- * 401/403 and never touch D1. No admin UI calls this yet.
+ * 401/403 and never touch D1. The Admin Control Center (admin.html/js/admin.js
+ * Overrides workspace) is the primary caller: list/read/create/replace/
+ * delete plus Pick toggles, save read-back verification and delete
+ * verification after every mutation.
  */
 import { createOverride, getDb, readOverrides } from '../../lib/db.js';
 import { adminCors, adminError, adminJson, readJsonBody, requireAdmin } from '../../lib/admin.js';
