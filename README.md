@@ -415,12 +415,60 @@ under `subtitles` / `tracks` / `captions`; nothing is invented).
 - **Automated checks**: `node tests/greybox-player.test.cjs` (73 assertions:
   adapter units, native/HLS.js/Plyr wiring, quality/subtitle rules, lifecycle
   + stale safety, `Player.open()` compatibility, provider-resolution and
-  routing untouched, no iframe/provider logic/secrets in the player).
+  routing untouched, no iframe/provider logic/secrets in the player) plus
+  `node tests/source-routing.test.cjs` (51 assertions, Increment 2 — see
+  §6.2).
   Browser-only items (real play/pause, seek, volume, fullscreen, speed, PiP,
   mobile controls) need one manual pass with `?play-test=1`.
 - **Limitation**: native-HLS browsers (Safari) use platform-managed quality
   (no custom quality menu there); the legacy configured-host embed page is
   retained for compatibility and is NOT part of the Greybox Player.
+
+## 6.2) Source routing (direct → Greybox Player, embed → legacy iframe)
+
+```
+Provider resolver (js/stream.js EMBED — unchanged hosts/URLs/priority)
+    ↓  normalized source ({ title, sub, url, mode, ... } + optional sourceType)
+Stream.resolveSourceType()
+    ↓                               ↓
+direct HLS / direct file      embed page URL
+    ↓                               ↓
+GreyboxPlayer.open()          legacy compatibility iframe (#embed-frame)
+(HLS.js / native HLS + Plyr)  (Greybox Player never touches it)
+```
+
+- **Precedence** (`resolveSourceType`, pure and unit-tested): (1) an
+  explicit provider-supplied type wins — never guess when the provider is
+  explicit; (2) explicit `mode: 'embed'` stays on the legacy path whatever
+  the URL looks like (all current movie/episode/hero callers); (3) otherwise
+  (file/direct mode) `.m3u8` sniffs to HLS and everything else stays in the
+  file bucket, where the player decides playability (clean `unsupported`
+  error for non-media URLs — Increment 1 behavior, preserved).
+- **Additive field** (backward compatible — every existing caller works
+  without it): `sourceType` (or `contentType`/`mime`). Accepted values:
+  `hls` / `m3u8` / HLS MIME → direct HLS; `file` / `video` / `video/*` /
+  media extensions → direct file; `embed` / `iframe` / `page` → legacy
+  iframe. No second schema: `url`, `mode`, `title`, `sub`, `progressKey`,
+  `onEnded`, `showPrevNext`, subtitle keys all keep their meaning.
+- **Where today's sources go**: the configured EMBED resolver supplies
+  embed-page URLs only (no legitimate direct media URL is provided), so
+  movie/episode/hero playback remains on the legacy path; user-pasted direct
+  URLs (`playFile`), the dev test manifest (`?play-test=1`), and any future
+  provider that legitimately returns a direct URL route to the Greybox
+  Player. Nothing converts an embed URL into a media URL — no scraping, no
+  auth/DRM/referer/hotlink bypass of any kind.
+- **Player UI** is unchanged from Increment 1; only routing was connected.
+  Cleanup and stale-request protection are unchanged (`GreyboxPlayer`
+  teardown + `playerGen` + untouched `routeGen`/`modalGen`).
+- **Automated checks**: `node tests/source-routing.test.cjs` (51
+  assertions: same-provider resolution, HLS/file recognition, player
+  handoff, legacy embed path, no-iframe-for-direct, no provider logic in
+  the player, movie/TV/Anime/fallback-order unchanged, cleanup, guards,
+  Increment 1 suite green, parse regression).
+- **Manual browser pass** (with `?play-test=1` or a legitimately supplied
+  direct URL): DevTools Network should show the `.m3u8` request + media
+  segments with no provider iframe created for direct sources; Console
+  should show no Plyr, HLS.js, or duplicate-initialization errors.
 
 ## 7) Going further (all legal, all Pages-compatible)
 

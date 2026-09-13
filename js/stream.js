@@ -68,6 +68,64 @@
     return !!embedBase();
   }
 
+  /* ---- source-type resolution (Increment 2: connect direct sources) ----
+   * Decides, AFTER a source is resolved, whether it is directly playable
+   * (Greybox Player) or embed-only (legacy compatibility iframe).
+   *
+   * Buckets: 'hls' = direct HLS manifest, 'file' = direct media file,
+   *          'embed' = provider/embed page (iframe only).
+   * 'hls' and 'file' both route to GreyboxPlayer; only 'embed' uses the
+   * legacy iframe. This is routing only — HLS/Plyr internals stay in
+   * js/greybox-player.js, and provider resolution above stays untouched.
+   *
+   * Precedence (never guess when the provider is explicit; never convert an
+   * embed URL into a media URL):
+   *   1. Explicit provider-supplied type (additive `sourceType`, or
+   *      `contentType`/`mime`) wins, whatever the URL looks like.
+   *   2. Explicit `mode: 'embed'` stays on the legacy path, whatever the
+   *      URL looks like (all current movie/episode/hero callers).
+   *   3. Otherwise (file/direct mode or missing mode): sniff the URL for
+   *      .m3u8 → 'hls'; anything else stays 'file' and the player decides
+   *      playability (clean 'unsupported' error for non-media URLs —
+   *      Increment 1 behavior, preserved).
+   */
+  const SOURCE_TYPES = { HLS: 'hls', FILE: 'file', EMBED: 'embed' };
+
+  function explicitSourceType(v) {
+    const s = String(v || '').toLowerCase().trim();
+    if (!s) return '';
+    if (s === 'hls' || s === 'm3u8' || s.indexOf('mpegurl') >= 0 || s.indexOf('x-mpegurl') >= 0) return SOURCE_TYPES.HLS;
+    if (s === 'embed' || s === 'iframe' || s === 'page' || s === 'html') return SOURCE_TYPES.EMBED;
+    if (s === 'file' || s === 'video' || s === 'progressive' || s === 'audio' ||
+        s.indexOf('video/') === 0 || s.indexOf('audio/') === 0 ||
+        /\b(mp4|webm|ogv|ogg|mov|m4v|mp3|wav|m4a)\b/.test(s)) return SOURCE_TYPES.FILE;
+    return '';
+  }
+
+  // URL sniffing defers to the player's own helpers (single source of truth)
+  // with local fallbacks so resolution never depends on the player layer.
+  function looksLikeHls(url) {
+    try {
+      if (window.GreyboxPlayer && typeof window.GreyboxPlayer.isHlsUrl === 'function') {
+        return !!window.GreyboxPlayer.isHlsUrl(url);
+      }
+    } catch { /* fallback below */ }
+    return /\.m3u8(\?|#|$)/i.test(String(url || ''));
+  }
+
+  // Normalized source in, routing bucket out. Accepts the existing contract
+  // ({ url, mode, ... }) plus the additive `sourceType` field. Pure: safe to
+  // unit-test, no DOM, no network, no provider logic.
+  function resolveSourceType(c) {
+    const src = (typeof c === 'string') ? { url: c } : (c || {});
+    const explicit = explicitSourceType(src.sourceType || src.contentType || src.mime);
+    if (explicit) return explicit;
+    if (src.mode === 'embed') return SOURCE_TYPES.EMBED;
+    const url = String(src.url || src.src || src.file || '');
+    if (looksLikeHls(url)) return SOURCE_TYPES.HLS;
+    return SOURCE_TYPES.FILE;
+  }
+
   /* ---- watch progress (resume) ---- */
   const Progress = {
     key(k) { return 'sb_progress:' + k; },
@@ -102,6 +160,8 @@
    *          'embed' = legacy provider page in <iframe> (kept for backward
    *                  compatibility with configured EMBED hosts; the Greybox
    *                  Player itself never touches the iframe).
+   * Routing between the two goes through resolveSourceType() below, so an
+   * explicit provider-supplied `sourceType` is honored without guessing.
    */
   let ctx = null;          // { title, sub, url, mode, progressKey, onEnded, showPrevNext, subtitles|tracks|captions }
   let saveTimer = 0;
@@ -164,9 +224,10 @@
   }
 
   function attach(url) {
-    // Embed mode: provider page in an iframe (only reached when EMBED.base
-    // is configured to your official host — placeholder never loads).
-    if (ctx && ctx.mode === 'embed') {
+    // Embed bucket: provider page in the legacy compatibility iframe (only
+    // reached when the resolver supplied an embed source — the resolver never
+    // converts an embed URL into a media URL, and neither do we).
+    if (ctx && resolveSourceType(ctx) === SOURCE_TYPES.EMBED) {
       const v = el('video'), f = el('embed-frame');
       teardown();
       showError(null);
@@ -180,10 +241,12 @@
       }
       return;
     }
-    // File mode: direct HLS/MP4 in <video> via the Greybox Player
-    // (native HLS or HLS.js + Plyr UI). Subtitle tracks ride along when the
-    // caller supplied them (c.subtitles | c.tracks | c.captions); when absent
-    // the player simply runs without a caption menu. Nothing is invented here.
+    // File/HLS bucket: direct media in <video> via the Greybox Player
+    // (native HLS or HLS.js + Plyr UI). Only a caller-supplied explicit type
+    // (`sourceType`/`contentType`/`mime`) is forwarded — the player keeps its
+    // own Increment 1 URL detection otherwise. Subtitle tracks ride along
+    // when the caller supplied them (c.subtitles | c.tracks | c.captions);
+    // when absent the player simply runs without a caption menu.
     const v = el('video'), f = el('embed-frame');
     if (!v) throw new Error('Missing <video id="video"> element.');
     teardown();
@@ -223,6 +286,9 @@
         GBP.open(v, {
           url,
           title: ctx && ctx.title,
+          // Additive Increment 2 field (documented in README §6.2): an
+          // explicit provider-supplied type. Absent = Increment 1 behavior.
+          sourceType: (ctx && (ctx.sourceType || ctx.contentType || ctx.mime)) || undefined,
           subtitles: (ctx && (ctx.subtitles || ctx.tracks || ctx.captions)) || [],
         }, {
           autoplay: true,
@@ -254,7 +320,10 @@
   }
 
   function open(c) {
-    // c: { title, sub, url, mode: 'file'|'embed', progressKey, onEnded, showPrevNext }
+    // c: { title, sub, url, mode: 'file'|'embed', progressKey, onEnded,
+    //      showPrevNext, subtitles|tracks|captions,
+    //      sourceType|contentType|mime (additive, optional — explicit
+    //      provider-supplied type, see resolveSourceType / README §6.2) }
     if (!c || !c.url) throw new Error('No stream URL resolved.');
     if (!c.mode) c.mode = 'file';
     ctx = c;
@@ -287,9 +356,21 @@
 
   function current() { return ctx; }
 
-  window.Stream = {
+  const StreamAPI = {
     EMBED, getMovieUrl, getEpisodeUrl, isConfigured,
+    resolveSourceType, SOURCE_TYPES,
     Progress, Player: { open, close, current, retry: () => ctx && open(ctx) },
     fmtTime: fmt, resumeLabel: playResumeLabel,
   };
+
+  if (typeof window !== 'undefined') window.Stream = StreamAPI;
+  // Headless/test hook (pure resolver surface only — same pattern as
+  // js/router.js and js/greybox-player.js). Browser behavior unchanged.
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      EMBED, getMovieUrl, getEpisodeUrl, isConfigured,
+      resolveSourceType, SOURCE_TYPES,
+      fmtTime: fmt, Progress,
+    };
+  }
 })();

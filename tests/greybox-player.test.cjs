@@ -107,7 +107,12 @@ t('19a routeGen/modalGen guards intact', /let routeGen = 0/.test(app) && /let mo
 t('19b playerGen stale guard added (no global routing state)', /playerGen/.test(stream) && !/routeGen/.test(stream));
 
 /* ---- 20/21. No iframe / no provider logic in new player ---- */
-t('20a greybox-player.js uses no iframe (code, not comments)', !/iframe/i.test(player.replace(/\/\*[\s\S]*?\*\//g, '')) && !/embed-frame/.test(player));
+t('20a greybox-player.js uses no iframe (code, not comments)', (() => {
+  const code = player.replace(/\/\*[\s\S]*?\*\//g, '');
+  // 'iframe' may appear only as an explicit source-type alias string (routing
+  // vocabulary), never as iframe creation, markup, or frame access.
+  return !/<iframe/i.test(code) && !/createElement\(\s*['"]iframe['"]/.test(code) && !/embed-frame/.test(code) && !/frame\.src/.test(code);
+})());
 t('20b index iframes unchanged (hero trailer + detail trailer + legacy embed)', (index.match(/<iframe/g) || []).length === 3 && /id="hero-trailer"/.test(index) && /id="m-video"/.test(index) && /id="embed-frame"/.test(index));
 t('21a no provider logic in player', !/vidrift|vidsrc|consumet|anilist|vidplus|tmdb/i.test(player));
 t('21b no provider logic in test source', !/vidrift|vidsrc|consumet|anilist|vidplus/i.test(testSrc));
@@ -131,7 +136,7 @@ t('23a all touched + adjacent modules parse', checkOk, checkErr);
 let diff = '';
 try { diff = execSync('git status --short', { cwd: ROOT }).toString(); } catch (e) { diff = 'GIT-UNAVAILABLE'; }
 const changed = diff.split('\n').map((l) => l.trim()).filter(Boolean);
-const allowed = ['M index.html', 'M js/stream.js', 'M README.md', '?? css/player.css', '?? js/greybox-player.js', '?? js/greybox-test-source.js', '?? tests/'];
+const allowed = ['M index.html', 'M js/stream.js', 'M js/greybox-player.js', 'M tests/greybox-player.test.cjs', 'M README.md', '?? css/player.css', '?? js/greybox-player.js', '?? js/greybox-test-source.js', '?? tests/'];
 const unexpected = changed.filter((l) => !allowed.some((a) => l === a || (a.endsWith('/') && l.startsWith(a))));
 t('23b only intended files changed', diff === 'GIT-UNAVAILABLE' || unexpected.length === 0, unexpected.join(', '));
 t('23c router/app/data/hero untouched by diff', !changed.some((l) => /js\/(router|app|data|hero|api|pages|components)\.js/.test(l)), changed.join(', '));

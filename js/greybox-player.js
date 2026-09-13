@@ -1,4 +1,5 @@
-/* Greybox-owned HTML5 player layer (Increment 1: custom player).
+/* Greybox-owned HTML5 player layer (Increment 1: custom player;
+ * Increment 2: honors the additive explicit `sourceType` from the resolver).
  *
  * Architecture:
  *   Existing normalized playback result ({ title, sub, url, mode, ... })
@@ -23,7 +24,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '1.0.0';
+  var VERSION = '1.1.0';
   var MANIFEST_TIMEOUT_MS = 8000;
   var MAX_NETWORK_RETRIES = 3;
 
@@ -69,7 +70,23 @@
    * Accepts the project's existing contract ({ url, ... }) plus optional
    * subtitle lists under any of the accepted keys. Never invents tracks:
    * when the caller supplies none, subtitles is [] and no caption menu shows.
+   *
+   * Increment 2: honors an explicit provider-supplied type (`sourceType`,
+   * or `contentType`/`mime`) — explicit wins over URL sniffing, so a
+   * legitimately provided direct URL without a recognizable extension still
+   * plays. Absent = Increment 1 URL detection, unchanged.
    */
+  function explicitSourceKind(src) {
+    var v = String(src.sourceType || src.contentType || src.mime || '').toLowerCase().trim();
+    if (!v) return '';
+    if (v === 'hls' || v === 'm3u8' || v.indexOf('mpegurl') >= 0 || v.indexOf('x-mpegurl') >= 0) return 'hls';
+    if (v === 'embed' || v === 'iframe' || v === 'page' || v === 'html') return 'embed';
+    if (v === 'file' || v === 'video' || v === 'progressive' || v === 'audio' ||
+        v.indexOf('video/') >= 0 || v.indexOf('audio/') >= 0 ||
+        /\b(mp4|webm|ogv|ogg|mov|m4v|mp3|wav|m4a)\b/.test(v)) return 'progressive';
+    return '';
+  }
+
   function normalizeSource(input) {
     var src = typeof input === 'string' ? { url: input } : (input || {});
     var url = String(src.url || src.src || src.file || '').trim();
@@ -99,7 +116,10 @@
         else gotDefault = true;
       }
     }
-    var type = !url ? 'none' : isHlsUrl(url) ? 'hls' : isProgressiveUrl(url) ? 'progressive' : 'unknown';
+    var type = explicitSourceKind(src);
+    if (!type) {
+      type = !url ? 'none' : isHlsUrl(url) ? 'hls' : isProgressiveUrl(url) ? 'progressive' : 'unknown';
+    }
     return { url: url, type: type, title: String(src.title || ''), subtitles: subtitles };
   }
 
