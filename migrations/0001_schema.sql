@@ -61,7 +61,16 @@ CREATE TABLE IF NOT EXISTS overrides (
 );
 
 -- Single-row site settings as JSON. Known keys:
---   'home_hero' => {"mode":"follow-grid"|"custom","badge":"","pick":0,"source":null}
+--   'home_hero' => {"mode":"follow-grid"|"custom"|"spotlight","badge":"","pick":0,
+--     "source":null,            -- custom mode only: ONE rule source (see home_sections)
+--     "heroItem":{"media","id"},-- spotlight mode only: explicit title (media_type + TMDB ID)
+--     "artwork":{...},          -- every mode: backdrop/logo presentation
+--     "trailer":{...}}          -- every mode: trailer source/activation/delay/muted/loop
+-- Authority per mode (public homepage + Admin share this): spotlight honors
+-- heroItem, custom honors source+pick, follow-grid honors the grid. Values
+-- stored for inactive modes are preserved but ignored.
+--   'collection_heroes' => { [slug]: {"mode":"default"|"custom","heroItem":..,"artwork":..,"trailer":..} }
+--     Separate scope: a Home Hero update never touches collection heroes.
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value_json TEXT NOT NULL DEFAULT '{}',

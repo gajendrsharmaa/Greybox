@@ -37,11 +37,20 @@
  * (TV adds: Action & Adventure 10759, Kids 10762, News 10763, Reality 10764,
  *  Sci-Fi & Fantasy 10765, Soap 10766, Talk 10767, War & Politics 10768.)
  *
- * Hero (the big banner above the grid):
+ * Hero (the big banner above the grid) — single authoritative config, stored
+ * as D1 settings.home_hero (this file is the offline fallback for it):
  *   hero: { mode: 'follow-grid' }              // default: first item of the main grid, exactly as today
  *   hero: { mode: 'custom', badge: '...',      // fixed spotlight instead
  *           source: { type: 'ids', items: [{ media: 'movie', id: 550 }] }, pick: 0 }
  *   hero: { mode: 'custom', badge: 'Trending #1', source: { type: 'trending' }, pick: 0 }
+ *   hero: { mode: 'spotlight',                 // one explicit title (media_type + TMDB ID identity)
+ *           heroItem: { media: 'movie', id: 27205 }, badge: 'Greybox Spotlight' }
+ * Authority per mode (Admin + public homepage share it — see README §4):
+ * spotlight honors heroItem, custom honors source+pick (items[pick],
+ * fallback items[0]), follow-grid honors the grid. Values kept for inactive
+ * modes are preserved but ignored. artwork/trailer presentation travels with
+ * every mode; collection heroes are a separate scope (settings key
+ * collection_heroes) and never affect the Home Hero.
  */
 (function () {
   'use strict';

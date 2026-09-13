@@ -754,7 +754,32 @@
     return src;
   }
 
-  /* ================= HOME HERO strip (summary only — editing stays in General Settings) ================= */
+  /* ================= HOME HERO strip (summary — full editing lives in Heroes) ================= */
+  // Single shared interpretation of the Home Hero (mirrors the public
+  // resolver in js/data.js getHeroItem, without fetching): exactly ONE
+  // field is authoritative per mode — spotlight honors heroItem, custom
+  // honors source+pick, follow-grid honors the grid. Anything else stored
+  // on the row is a preserved-but-inactive candidate. Returns the resolved
+  // { media, id } or null when it resolves at runtime (grid / rule source).
+  function heroResolvedIdentity(hero) {
+    try {
+      if (!hero || typeof hero !== 'object') return null;
+      const validItem = (it) => (it && (it.media === 'movie' || it.media === 'tv') &&
+        Number.isInteger(it.id) && it.id > 0 && it.id <= 2147483647)
+        ? { media: it.media, id: it.id } : null;
+      if (hero.mode === 'spotlight') return validItem(hero.heroItem);
+      if (hero.mode === 'custom' && hero.source && typeof hero.source === 'object') {
+        if (hero.source.type === 'ids' && Array.isArray(hero.source.items) && hero.source.items.length) {
+          const valid = hero.source.items.map(validItem).filter(Boolean);
+          if (!valid.length) return null;
+          const pick = Math.max(0, parseInt(hero.pick, 10) || 0);
+          return valid[pick] || valid[0];
+        }
+      }
+    } catch { /* no resolved identity on anything unexpected */ }
+    return null;
+  }
+
   function heroSummaryText(hero) {
     if (!hero || typeof hero !== 'object') return 'Hero settings unavailable.';
     const mode = hero.mode === 'custom' ? 'Custom spotlight' : (hero.mode === 'spotlight' ? 'Spotlight title' : 'Follow-grid');
@@ -765,10 +790,20 @@
       if (hero.badge) bits.push('“' + hero.badge + '”');
       bits.push('pick ' + (hero.pick != null ? hero.pick : 0));
       if (hero.source) bits.push(summarizeSource(hero.source));
-      if (hero.heroItem) bits.push('pinned ' + hero.heroItem.media + ':' + hero.heroItem.id);
+      // heroItem is spotlight-only: preserved on the row but ignored by the
+      // public renderer in custom mode — label it inactive, never as the hero.
+      if (hero.heroItem) bits.push('spotlight candidate ' + hero.heroItem.media + ':' + hero.heroItem.id + ' (inactive in custom mode)');
     } else {
       bits.push('banner follows the grid');
+      if (hero.heroItem) bits.push('spotlight candidate ' + hero.heroItem.media + ':' + hero.heroItem.id + ' (inactive in follow-grid mode)');
     }
+    // Configured items vs currently resolved hero — never imply one movie
+    // while the public renderer uses another (same source of truth: D1
+    // settings.home_hero, resolved per heroResolvedIdentity).
+    const resolved = heroResolvedIdentity(hero);
+    if (resolved) bits.push('resolved ' + resolved.media + ':' + resolved.id);
+    else if (hero.mode === 'custom') bits.push('resolved at runtime: item #' + Math.max(0, parseInt(hero.pick, 10) || 0) + ' of the rule source');
+    else if (hero.mode !== 'spotlight') bits.push('resolved at runtime: first grid item');
     const pres = heroPresentationOf(hero);
     if (pres.trailer.source === 'off') bits.push('trailer off');
     else if (pres.trailer.source === 'custom') bits.push('trailer ' + (pres.trailer.key || 'custom'));
@@ -1776,18 +1811,42 @@
     head.appendChild(el('span', 'row-mono muted', hero.mode || 'follow-grid'));
     card.appendChild(head);
     const lines = [];
-    if (hero.mode === 'spotlight' && hero.heroItem) lines.push('Title: ' + hero.heroItem.media + ':' + hero.heroItem.id);
-    else if (hero.mode === 'custom') lines.push('Source: ' + summarizeSource(hero.source) + ' · pick ' + (hero.pick != null ? hero.pick : 0));
-    else lines.push('Follows the homepage grid');
+    if (hero.mode === 'spotlight' && hero.heroItem) lines.push('Configured: ' + hero.heroItem.media + ':' + hero.heroItem.id);
+    else if (hero.mode === 'custom') {
+      lines.push('Configured: ' + summarizeSource(hero.source) + ' · pick ' + (hero.pick != null ? hero.pick : 0));
+      if (hero.heroItem) lines.push('Inactive candidate (spotlight-only, ignored in custom mode): ' + hero.heroItem.media + ':' + hero.heroItem.id);
+    } else {
+      lines.push('Configured: follows the homepage grid');
+      if (hero.heroItem) lines.push('Inactive candidate (spotlight-only, ignored in follow-grid mode): ' + hero.heroItem.media + ':' + hero.heroItem.id);
+    }
+    // Currently resolved hero — the same title the public homepage renders
+    // from this configuration (media identity, never title strings).
+    const resolved = heroResolvedIdentity(hero);
+    if (resolved) lines.push('Resolved now: ' + resolved.media + ':' + resolved.id);
+    else if (hero.mode === 'custom') lines.push('Resolved now: runtime item #' + Math.max(0, parseInt(hero.pick, 10) || 0) + ' of the rule source');
+    else if (hero.mode !== 'spotlight') lines.push('Resolved now: current first grid item');
+    else lines.push('Resolved now: (unresolvable — spotlight needs a valid heroItem)');
     if (hero.badge) lines.push('Badge: ' + hero.badge);
     lines.push(describeArtwork(pres));
     lines.push(describeTrailer(pres));
     lines.forEach((ln) => card.appendChild(el('p', 'row-meta', ln)));
     card.appendChild(rowButtons([
-      ['Edit home hero', 'go', () => openHomeHeroEditor(hero), 'Edit home hero content, artwork and trailer'],
+      ['Edit home hero', 'go', () => openHomeHeroEditorFresh(), 'Edit home hero content, artwork and trailer'],
       ['Open homepage ↗', '', () => { try { window.open('/', '_blank', 'noopener'); } catch { /* noop */ } }, 'Verify on the public site'],
     ]));
     host.appendChild(card);
+  }
+
+  // The editor always initializes from the CURRENT server configuration —
+  // never from the load-time snapshot behind the card above — so a hero
+  // changed elsewhere (General Settings, another tab) is reflected on open.
+  async function openHomeHeroEditorFresh() {
+    try {
+      const fresh = await api(API.hero);
+      openHomeHeroEditor(fresh && typeof fresh === 'object' ? fresh : { mode: 'follow-grid' });
+    } catch (e) {
+      notice('err', 'Could not load the current home hero: ' + ((e && e.message) || e));
+    }
   }
 
   function renderHeroesCollections(cols, map) {
@@ -1815,11 +1874,23 @@
         card.appendChild(el('p', 'row-meta', 'First title drives the hero. Configure a custom hero to pin a different title.'));
       }
       card.appendChild(rowButtons([
-        ['Configure', custom ? 'go' : '', () => openCollectionHeroEditor(c, custom ? entry : null), 'Configure hero for /collection/' + c.slug],
+        ['Configure', custom ? 'go' : '', () => openCollectionHeroEditorFresh(c), 'Configure hero for /collection/' + c.slug],
         ['Open ↗', '', () => { try { window.open('/collection/' + c.slug, '_blank', 'noopener'); } catch { /* noop */ } }, 'Verify on the public site'],
       ]));
       host.appendChild(card);
     });
+  }
+
+  // Same fresh-init guarantee as the home hero editor: initialize from the
+  // current collection_heroes map, never from the load-time snapshot above.
+  async function openCollectionHeroEditorFresh(col) {
+    try {
+      const map = await api(API.colHeroes);
+      const entry = (map && map[col.slug] && typeof map[col.slug] === 'object') ? map[col.slug] : null;
+      openCollectionHeroEditor(col, entry);
+    } catch (e) {
+      notice('err', 'Could not load the current hero for /collection/' + col.slug + ': ' + ((e && e.message) || e));
+    }
   }
 
   /* ---------- shared hero editor pieces (home + collection reuse them) ---------- */
@@ -2075,6 +2146,7 @@
         const w = el('div', '');
         w.appendChild(el('span', 'flabel', 'Spotlight title (explicit media identity)'));
         w.appendChild(heroItemPickerNode('hhi', h.heroItem || null));
+        w.appendChild(el('p', 'muted text-sm', 'Honored in Spotlight mode only — Custom uses the rule source + pick below, Follow-grid uses the grid. Stored values in other modes are preserved but inactive.'));
         return w;
       })(),
       fieldRow('Badge (custom/spotlight label, optional)', textInput('hh-badge', h.badge || '', 'Greybox Spotlight')),
@@ -2111,11 +2183,19 @@
       if (mode === 'custom') {
         try {
           const src = readSource('hh-src');
-          if (src && src.type === 'ids' && Array.isArray(src.items) && src.items[0]) {
-            return { target: src.items[0], pres: { artwork: readArtwork('hha'), trailer: readTrailer('hht') } };
+          // Same selection as the public homepage (js/data.js getHeroItem):
+          // items[pick], falling back to items[0]. Never items[0] alone.
+          const pickEl = document.getElementById('hh-pick');
+          const pick = pickEl ? Math.max(0, parseInt(pickEl.value, 10) || 0) : 0;
+          if (src && src.type === 'ids' && Array.isArray(src.items) && src.items.length) {
+            const valid = src.items.filter((it) => it && (it.media === 'movie' || it.media === 'tv') &&
+              Number.isInteger(it.id) && it.id > 0 && it.id <= 2147483647);
+            const chosen = valid[pick] || valid[0];
+            if (chosen) return { target: chosen, pres: { artwork: readArtwork('hha'), trailer: readTrailer('hht') } };
+            return { target: null, pres: null, note: 'No valid items in the rule source.' };
           }
+          return { target: null, pres: null, note: 'Rule-based source (' + summarizeSource(src) + ' · pick ' + pick + ') resolves at runtime — save, then verify on the homepage.' };
         } catch (e) { return { target: null, pres: null, note: e && e.message ? e.message : String(e) }; }
-        return { target: null, pres: null, note: '' };
       }
       return { target: null, pres: null, note: 'Follows the homepage grid — no fixed title to preview.' };
     };
@@ -2144,13 +2224,38 @@
     return body;
   }
 
+  // Stable subset comparison for save → read-back verification: the PUT
+  // echo and a fresh GET must describe the same stored row (same endpoint,
+  // same D1 settings.home_hero key). Key order + unknown keys ignored.
+  function stableHeroJson(hero) {
+    try {
+      const h = (hero && typeof hero === 'object') ? hero : {};
+      return JSON.stringify({
+        mode: h.mode || null,
+        badge: h.badge != null ? h.badge : null,
+        pick: h.pick != null ? h.pick : null,
+        source: h.source !== undefined ? h.source : null,
+        heroItem: h.heroItem !== undefined ? h.heroItem : null,
+        artwork: h.artwork !== undefined ? h.artwork : null,
+        trailer: h.trailer !== undefined ? h.trailer : null,
+      });
+    } catch { return null; }
+  }
+
   async function saveHomeHero() {
     const form = $('hh-form');
     setFormSaving(form, true);
     try {
       const body = readHomeHeroForm();
-      await api(API.hero, { method: 'PUT', body });
-      notice('ok', 'Home hero saved.');
+      const saved = await api(API.hero, { method: 'PUT', body });
+      // Never trust the 200 alone: read the row back and compare against
+      // what the server stored before showing success.
+      const readBack = await api(API.hero);
+      if (stableHeroJson(saved) !== stableHeroJson(readBack)) {
+        notice('err', 'Home hero saved, but a fresh read-back differs — not showing success. Reload Heroes and retry.');
+      } else {
+        notice('ok', 'Home hero saved.');
+      }
       previewReader = null;
       closeDrawer();
       await loadHeroes();
@@ -2575,14 +2680,29 @@
     const form = $('hero-form');
     setFormSaving(form, true);
     try {
+      // Read-modify-write on a FRESH read: this form owns mode/badge/pick/
+      // heroItem/source only — artwork/trailer belong to the Heroes editor,
+      // so carry the current server values through instead of a load-time
+      // snapshot that could wipe a newer Heroes save.
+      const fresh = await api(API.hero);
+      settingsHeroCache = (fresh && typeof fresh === 'object') ? fresh : null;
       const body = readHeroForm();
       const saved = await api(API.hero, { method: 'PUT', body });
-      settingsHeroCache = (saved && typeof saved === 'object') ? saved : null;
-      $('h-badge').value = saved.badge || '';
-      $('h-pick').value = saved.pick != null ? saved.pick : 0;
-      if ($('h-heroItem-media')) $('h-heroItem-media').value = (saved.heroItem && saved.heroItem.media) || 'movie';
-      if ($('h-heroItem-id')) $('h-heroItem-id').value = (saved.heroItem && saved.heroItem.id != null) ? saved.heroItem.id : '';
-      notice('ok', 'Hero settings saved.');
+      const readBack = await api(API.hero);
+      settingsHeroCache = (readBack && typeof readBack === 'object') ? readBack : null;
+      $('h-badge').value = settingsHeroCache.badge || '';
+      $('h-pick').value = settingsHeroCache.pick != null ? settingsHeroCache.pick : 0;
+      if ($('h-heroItem-media')) $('h-heroItem-media').value = (settingsHeroCache.heroItem && settingsHeroCache.heroItem.media) || 'movie';
+      if ($('h-heroItem-id')) $('h-heroItem-id').value = (settingsHeroCache.heroItem && settingsHeroCache.heroItem.id != null) ? settingsHeroCache.heroItem.id : '';
+      if (stableHeroJson(saved) !== stableHeroJson(readBack)) {
+        notice('err', 'Hero settings saved, but a fresh read-back differs — review before continuing.');
+      } else {
+        notice('ok', 'Hero settings saved.');
+      }
+      // Same row feeds the Home strip, Heroes and Dashboard summaries.
+      await loadHomeHero();
+      if (currentView === 'dashboard') loadDashboard();
+      if (currentView === 'heroes') loadHeroes();
     } catch (e) {
       notice('err', (e.message || e));
     } finally {
@@ -2843,6 +2963,7 @@
     Object.assign(window.GreyboxAdminTest, {
       esc, vSlug, vReqStr: vReqStr, vInt, vTmdbId, vSource,
       parseEntryLines, parseMetaText, summarizeSource, heroSummaryText,
+      heroResolvedIdentity,
       parseYoutubeKey, heroPresentationOf, describeTrailer, describeArtwork,
       fillSectionForm, readSectionForm,
       fillCollectionForm, readCollectionForm,

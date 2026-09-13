@@ -120,7 +120,23 @@ in bulk, never API secrets:
 | `home_sections` | Homepage shelf order, titles, visibility, limits, rule sources |
 | `collections` | Collection rules, ordering, pins/excludes, visibility |
 | `overrides` | Explicit per-title field overrides (`media`, `tmdb_id`, override fields only) |
-| `settings` | Single-row settings, currently `home_hero` |
+| `settings` | Single-row settings: `home_hero` (the ONE authoritative Home Hero config) and `collection_heroes` (separate per-collection scope) |
+
+Authoritative Home Hero (`settings.home_hero` — the Admin and the public
+homepage read the same row; `js/homepage.config.js` is the offline fallback):
+
+| `mode` | Public homepage shows | Admin shows |
+|---|---|---|
+| `spotlight` | `heroItem` (`media` + TMDB `id`) | Configured + resolved: the same `media:id` |
+| `custom` | `source` rule, item `pick` (`items[pick]`, fallback `items[0]`) | Configured rule + pick, and the resolved `media:id` (rule-based sources resolve at runtime) |
+| `follow-grid` | First item of the homepage grid | "Follows the grid" + runtime note |
+
+Identity is always `media_type` + TMDB ID — never title strings. Values
+stored for an inactive mode (e.g. a `heroItem` while in `custom`) are
+preserved but ignored, and the Admin labels them inactive. `artwork`
+(backdrop/logo) and `trailer` (source/key/activation/delay/muted/loop)
+travel with every mode. Collection heroes (`settings.collection_heroes`)
+are a separate scope: a Home Hero update never touches them and vice versa.
 
 Flow: browser → `GET /api/config/*` (Cloudflare Pages Functions, same-origin)
 → D1 read via `functions/lib/db.js` (the only file with raw SQL) → frontend
@@ -153,18 +169,19 @@ Production (Cloudflare dashboard):
 > Vercel has no D1: the `api/` equivalents are untouched and `/api/config/*`
 > 404s there, so Vercel deploys keep working off the local config files.
 
-## 5) Management API for Greybox-owned D1 data (no admin UI yet)
+## 5) Management API for Greybox-owned D1 data (used by the Admin Control Panel below)
 
 Read/write layer for the same D1 tables, behind a server-side bearer-token
-boundary. There is deliberately **no admin dashboard, no accounts, no login
-flow** in this step — just the protected routes a future admin UI will call:
+boundary. The Admin Control Panel (`/admin`) calls these routes; there are
+no accounts and no login flow beyond the token.
 
 | Routes | Ops |
 |---|---|
 | `/api/admin/collections`, `/api/admin/collections/:slug` | list · read · create (201) · full update · delete (204) |
 | `/api/admin/home-sections`, `/api/admin/home-sections/:id` | list · read · create (201) · full update · delete (204) |
 | `/api/admin/overrides`, `/api/admin/overrides/:media/:id` | list · read · create (201) · replace fields · delete (204) |
-| `/api/admin/settings/home-hero` | read · replace hero setting |
+| `/api/admin/settings/home-hero` | read · replace hero setting (PUT is full-replace: send the complete hero object) |
+| `/api/admin/settings/collection-heroes` | read · replace the collection-heroes map (read-modify-write so other collections are never clobbered) |
 
 Security model:
 
@@ -207,6 +224,25 @@ lives in a single JS variable, is sent as an `Authorization: Bearer` header,
 and is never written to source, git, D1, cookies, `localStorage`,
 `sessionStorage`, or the URL. Reload/Disconnect forgets it. No accounts, no
 server-side sessions (deliberately — nothing to hijack or expire).
+
+Hero consistency (Admin ↔ public homepage share one source of truth):
+
+- Both read D1 `settings.home_hero` (Admin via
+  `/api/admin/settings/home-hero`, public via `/api/config/home` +
+  `getHomeConfig()` + `getHeroItem()`); there is no second hero store.
+- The Heroes → Home Hero editor initializes from a fresh GET on every open
+  and previews the same selection the public renderer uses (`items[pick]`
+  for `ids` sources, the `heroItem` for spotlight).
+- Hero cards distinguish **configured** items from the **currently resolved**
+  hero (`media:id`), so the Admin never shows one movie while the public
+  renderer uses another.
+- Saves verify with a server read-back (a 200 alone is not trusted as
+  success). The two Home Hero editors (Heroes studio + General Settings)
+  edit the same row: General Settings owns mode/badge/pick/heroItem/source
+  and carries the current server artwork/trailer through, so saving there
+  never wipes Heroes-controlled presentation; collection heroes live under
+  the separate `collection_heroes` key and are never touched by Home Hero
+  saves.
 
 ## 6) How playback works (full logic, source slot left blank).
 

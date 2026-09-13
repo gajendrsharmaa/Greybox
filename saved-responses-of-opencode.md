@@ -37,3 +37,5 @@ Two action items for you:
 CONTINUE FROM STEP 6, STEP 5 COMMITED AND PUSHED.  Continue  opencode -s ses_f73c3749dffeigFhDxhjX9x1Sc
 
 opencode -s ses_f6aff5d81ffekQmEigS9FJcam9
+
+part 2 pushed, continue from part 2.1(bug fix)

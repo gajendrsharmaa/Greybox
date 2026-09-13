@@ -1,7 +1,7 @@
 /**
  * Greybox management-API shared helpers: authorization boundary + HTTP plumbing.
  *
- * SECURITY MODEL (no admin UI, no user accounts yet):
+ * SECURITY MODEL (Admin Control Panel in admin.html/js/admin.js, no user accounts):
  * - Write routes under /api/admin/* MUST call requireAdmin() first.
  * - Authorization is a server-side bearer token compared in constant time
  *   against the GREYBOX_ADMIN_TOKEN Pages secret (local: .dev.vars, never

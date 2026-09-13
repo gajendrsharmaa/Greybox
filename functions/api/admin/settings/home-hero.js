@@ -1,7 +1,13 @@
 /**
  * Greybox management API (Cloudflare): /api/admin/settings/home-hero
- *   GET — read the homepage hero setting ({ mode, badge, pick, source })
+ *   GET — read the homepage hero setting (the single authoritative Home Hero:
+ *     D1 settings.home_hero: { mode, badge, pick, source, heroItem, artwork, trailer })
  *   PUT — replace it (validated like the local homepage.config.js hero)
+ *
+ * Authority per mode (shared with the public homepage — see README §4 and
+ * js/data.js getHeroItem): spotlight honors heroItem, custom honors
+ * source+pick, follow-grid honors the grid. Fields for other modes are
+ * preserved but inactive. Artwork/trailer travel with every mode.
  *
  * Gated by requireAdmin(): anonymous requests get 401/403, never touch D1.
  */
