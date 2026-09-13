@@ -180,6 +180,15 @@ textarea.input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; re
 .row-link { font-size: .74rem; color: var(--gx-accent-strong); }
 .search-thumb { width: 3rem; height: 4.4rem; object-fit: cover; border-radius: .5rem; flex: none; background: #1c1c2a; }
 
+/* ---------- collections control center (Part 3) ---------- */
+.col-workspace { grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr)); }
+.col-card { display: flex; flex-direction: column; gap: .15rem; }
+.col-links { display: flex; gap: .6rem; flex-wrap: wrap; margin-top: .4rem; }
+.col-preview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(5.2rem, 1fr)); gap: .5rem; margin-top: .4rem; }
+.col-preview-cell { display: grid; gap: .2rem; min-width: 0; }
+.col-preview-cell img { display: block; width: 100%; aspect-ratio: 2/3; object-fit: cover; background: #1c1c2a; border-radius: .45rem; border: 1px solid var(--gx-border); }
+.col-preview-cap { font-size: .64rem; color: var(--gx-text-faint); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* ---------- states ---------- */
 .empty, .loading-box, .error-box { background: var(--gx-surface); border: 1px dashed var(--gx-border-strong); border-radius: .8rem; padding: 1.5rem 1rem; text-align: center; color: var(--gx-text-dim); font-size: .85rem; display: grid; gap: .4rem; justify-items: center; }
 .empty-title { font-weight: 800; color: var(--gx-text); }

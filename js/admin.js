@@ -18,6 +18,18 @@
  * PART 1 — Dashboard + Home control: Home workspace (hero strip + sections),
  * scannable dashboard config, source-type filter, grouped section editor,
  * saving states. CRUD/validation/endpoints unchanged.
+ *
+ * PART 2 — Hero Control Center: Home hero + per-collection heroes (separate
+ * scope), shared artwork/trailer editors, read-only previews, read-modify-
+ * write saves so scopes never clobber each other.
+ *
+ * PART 3 — Collections Control Center: workspace cards (count, type/media
+ * filters, hero relationship, public links), grouped collection editor
+ * (Identity / Content source / Presentation / Hero / Advanced), unsaved
+ * preview through the existing public Greybox APIs, save read-back
+ * verification, hero-override cleanup on delete. No new backend: same
+ * /api/admin/collections + /api/admin/settings/collection-heroes routes,
+ * same D1 collections table, same visible/hidden + sort_order semantics.
  */
 (function () {
   'use strict';
@@ -181,6 +193,7 @@
     setDrawerDirty(false);
     drawerForm = null;
     previewReader = null;
+    colPreviewGen++;
     try { if (drawerPrevFocus && drawerPrevFocus.focus) drawerPrevFocus.focus(); } catch { /* noop */ }
     drawerPrevFocus = null;
   }
@@ -1145,31 +1158,375 @@
   /* ================= COLLECTIONS ================= */
   let colEditing = null;
   let colCache = [];
+  let colHeroesCache = {}; // slug -> { mode:'default'|'custom', heroItem } (fresh GET, never trusted blindly)
+
+  // Human scope for a collection source — derived from the data model only,
+  // never hardcoded collection names (mirrors renderCollection eyebrow).
+  function collectionScopeLabel(src) {
+    if (!src || typeof src.type !== 'string') return '—';
+    const kind = src.type;
+    const m = src.media;
+    const scope = m === 'movie' ? 'Movies' : (m === 'tv' ? 'TV Shows' : (m === 'both' || m === 'all' ? 'Movies + TV' : ''));
+    return scope ? kind + ' · ' + scope : kind;
+  }
+
+  // Media-target test for the workspace media filter. Operates on actual
+  // collection data: single-media sources match their media, 'both'/'all'
+  // match either side, custom matches when a listed item targets that media.
+  function collectionTargetsMedia(c, want) {
+    if (want !== 'movie' && want !== 'tv') return true;
+    const src = c && c.source && typeof c.source === 'object' ? c.source : null;
+    if (!src) return false;
+    if (src.type === 'custom') {
+      const items = Array.isArray(src.items) ? src.items : [];
+      if (!items.length) return true; // malformed custom: don't hide it behind a filter
+      return items.some((it) => it && (it.media === want || (want === 'movie' && !it.media)));
+    }
+    const m = src.media;
+    if (m === 'both' || m === 'all') return true;
+    if (m === want) return true;
+    // Sources without an explicit media (search) serve both catalogs.
+    if ((src.type === 'search') && (m == null || m === '')) return true;
+    return false;
+  }
+
+  // Hero relationship label for a collection slug (Heroes own presentation;
+  // Collections own content — this only reports which hero the public page uses).
+  function colHeroSummary(slug) {
+    const e = colHeroesCache && colHeroesCache[slug] && typeof colHeroesCache[slug] === 'object'
+      ? colHeroesCache[slug] : null;
+    if (e && e.mode === 'custom' && e.heroItem && (e.heroItem.media === 'movie' || e.heroItem.media === 'tv')) {
+      return 'Hero: Custom (' + e.heroItem.media + ':' + e.heroItem.id + ')';
+    }
+    return 'Hero: Default (first title)';
+  }
+
+  function colHeroIsCustom(slug) {
+    const e = colHeroesCache && colHeroesCache[slug];
+    return !!(e && e.mode === 'custom' && e.heroItem);
+  }
+
+  /* ---------- collection preview (unsaved: reads the form, never saves) ---------- */
+  // Reuses the existing public Greybox server APIs — the same endpoints the
+  // public /collection/:slug page resolves through — shaped minimally for
+  // thumbnails. No second collection engine: same routes, first page only,
+  // capped at 12 so previews stay cheap. Stale-gated per refresh.
+  let colPreviewGen = 0;
+  const COL_PREVIEW_IMG = 'https://image.tmdb.org/t/p/w200';
+
+  async function fetchJsonGet(url) {
+    let res;
+    try {
+      res = await fetch(url, { headers: { accept: 'application/json' } });
+    } catch (e) {
+      throw new Error('Network error: could not reach the server.');
+    }
+    if (!res.ok) {
+      let msg = 'Request failed (' + res.status + ').';
+      try {
+        const d = await res.json();
+        if (d && d.error) msg = d.error;
+      } catch { /* keep generic */ }
+      throw new Error(msg);
+    }
+    return res.json();
+  }
+
+  function shapePreviewItem(r, fallbackType) {
+    if (!r || typeof r !== 'object' || !(parseInt(r.id, 10) > 0)) return null;
+    const mt = r.media_type === 'tv' || r.media_type === 'movie'
+      ? r.media_type
+      : (fallbackType === 'tv' || fallbackType === 'movie' ? fallbackType
+        : ((r.title && !r.first_air_date) ? 'movie' : 'tv'));
+    return {
+      id: parseInt(r.id, 10),
+      media_type: mt,
+      title: String(r.title || r.name || 'Untitled').slice(0, 200),
+      poster_path: typeof r.poster_path === 'string' ? r.poster_path : null,
+      backdrop_path: typeof r.backdrop_path === 'string' ? r.backdrop_path : null,
+      vote_average: Number(r.vote_average || 0),
+    };
+  }
+
+  function colDetailFetch(media, id) {
+    const mt = media === 'tv' ? 'tv' : 'movie';
+    const n = parseInt(id, 10);
+    if (!Number.isInteger(n) || n < 1) return Promise.resolve(null);
+    const path = mt === 'tv' ? '/api/tv/' + n : '/api/movie/' + n;
+    return fetchJsonGet(path).then(
+      (d) => shapePreviewItem({ ...d, media_type: mt }, mt),
+      () => null
+    );
+  }
+
+  function resolvePreviewIdItems(items) {
+    const list = (Array.isArray(items) ? items : [])
+      .map((it) => {
+        if (!it || typeof it !== 'object') return null;
+        const n = parseInt(it.id, 10);
+        if (!Number.isInteger(n) || n < 1) return null;
+        return { media: it.media === 'tv' ? 'tv' : 'movie', id: n };
+      })
+      .filter(Boolean)
+      .slice(0, 24);
+    return Promise.all(list.map((it) => colDetailFetch(it.media, it.id)))
+      .then((rows) => rows.filter((x) => x && (x.poster_path || x.backdrop_path)));
+  }
+
+  function discoverPreviewFetch(media, params) {
+    const mt = media === 'tv' ? 'tv' : 'movie';
+    const qs = new URLSearchParams({ language: 'en-US', page: '1', sort_by: params.sort || 'popularity.desc' });
+    if (params.genre) qs.set('with_genres', String(params.genre));
+    if (params.year) qs.set(mt === 'tv' ? 'first_air_date_year' : 'primary_release_year', String(params.year));
+    return fetchJsonGet('/api/tmdb/discover/' + mt + '?' + qs.toString()).then((d) => {
+      const results = Array.isArray(d && d.results) ? d.results : [];
+      return results.map((x) => shapePreviewItem(x, mt)).filter((x) => x && (x.poster_path || x.backdrop_path));
+    });
+  }
+
+  function fetchCollectionPreviewBase(src) {
+    const t = src && src.type;
+    if (t === 'trending') {
+      const media = src.media === 'movie' ? 'movie' : (src.media === 'tv' ? 'tv' : 'all');
+      return fetchJsonGet('/api/trending?page=1').then((d) => {
+        const results = Array.isArray(d && d.results) ? d.results : [];
+        const shaped = results.map((x) => shapePreviewItem(x, null)).filter(Boolean);
+        const kept = media === 'all' ? shaped : shaped.filter((x) => x.media_type === media);
+        return kept.filter((x) => x.poster_path || x.backdrop_path);
+      });
+    }
+    if (t === 'popular') {
+      const mt = src.media === 'tv' ? 'tv' : 'movie';
+      const path = mt === 'tv' ? '/api/tv/popular?page=1' : '/api/movies/popular?page=1';
+      return fetchJsonGet(path).then((d) => ((d && d.results) || []).map((x) => shapePreviewItem(x, mt)).filter((x) => x && (x.poster_path || x.backdrop_path)));
+    }
+    if (t === 'top-rated') {
+      const mt = src.media === 'tv' ? 'tv' : 'movie';
+      const path = mt === 'tv' ? '/api/tv/top-rated?page=1' : '/api/movies/top-rated?page=1';
+      return fetchJsonGet(path).then((d) => ((d && d.results) || []).map((x) => shapePreviewItem(x, mt)).filter((x) => x && (x.poster_path || x.backdrop_path)));
+    }
+    if (t === 'now-playing') {
+      return fetchJsonGet('/api/movies/now-playing?page=1').then((d) => ((d && d.results) || []).map((x) => shapePreviewItem(x, 'movie')).filter((x) => x && (x.poster_path || x.backdrop_path)));
+    }
+    if (t === 'search') {
+      const q = String(src.query || '').trim();
+      if (!q) return Promise.reject(new Error('Search source needs a query.'));
+      return fetchJsonGet('/api/search?q=' + encodeURIComponent(q) + '&page=1').then((d) => {
+        const results = Array.isArray(d && d.results) ? d.results : [];
+        return results
+          .filter((x) => x && (x.media_type === 'movie' || x.media_type === 'tv'))
+          .map((x) => shapePreviewItem(x, null))
+          .filter((x) => x && (x.poster_path || x.backdrop_path));
+      });
+    }
+    if (t === 'discover') {
+      return discoverPreviewFetch(src.media, { genre: src.genre, year: src.year, sort: src.sort });
+    }
+    if (t === 'genre') {
+      if (src.media === 'both' && src.genre && typeof src.genre === 'object') {
+        const mid = parseInt(src.genre.movie_id, 10);
+        const tid = parseInt(src.genre.tv_id, 10);
+        if (!(mid > 0) || !(tid > 0)) return Promise.reject(new Error('Genre needs both a movie genre and a TV genre.'));
+        const sort = src.sort || 'popularity.desc';
+        return Promise.all([
+          discoverPreviewFetch('movie', { genre: mid, sort }),
+          discoverPreviewFetch('tv', { genre: tid, sort }),
+        ]).then(([a, b]) => {
+          const out = [];
+          const n = Math.max(a.length, b.length);
+          for (let i = 0; i < n && out.length < 24; i++) {
+            if (a[i]) out.push({ ...a[i], media_type: 'movie' });
+            if (b[i] && out.length < 24) out.push({ ...b[i], media_type: 'tv' });
+          }
+          return out;
+        });
+      }
+      const gid = parseInt(src.genreId, 10);
+      if (!(gid > 0)) return Promise.reject(new Error('Genre needs a genreId.'));
+      return discoverPreviewFetch(src.media, { genre: gid, sort: src.sort });
+    }
+    if (t === 'year') {
+      if (!/^\d{4}$/.test(String(src.year == null ? '' : src.year).trim())) return Promise.reject(new Error('Year must be YYYY.'));
+      return discoverPreviewFetch(src.media, { year: String(src.year).trim(), sort: src.sort });
+    }
+    if (t === 'custom') {
+      return resolvePreviewIdItems(src.items);
+    }
+    return Promise.reject(new Error('Unknown source type: ' + t));
+  }
+
+  function isPreviewExcluded(it, exclude) {
+    return (Array.isArray(exclude) ? exclude : []).some((x) => {
+      if (!x || !(parseInt(x.id, 10) > 0)) return false;
+      if (x.media) return x.media === it.media_type && parseInt(x.id, 10) === it.id;
+      return parseInt(x.id, 10) === it.id;
+    });
+  }
+
+  // Lenient form read for previews: returns { ok, body } instead of throwing
+  // like readCollectionForm, so the preview can show the validation message.
+  function readCollectionPreviewBody() {
+    try {
+      return { ok: true, body: readCollectionForm() };
+    } catch (e) {
+      return { ok: false, error: (e && e.message) || String(e) };
+    }
+  }
+
+  function collectionPreviewNode() {
+    const wrap = el('div', 'hero-preview col-preview');
+    const bar = el('div', 'hero-preview-bar');
+    bar.appendChild(el('span', 'badge badge-soon', 'Preview'));
+    bar.appendChild(el('span', 'muted text-sm', 'Unsaved — save to make live.'));
+    const refresh = el('button', 'btn btn-ghost btn-sm', 'Refresh preview');
+    refresh.type = 'button';
+    refresh.addEventListener('click', () => refreshCollectionPreview());
+    bar.appendChild(refresh);
+    wrap.appendChild(bar);
+    const body = el('div', 'hero-preview-body');
+    body.id = 'col-preview-body';
+    body.innerHTML = '<p class="muted text-sm">Edit the form, then Refresh preview. Nothing here is saved.</p>';
+    wrap.appendChild(body);
+    return wrap;
+  }
+
+  async function refreshCollectionPreview() {
+    const body = document.getElementById('col-preview-body');
+    if (!body) return;
+    const myGen = ++colPreviewGen;
+    const parsed = readCollectionPreviewBody();
+    if (!parsed.ok) {
+      body.innerHTML = '';
+      body.appendChild(el('p', 'muted text-sm', 'Preview unavailable: ' + parsed.error));
+      return;
+    }
+    const b = parsed.body;
+    const cap = Math.max(1, Math.min(parseInt(b.limit, 10) || 20, 12));
+    body.innerHTML = '<p class="muted text-sm">Loading preview…</p>';
+    const stillCurrent = () => myGen === colPreviewGen && document.getElementById('col-preview-body') === body && body.isConnected;
+    try {
+      const pins = (b.pin && b.pin.length) ? await resolvePreviewIdItems(b.pin) : [];
+      if (!stillCurrent()) return;
+      let base = [];
+      if (b.source.type === 'custom') {
+        base = await resolvePreviewIdItems(b.source.items);
+      } else {
+        base = await fetchCollectionPreviewBase(b.source);
+      }
+      if (!stillCurrent()) return;
+      // Pins lead (page-1 semantics), deduped by media:id, excludes drop out.
+      const seen = new Set(pins.map((x) => x.media_type + ':' + x.id));
+      const items = [...pins];
+      for (const x of base) {
+        if (!x) continue;
+        const k = x.media_type + ':' + x.id;
+        if (seen.has(k)) continue;
+        if (isPreviewExcluded({ media_type: x.media_type, id: x.id }, b.exclude)) continue;
+        seen.add(k);
+        items.push(x);
+        if (items.length >= cap) break;
+      }
+      if (!stillCurrent()) return;
+      body.innerHTML = '';
+      const headBits = [
+        b.title || '(untitled)',
+        collectionScopeLabel(b.source),
+        (b.visible === false ? 'Hidden' : 'Visible'),
+        colHeroSummary(b.slug || colEditing || ''),
+      ];
+      body.appendChild(el('p', 'row-title', headBits[0]));
+      body.appendChild(el('p', 'muted text-sm', headBits.slice(1).join(' · ')));
+      if (b.slug) {
+        const live = el('p', 'muted text-sm', 'Live: /collection/' + b.slug + (b.visible === false ? ' (hidden → 404 until visible)' : ''));
+        body.appendChild(live);
+      }
+      if (!items.length) {
+        body.appendChild(el('p', 'muted text-sm', 'No titles resolved. Check the source configuration.'));
+        return;
+      }
+      const grid = el('div', 'col-preview-grid');
+      items.slice(0, cap).forEach((it) => {
+        const cell = el('div', 'col-preview-cell');
+        const img = document.createElement('img');
+        img.loading = 'lazy';
+        img.alt = '';
+        const path = it.poster_path || it.backdrop_path;
+        img.src = path ? COL_PREVIEW_IMG + path : 'https://via.placeholder.com/100x150?text=?';
+        img.onerror = function () { try { img.src = 'https://via.placeholder.com/100x150?text=?'; } catch (e) { /* noop */ } };
+        cell.appendChild(img);
+        const cap2 = el('p', 'col-preview-cap', (it.media_type === 'tv' ? 'TV' : 'Movie') + ' ' + it.media_type + ':' + it.id);
+        cap2.title = it.title;
+        cell.appendChild(cap2);
+        grid.appendChild(cell);
+      });
+      body.appendChild(grid);
+      body.appendChild(el('p', 'muted text-sm', 'Showing ' + Math.min(items.length, cap) + ' of preview · pins lead · excludes applied · capped at 12 for speed.'));
+    } catch (e) {
+      if (!stillCurrent()) return;
+      body.innerHTML = '';
+      body.appendChild(el('p', 'muted text-sm', 'Preview failed: ' + ((e && e.message) || e)));
+    }
+  }
 
   function collectionEditorNode(item) {
     const f = document.createElement('form');
     f.id = 'col-form';
     f.autocomplete = 'off';
     f.style.cssText = 'display:grid;gap:.8rem';
-    f.appendChild(fieldRow('Slug (lowercase letters/numbers/hyphens; set once)', textInput('c-slug', item ? item.slug : '', 'gothic-horror')));
-    f.appendChild(fieldRow('Title', textInput('c-title', item ? item.title || '' : '', 'Gothic Horror')));
-    f.appendChild(fieldRow('Description (optional)', textInput('c-desc', item ? item.description || '' : '', '')));
-    f.appendChild(fieldRow('Cover URL (optional, https://…)', textInput('c-cover', item ? item.cover || '' : '', 'https://…')));
-    f.appendChild(checkInput('c-visible', item ? item.visible !== false : true, 'Visible (hidden collections 404 everywhere)'));
-    f.appendChild(fieldRow('Limit (1–60)', numInput('c-limit', item && item.limit != null ? item.limit : 20, '20')));
-    f.appendChild(fieldRow('Sort order (optional, blank = keep/append)', numInput('c-sort', '', '')));
+    f.appendChild(collectionPreviewNode());
+    f.appendChild(groupBox('Identity', [
+      fieldRow('Slug (lowercase letters/numbers/hyphens; set once — renames need delete + create)', textInput('c-slug', item ? item.slug : '', 'gothic-horror')),
+      fieldRow('Title', textInput('c-title', item ? item.title || '' : '', 'Gothic Horror')),
+      fieldRow('Description / subtitle (optional)', textInput('c-desc', item ? item.description || '' : '', '')),
+    ]));
     const srcHost = el('div', '');
     srcHost.style.cssText = 'display:grid;gap:.7rem';
     srcHost.id = 'c-source';
     const srcLabel = el('div', '');
     srcLabel.appendChild(el('span', 'flabel', 'Rule source'));
     srcLabel.appendChild(srcHost);
-    f.appendChild(srcLabel);
+    srcLabel.appendChild(el('p', 'muted text-sm', 'Only the fields for the selected source type apply — other source settings are hidden, never stored.'));
+    f.appendChild(groupBox('Content source', [srcLabel]));
     renderSourceFields(srcHost, 'c-src', COL_SOURCE_TYPES, item ? item.source : null);
+    const presNodes = [
+      checkInput('c-visible', item ? item.visible !== false : true, 'Visible (hidden collections 404 everywhere, including their public URL)'),
+      fieldRow('Limit — max titles shown (1–60)', numInput('c-limit', item && item.limit != null ? item.limit : 20, '20')),
+      fieldRow('Cover banner URL (optional, https://…)', textInput('c-cover', item ? item.cover || '' : '', 'https://…')),
+      fieldRow('Sort order (optional display position; blank = keep/append — ↑/↓ also edits this)', numInput('c-sort', '', '')),
+    ];
+    if (item && item.slug) {
+      const live = el('p', 'muted text-sm', 'Live URL: /collection/' + item.slug + ' — changing the slug is not supported in place (delete + create instead) so existing links never break silently.');
+      presNodes.push(live);
+      const openBtn = el('button', 'btn btn-secondary btn-sm', 'Open Collection ↗');
+      openBtn.type = 'button';
+      openBtn.addEventListener('click', () => { try { window.open('/collection/' + item.slug, '_blank', 'noopener'); } catch { /* noop */ } });
+      presNodes.push(openBtn);
+    } else {
+      presNodes.push(el('p', 'muted text-sm', 'The public URL will be /collection/<slug>. Slugs are permanent once created.'));
+    }
+    f.appendChild(groupBox('Presentation', presNodes));
+    // HERO relationship: collections own content, heroes own presentation.
+    // This box only reports + links — the full editor stays in Heroes.
+    const heroNodes = [];
+    if (item && item.slug) {
+      heroNodes.push(el('p', 'muted text-sm', colHeroSummary(item.slug) + ' — a custom hero never changes this collection’s titles, only which title the hero presents.'));
+      const hb = el('button', 'btn btn-secondary btn-sm', 'Configure Hero');
+      hb.type = 'button';
+      hb.title = 'Open the Hero editor for /collection/' + item.slug;
+      hb.addEventListener('click', () => openCollectionHeroEditorFresh(item));
+      heroNodes.push(hb);
+    } else {
+      heroNodes.push(el('p', 'muted text-sm', 'Default hero (first title) applies. Save this collection first, then configure a custom hero from the collection card or Heroes.'));
+    }
+    f.appendChild(groupBox('Hero', heroNodes));
     const lines = (arr) => (Array.isArray(arr) ? arr.map((it) => (it && typeof it === 'object' ? (it.media ? it.media + ':' + it.id : it.id) : it)).join('\n') : '');
-    f.appendChild(fieldRow('Pin (optional, one per line: media:id)', areaInput('c-pin', item ? lines(item.pin) : '', 'movie:550', 3)));
-    f.appendChild(fieldRow('Exclude (optional, one per line: id or media:id)', areaInput('c-exclude', item ? lines(item.exclude) : '', '123', 3)));
-    f.appendChild(fieldRow('Meta JSON (optional, e.g. {"curator":"Greybox"})', areaInput('c-meta', item && item.meta ? JSON.stringify(item.meta) : '', '{"curator":"Greybox"}', 2)));
+    const advNodes = [
+      fieldRow('Pinned titles (optional, one per line: media:id — always shown FIRST, in this order)', areaInput('c-pin', item ? lines(item.pin) : '', 'movie:550\ntv:1399', 3)),
+      fieldRow('Excluded titles (optional, one per line: bare id hides any media, media:id hides exactly)', areaInput('c-exclude', item ? lines(item.exclude) : '', '123\ntv:456', 3)),
+      fieldRow('Meta JSON (optional, e.g. {"curator":"Greybox"})', areaInput('c-meta', item && item.meta ? JSON.stringify(item.meta) : '', '{"curator":"Greybox"}', 2)),
+    ];
+    advNodes.push(el('p', 'muted text-sm', 'Pins resolve via title details and lead the collection; excludes drop matching titles. Identity is always media + TMDB ID, never title text.'));
+    f.appendChild(groupBox('Advanced', advNodes));
     const row = el('div', '');
     row.style.cssText = 'display:flex;gap:.5rem;flex-wrap:wrap';
     const save = el('button', 'btn btn-primary btn-sm', item ? 'Save Changes' : 'Create collection');
@@ -1186,6 +1543,7 @@
 
   function openCollectionEditor(item) {
     colEditing = item ? item.slug : null;
+    colPreviewGen++; // invalidate any stale preview flight from a previous edit
     const node = collectionEditorNode(item);
     openDrawer({
       kicker: 'Collections',
@@ -1259,13 +1617,38 @@
   function filteredCollections() {
     const q = String(($('col-search') && $('col-search').value) || '').trim().toLowerCase();
     const f = ($('col-filter') && $('col-filter').value) || 'all';
+    const t = ($('col-type') && $('col-type').value) || 'all';
+    const m = ($('col-media') && $('col-media').value) || 'all';
     return colCache.filter((c) => {
       if (f === 'visible' && c.visible === false) return false;
       if (f === 'hidden' && c.visible !== false) return false;
+      if (t !== 'all' && (!c.source || c.source.type !== t)) return false;
+      if (!collectionTargetsMedia(c, m)) return false;
       if (!q) return true;
       const hay = (c.slug + ' ' + (c.title || '') + ' ' + (c.description || '') + ' ' + summarizeSource(c.source)).toLowerCase();
       return hay.indexOf(q) >= 0;
     });
+  }
+
+  // Stable subset comparison for save → read-back verification: the PUT
+  // echo and a fresh GET must describe the same stored row (same endpoint,
+  // same D1 collections row). Key order + unknown keys ignored.
+  function stableCollectionJson(c) {
+    try {
+      const x = (c && typeof c === 'object') ? c : {};
+      return JSON.stringify({
+        slug: x.slug || null,
+        title: x.title || null,
+        description: x.description != null ? x.description : null,
+        cover: x.cover != null ? x.cover : null,
+        visible: x.visible !== false,
+        limit: x.limit != null ? x.limit : null,
+        source: x.source !== undefined ? x.source : null,
+        pin: x.pin !== undefined ? x.pin : null,
+        exclude: x.exclude !== undefined ? x.exclude : null,
+        meta: x.meta !== undefined ? x.meta : null,
+      });
+    } catch { return null; }
   }
 
   async function loadCollections() {
@@ -1275,6 +1658,15 @@
     try {
       const list = await api(API.collections);
       colCache = Array.isArray(list) ? list : [];
+      // Collection hero map (separate scope, same screen): best-effort so a
+      // heroes failure never blocks the content workspace.
+      try {
+        const heroes = await api(API.colHeroes);
+        colHeroesCache = (heroes && typeof heroes === 'object' && !Array.isArray(heroes)) ? heroes : {};
+      } catch (heroErr) {
+        if (heroErr && (heroErr.status === 401 || heroErr.status === 403)) throw heroErr;
+        colHeroesCache = {};
+      }
       try {
         ovCache = await api(API.overrides);
       } catch (ovErr) {
@@ -1292,6 +1684,16 @@
     const host = $('col-list');
     if (!host) return;
     const list = filteredCollections();
+    // Workspace count: total vs shown (filters are real, against live data).
+    const countEl = $('col-count');
+    if (countEl) {
+      const total = colCache.length;
+      countEl.textContent = total
+        ? (list.length === total
+          ? total + (total === 1 ? ' Collection' : ' Collections')
+          : list.length + ' of ' + total + ' collections')
+        : '';
+    }
     host.innerHTML = '';
     if (!colCache.length) {
       const box = stateBox(host, 'empty', 'No collections yet', 'Create the first rule-based row — the editor opens immediately.');
@@ -1302,24 +1704,32 @@
       return;
     }
     if (!list.length) {
-      stateBox(host, 'empty', 'No matches', 'Try a different search or status filter.');
+      stateBox(host, 'empty', 'No matches', 'Try a different search or filter.');
       return;
     }
+    const lastIdx = colCache.length - 1;
     list.forEach((c) => {
       const idx = colCache.indexOf(c);
-      const card = el('div', 'data-row');
+      const card = el('div', 'data-row col-card');
       const head = el('div', 'row-top');
       head.appendChild(el('span', 'row-title', c.title || c.slug));
       head.appendChild(statusBadge(c));
-      head.appendChild(el('span', 'row-mono muted', '#' + (idx + 1) + ' · /collection/' + c.slug));
+      head.appendChild(el('span', 'badge', collectionScopeLabel(c.source)));
       card.appendChild(head);
-      card.appendChild(el('p', 'row-meta', summarizeSource(c.source) + (c.description ? ' — ' + c.description : '')));
-      const links = el('div', '');
-      links.style.marginTop = '.35rem';
-      const a = el('a', 'row-link', 'Open public page ↗');
+      card.appendChild(el('p', 'row-mono muted', '/collection/' + c.slug + ' · #' + (idx + 1) + ' · limit ' + (c.limit != null ? c.limit : '?')));
+      if (c.description) card.appendChild(el('p', 'row-meta', c.description));
+      const facts = [];
+      facts.push(summarizeSource(c.source));
+      if (Array.isArray(c.pin) && c.pin.length) facts.push(c.pin.length + ' pinned');
+      if (Array.isArray(c.exclude) && c.exclude.length) facts.push(c.exclude.length + ' excluded');
+      card.appendChild(el('p', 'row-meta', facts.join(' · ')));
+      card.appendChild(el('p', 'row-meta', colHeroSummary(c.slug)));
+      const links = el('div', 'col-links');
+      const a = el('a', 'row-link', 'Open Collection ↗');
       a.href = '/collection/' + c.slug;
       a.target = '_blank';
       a.rel = 'noopener';
+      a.title = 'Open the public page for /collection/' + c.slug;
       links.appendChild(a);
       card.appendChild(links);
       if (c.source && c.source.type === 'custom' && Array.isArray(c.source.items) && c.source.items.length) {
@@ -1356,8 +1766,9 @@
       card.appendChild(rowButtons([
         ['Edit', 'go', () => openCollectionEditor(c)],
         [c.visible === false ? 'Show' : 'Hide', '', () => toggleCollection(c), c.visible === false ? 'Make visible' : 'Hide everywhere'],
-        ['↑ Up', '', () => moveCollection(colCache, idx, -1), 'Move up'],
-        ['↓ Down', '', () => moveCollection(colCache, idx, 1), 'Move down'],
+        ['Hero', '', () => openCollectionHeroEditorFresh(c), 'Configure hero for /collection/' + c.slug],
+        ['↑ Up', '', () => moveCollection(colCache, idx, -1), idx === 0 ? 'Already first' : 'Move up', idx === 0],
+        ['↓ Down', '', () => moveCollection(colCache, idx, 1), idx === lastIdx ? 'Already last' : 'Move down', idx === lastIdx],
         ['Delete', 'danger', () => deleteCollection(c), 'Delete collection'],
       ]));
       host.appendChild(card);
@@ -1369,17 +1780,27 @@
     setFormSaving(form, true);
     try {
       const body = readCollectionForm();
+      const slug = colEditing || body.slug;
+      let saved;
       if (colEditing) {
-        await api(API.collections + '/' + encodeURIComponent(colEditing), { method: 'PUT', body });
-        notice('ok', 'Collection updated.');
+        saved = await api(API.collections + '/' + encodeURIComponent(colEditing), { method: 'PUT', body });
       } else {
-        await api(API.collections, { method: 'POST', body });
-        notice('ok', 'Collection created.');
+        saved = await api(API.collections, { method: 'POST', body });
+      }
+      // Never trust the 200 alone: read the row back and compare against
+      // what the server stored before showing success.
+      const readBack = await api(API.collections + '/' + encodeURIComponent(saved && saved.slug ? saved.slug : slug));
+      if (stableCollectionJson(saved) !== stableCollectionJson(readBack)) {
+        notice('err', 'Collection saved, but a fresh read-back differs — not showing success. Refresh and retry.');
+      } else {
+        notice('ok', colEditing ? 'Collection updated.' : 'Collection created.');
       }
       colEditing = null;
+      colPreviewGen++;
       closeDrawer();
       await loadCollections();
       if (currentView === 'dashboard') loadDashboard();
+      if (currentView === 'heroes') loadHeroes();
     } catch (e) {
       notice('err', (e.message || e));
     } finally {
@@ -1417,14 +1838,35 @@
   }
 
   async function deleteCollection(c) {
-    const ok = await confirmDialog({ title: 'Delete collection?', message: 'Delete collection "' + c.slug + '"? This cannot be undone.', okLabel: 'Delete' });
+    const title = c.title || c.slug;
+    const ok = await confirmDialog({
+      title: 'Delete collection?',
+      message: 'Delete collection "' + title + '" (/collection/' + c.slug + ')? The public page will 404 and it will leave homepage shelves that reference it empty. This cannot be undone.',
+      okLabel: 'Delete',
+    });
     if (!ok) return;
     try {
       await api(API.collections + '/' + encodeURIComponent(c.slug), { method: 'DELETE' });
+      // Best-effort hero cleanup through the existing collection-heroes API
+      // (no new backend): a deleted slug must not leave a stale custom hero
+      // behind. Never fails the delete itself.
+      try {
+        const map = await api(API.colHeroes);
+        if (map && typeof map === 'object' && !Array.isArray(map) && map[c.slug]) {
+          const next = { ...map };
+          delete next[c.slug];
+          await api(API.colHeroes, { method: 'PUT', body: next });
+          colHeroesCache = next;
+        }
+      } catch (heroErr) {
+        if (heroErr && (heroErr.status === 401 || heroErr.status === 403)) throw heroErr;
+        notice('err', 'Collection deleted, but its hero override could not be cleaned: ' + ((heroErr && heroErr.message) || heroErr));
+      }
       if (colEditing === c.slug) colEditing = null;
       notice('ok', 'Collection deleted.');
       await loadCollections();
       if (currentView === 'dashboard') loadDashboard();
+      if (currentView === 'heroes') loadHeroes();
     } catch (e) {
       notice('err', e.message || e);
     }
@@ -2874,6 +3316,19 @@
     if (cs) cs.addEventListener('input', renderCollections);
     const cf = $('col-filter');
     if (cf) cf.addEventListener('change', renderCollections);
+    const ct = $('col-type');
+    if (ct) {
+      // Source-type options mirror the supported COL_SOURCE_TYPES exactly,
+      // so the filter can never offer a type the editor cannot produce.
+      COL_SOURCE_TYPES.forEach((t) => {
+        const o = document.createElement('option');
+        o.value = t; o.textContent = t;
+        ct.appendChild(o);
+      });
+      ct.addEventListener('change', renderCollections);
+    }
+    const cm = $('col-media');
+    if (cm) cm.addEventListener('change', renderCollections);
     const os = $('ov-search');
     if (os) os.addEventListener('input', renderOverrides);
     const of = $('ov-filter');
@@ -2967,6 +3422,8 @@
       parseYoutubeKey, heroPresentationOf, describeTrailer, describeArtwork,
       fillSectionForm, readSectionForm,
       fillCollectionForm, readCollectionForm,
+      collectionScopeLabel, collectionTargetsMedia, colHeroSummary,
+      stableCollectionJson, refreshCollectionPreview,
       fillOverrideForm, readOverrideForm, readHeroForm,
       fetchGenres, genreName, GENRE_CACHE,
       PICK_BADGE, isGreyboxPick, validPickTarget,

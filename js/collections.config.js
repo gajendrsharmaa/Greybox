@@ -1,7 +1,11 @@
 /* Greybox collections — YOU define the RULES, TMDB supplies the data.
  *
- * No database, no admin panel, no build step: edit this file, redeploy
- * (Cloudflare Pages / Vercel serve it as static JS), hard-refresh.
+ * D1 (`collections` table, managed through /api/admin/collections and the
+ * Admin Collections workspace) is the live source of truth. THIS FILE is the
+ * offline fallback: it is used only when D1 is unreachable (static preview,
+ * Vercel without D1, binding missing) — see js/data.js preloadGreyboxConfig.
+ * Keep it in sync with the seed (migrations/0002_seed.sql) so fallback and
+ * live agree; never paste TMDB metadata here — just rules.
  *
  * Each collection renders at /collection/<slug> (e.g. /collection/science-fiction).
  * A collection is Greybox-controlled structure; TMDB only provides the current

@@ -271,7 +271,7 @@
     return getDiscover({ media, genre: genreId, page, sort });
   }
 
-  /* ---------------- homepage configuration (local file, no database) ---------------- */
+  /* ---------------- homepage configuration (D1 first, local file fallback) ---------------- */
 
   const HOME_MOVIE_CATS = ['popular', 'top-rated', 'upcoming', 'now-playing'];
   const HOME_TV_CATS = ['popular', 'top-rated', 'on-the-air', 'airing-today'];
@@ -497,7 +497,7 @@
     );
   }
 
-  /* ---------------- Greybox collections (local config, no database) ---------------- */
+  /* ---------------- Greybox collections (D1 first, local file fallback) ---------------- */
 
   const COLLECTION_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -907,7 +907,7 @@
     });
   }
 
-  /* ---------------- Greybox metadata overrides (local config, no database) ---------------- */
+  /* ---------------- Greybox metadata overrides (D1 first, local file fallback) ---------------- */
 
   // Only these keys are ever read from js/overrides.config.js — a complete
   // TMDB response pasted there would be ignored except for these fields.

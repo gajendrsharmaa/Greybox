@@ -4,8 +4,10 @@
  *   POST — create a collection (201), 409 on duplicate slug, 400 on bad input
  *
  * Entire namespace is gated by requireAdmin(): anonymous requests get
- * 401/403 and never touch D1. No admin UI calls this yet — routes exist
- * for the future admin interface and for scripted management.
+ * 401/403 and never touch D1. The Admin Control Center (admin.html/js/admin.js
+ * Collections workspace) is the primary caller: list/read/create/full-update/
+ * delete plus reorder (sort_order swaps), visibility toggles and read-back
+ * verification after every mutation.
  */
 import { createCollection, getDb, readCollections } from '../../lib/db.js';
 import { adminCors, adminError, adminJson, readJsonBody, requireAdmin } from '../../lib/admin.js';

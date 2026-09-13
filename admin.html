@@ -197,7 +197,7 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
         <div class="page-head">
           <div>
             <h1 id="col-title" class="page-title">Collections</h1>
-            <p class="page-desc">Rule-based rows behind <code>/collection/:slug</code>. Use the editor drawer to create or edit — no scrolling past the list.</p>
+            <p class="page-desc">Manage the content, presentation and behavior of Greybox collections. Rule-based rows behind <code>/collection/:slug</code> — content lives here, hero presentation lives in Heroes.</p>
           </div>
           <div class="page-actions">
             <button id="col-new" class="btn btn-primary btn-sm">+ New Collection</button>
@@ -211,8 +211,17 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
             <option value="visible">Visible</option>
             <option value="hidden">Hidden</option>
           </select>
+          <select id="col-type" class="input input-select" aria-label="Filter collections by source type">
+            <option value="all">All types</option>
+          </select>
+          <select id="col-media" class="input input-select" aria-label="Filter collections by media type">
+            <option value="all">All media</option>
+            <option value="movie">Movies</option>
+            <option value="tv">TV Shows</option>
+          </select>
         </div>
-        <div id="col-list" class="row-list"></div>
+        <p id="col-count" class="muted text-sm" style="margin-bottom:.6rem" aria-live="polite"></p>
+        <div id="col-list" class="row-list col-workspace"></div>
       </section>
 
       <!-- OVERRIDES -->

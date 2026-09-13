@@ -17,7 +17,7 @@ A Netflix-style frontend where the "backend" is **other providers' legal APIs**:
 ```
 index.html                  # SPA: home, movies, tv, free films, my list, search, details, player
 admin.html                  # Admin Control Panel (/admin): sections, collections, overrides, hero — vanilla JS
-js/admin.js                 # Admin app (memory-only token session, talks only to /api/admin/*)
+js/admin.js                 # Admin app (memory-only token session; writes go to /api/admin/*, previews/links read the public /api/*)
 css/style.css
 js/api.js                   # Greybox API client (NO secret in client code — calls /api/*)
 js/app.js                   # UI
@@ -232,7 +232,27 @@ then, all `/api/admin/*` calls safely return `401`.
 homepage sections, collections, metadata overrides, and the hero setting
 through the management API above — full CRUD plus reorder, visibility
 toggles, and delete confirmations, with per-field validation mirroring the
-backend and a refresh-from-API after every mutation.
+backend and a server read-back after every mutation (a 200 alone is never
+shown as success).
+
+Collections workspace (`/admin` → Collections): cards with live counts,
+real search/visibility/source-type/media filters (all evaluated against
+actual collection data — `source.type` and the media each collection
+targets), public `/collection/:slug` links, per-card hero relationship
+(Default = first title, Custom = configured hero) with a Configure Hero
+entry point into the Heroes editor, and pin/exclude counts. The editor is
+grouped (Identity / Content source / Presentation / Hero / Advanced),
+adapts its fields to the selected source type (genre/year/search/discover/
+custom show only their own settings; movie vs TV genre IDs stay distinct,
+including the Movies + TV `movie_id`/`tv_id` pair), carries an unsaved
+preview (first page only, capped at 12, pins lead, excludes applied) that
+reuses the existing public Greybox APIs and never saves, and verifies saves
+with a fresh GET. State is `visible`/`hidden` only (hidden collections 404
+everywhere, including their public URL); ordering is the existing
+`sort_order` display position (↑/↓ swaps plus an optional numeric field —
+no new model); slugs are permanent (rename = delete + create); deletes also
+remove that slug's hero override through the existing collection-heroes API
+so no stale custom hero survives.
 
 Authentication is a **memory-only session**: paste the token once per tab; it
 lives in a single JS variable, is sent as an `Authorization: Bearer` header,
