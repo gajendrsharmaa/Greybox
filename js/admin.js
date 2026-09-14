@@ -70,6 +70,7 @@
     collections: '/api/admin/collections',
     tags: '/api/admin/tags',
     overrides: '/api/admin/overrides',
+    blocked: '/api/admin/blocked',
     hero: '/api/admin/settings/home-hero',
     colHeroes: '/api/admin/settings/collection-heroes',
   };
@@ -220,6 +221,7 @@
     ovSearchGen++;
     tagDetailGen++;
     tagAddGen++;
+    blockedSearchGen++;
     try { if (drawerPrevFocus && drawerPrevFocus.focus) drawerPrevFocus.focus(); } catch { /* noop */ }
     drawerPrevFocus = null;
   }
@@ -237,6 +239,7 @@
     collections: { title: 'Collections', sub: 'Content' },
     tags: { title: 'Tags', sub: 'Content' },
     overrides: { title: 'Overrides', sub: 'Content' },
+    blocked: { title: 'Blocked Titles', sub: 'Content' },
     picks: { title: 'Greybox Picks', sub: 'Content' },
     search: { title: 'TMDB Search', sub: 'Content' },
     settings: { title: 'General Settings', sub: 'Site' },
@@ -276,7 +279,7 @@
     if ($('crumb-sub')) $('crumb-sub').textContent = (section === workspace) ? '' : workspace;
     if (key === 'soon' && currentSoon) {
       if ($('soon-title')) $('soon-title').textContent = currentSoon.label;
-      if ($('soon-desc')) $('soon-desc').textContent = currentSoon.label + ' is on the Control Center roadmap and has no editor yet. Dashboard, Home, Heroes, Collections, Tags, Overrides, Greybox Picks, TMDB Search and General Settings are live.';
+      if ($('soon-desc')) $('soon-desc').textContent = currentSoon.label + ' is on the Control Center roadmap and has no editor yet. Dashboard, Home, Heroes, Collections, Tags, Overrides, Blocked Titles, Greybox Picks, TMDB Search and General Settings are live.';
     }
     closeMobileNav();
     if (!ADMIN_TOKEN) return;
@@ -286,6 +289,7 @@
     if (key === 'collections') loadCollections();
     if (key === 'tags') loadTags();
     if (key === 'overrides') loadOverrides();
+    if (key === 'blocked') loadBlocked();
     if (key === 'picks') loadPicks();
     if (key === 'settings') loadHero();
   }
@@ -3482,6 +3486,382 @@
     }
   }
 
+  /* ================= BLOCKED TITLES (permanent server-side blocklist) =================
+   *
+   * Admin workspace over /api/admin/blocked: list (with Admin display
+   * snapshots — no per-row TMDB fetches, ever), search-first blocking
+   * (TMDB search → select → confirm → Block, identity locked to
+   * media + TMDB ID), and guarded unblock (confirm → DELETE → read-back
+   * 404 verification → re-render without reload). The public site filters
+   * through js/data.js isBlockedContent(); this workspace never touches
+   * public rendering and contains no SQL.
+   */
+  let blockedCache = []; // stored rows [{ media, tmdb_id, title, poster_path, backdrop_path, year, created_at, ... }]
+  let blockedSearchGen = 0; // stale-guard generation for picker TMDB searches
+
+  // Canonical identity key. Title/poster text NEVER participates: matching is
+  // media + TMDB ID only, so "movie:123" and "tv:123" stay independent.
+  function blockedKey(media, id) {
+    const m = media === 'tv' ? 'tv' : (media === 'movie' ? 'movie' : null);
+    const n = parseInt(id, 10);
+    if (!m || !Number.isInteger(n) || n < 1) return '';
+    return m + ':' + n;
+  }
+
+  // Is this identity currently blocked (against the last loaded list)?
+  function isBlockedCached(media, id) {
+    const key = blockedKey(media, id);
+    if (!key) return false;
+    return (Array.isArray(blockedCache) ? blockedCache : []).some((b) => blockedKey(b.media, b.tmdb_id) === key);
+  }
+
+  // Display label for a stored row: snapshot title wins, otherwise the bare
+  // identity (never invent a title from elsewhere).
+  function blockedDisplayLabel(b) {
+    if (!b) return '';
+    const t = String(b.title || '').trim();
+    if (t) return t.slice(0, 200);
+    return (b.media || '?') + ':' + (b.tmdb_id != null ? b.tmdb_id : '?');
+  }
+
+  function blockedDate(b) {
+    const s = String((b && (b.created_at || b.updated_at)) || '').trim();
+    if (!s) return '';
+    return s.slice(0, 10);
+  }
+
+  function filteredBlocked() {
+    const list = Array.isArray(blockedCache) ? blockedCache : [];
+    const q = String(($('blocked-search') && $('blocked-search').value) || '').trim().toLowerCase();
+    const m = ($('blocked-media') && $('blocked-media').value) || 'all';
+    return list.filter((b) => {
+      if ((m === 'movie' || m === 'tv') && b.media !== m) return false;
+      if (!q) return true;
+      const hay = (b.media + ':' + b.tmdb_id + ' ' + (b.title || '') + ' ' + (b.year || '')).toLowerCase();
+      return hay.indexOf(q) >= 0;
+    });
+  }
+
+  // Poster thumb for a workspace card: the STORED snapshot artwork renders
+  // with zero fetches; rows without snapshot artwork get a neutral identity
+  // tile (no per-row TMDB requests, ever).
+  function blockedCardThumb(b) {
+    const path = (b && typeof b.poster_path === 'string' && b.poster_path)
+      ? b.poster_path
+      : ((b && typeof b.backdrop_path === 'string' && b.backdrop_path) ? b.backdrop_path : '');
+    const url = tmdbPosterUrl(path);
+    if (url) {
+      const img = document.createElement('img');
+      img.className = 'blocked-thumb';
+      img.loading = 'lazy';
+      img.alt = '';
+      img.src = url;
+      img.onerror = function () { try { img.style.display = 'none'; } catch (e) { /* noop */ } };
+      return img;
+    }
+    const tile = el('div', 'blocked-thumb blocked-thumb-empty', (b && b.media === 'tv' ? 'TV' : 'MV'));
+    tile.setAttribute('aria-hidden', 'true');
+    return tile;
+  }
+
+  // Single blocked row by identity: the stored row, or null on 404.
+  // Anything else (network, 401/403) throws — a failed read is never shown
+  // as "not blocked".
+  async function readBlockedRow(media, id) {
+    try {
+      return await api(API.blocked + '/' + media + '/' + id);
+    } catch (e) {
+      if (e && e.status === 404) return null;
+      throw e;
+    }
+  }
+
+  async function loadBlocked() {
+    const host = $('blocked-list');
+    if (!host) return;
+    stateBox(host, 'loading', 'Loading blocked titles…');
+    try {
+      const list = await api(API.blocked);
+      blockedCache = Array.isArray(list) ? list : [];
+      renderBlocked();
+    } catch (e) {
+      host.innerHTML = '';
+      const box = stateBox(host, 'error', 'Blocked titles failed to load', (e && e.message) || String(e));
+      const retry = el('button', 'btn btn-secondary btn-sm', 'Retry');
+      retry.type = 'button';
+      retry.addEventListener('click', loadBlocked);
+      box.appendChild(retry);
+      notice('err', 'Blocked titles failed to load: ' + ((e && e.message) || e));
+    }
+  }
+
+  function renderBlocked() {
+    const host = $('blocked-list');
+    if (!host) return;
+    const all = Array.isArray(blockedCache) ? blockedCache : [];
+    const list = filteredBlocked();
+    const countEl = $('blocked-count');
+    if (countEl) {
+      countEl.textContent = !all.length ? '' : (list.length === all.length
+        ? (all.length + (all.length === 1 ? ' Blocked Title' : ' Blocked Titles'))
+        : (list.length + ' of ' + all.length + ' blocked'));
+    }
+    host.innerHTML = '';
+    if (!all.length) {
+      const box = stateBox(host, 'empty', 'No titles are currently blocked',
+        'Blocked movies and TV shows will appear here once excluded from Greybox. Blocking is permanent until unblocked — discovery, search and detail pages all refuse blocked titles.');
+      const b = el('button', 'btn btn-primary btn-sm', '+ Block Title');
+      b.type = 'button';
+      b.addEventListener('click', openBlockPicker);
+      box.appendChild(b);
+      return;
+    }
+    if (!list.length) {
+      stateBox(host, 'empty', 'No matches', 'Try a different search or filter.');
+      return;
+    }
+    for (const b of list) {
+      const card = el('div', 'data-row blocked-card');
+      card.appendChild(blockedCardThumb(b));
+      const main = el('div', 'blocked-card-main');
+      const head = el('div', 'row-top');
+      head.appendChild(el('span', 'row-title', blockedDisplayLabel(b)));
+      head.appendChild(el('span', 'badge badge-blocked', 'Blocked'));
+      head.appendChild(el('span', 'badge', b.media === 'tv' ? 'TV' : 'Movie'));
+      main.appendChild(head);
+      const metaBits = [b.media + ':' + b.tmdb_id];
+      if (b.year) metaBits.push(String(b.year));
+      if (blockedDate(b)) metaBits.push('blocked ' + blockedDate(b));
+      main.appendChild(el('p', 'row-mono muted', metaBits.join(' · ')));
+      main.appendChild(rowButtons([
+        ['Unblock', 'danger', () => unblockTitle(b), 'Remove this title from the blocklist'],
+      ]));
+      card.appendChild(main);
+      host.appendChild(card);
+    }
+  }
+
+  async function unblockTitle(b) {
+    const label = blockedDisplayLabel(b);
+    const ok = await confirmDialog({
+      title: 'Unblock title?',
+      message: 'Unblock "' + label + '" (' + b.media + ':' + b.tmdb_id + ')? It can return to Greybox discovery, search and detail pages. This cannot be undone.',
+      okLabel: 'Unblock',
+    });
+    if (!ok) return;
+    try {
+      await api(API.blocked + '/' + b.media + '/' + b.tmdb_id, { method: 'DELETE' });
+      // Verify removal: the row must read back 404, otherwise local state
+      // would lie about public discovery.
+      const gone = await readBlockedRow(b.media, b.tmdb_id);
+      if (gone) {
+        notice('err', 'Unblock reported success, but the title still reads back as blocked — not showing success. Refresh and retry.');
+      } else {
+        notice('ok', 'Unblocked ' + b.media + ':' + b.tmdb_id + '.');
+      }
+      await loadBlocked();
+      if (currentView === 'dashboard') loadDashboard();
+    } catch (e) {
+      notice('err', (e && e.message) || e);
+    }
+  }
+
+  // + Block Title → TMDB search picker (drawer). Identity comes from the
+  // search result (media + TMDB ID) — the operator never types an ID by hand.
+  // Already-blocked results show BLOCKED + Unblock instead of a duplicate
+  // Block action (the server also enforces uniqueness with 409).
+  function openBlockPicker() {
+    blockedSearchGen++; // invalidate any picker flight from a previous open
+    const wrap = el('div', '');
+    wrap.style.cssText = 'display:grid;gap:.8rem';
+    wrap.appendChild(el('p', 'muted text-sm', 'Search TMDB through the existing server-side proxy (no key in the browser). Movies + TV only. Select a result to review it before blocking.'));
+    const qRow = el('div', '');
+    qRow.style.cssText = 'display:flex;gap:.5rem';
+    const q = document.createElement('input');
+    q.id = 'blocked-tmdb-q';
+    q.type = 'search';
+    q.placeholder = 'Fight Club';
+    q.className = 'input';
+    q.autocomplete = 'off';
+    qRow.appendChild(q);
+    const go = el('button', 'btn btn-primary btn-sm', 'Search');
+    go.type = 'button';
+    go.addEventListener('click', runBlockedSearch);
+    qRow.appendChild(go);
+    wrap.appendChild(qRow);
+    const host = el('div', '');
+    host.id = 'blocked-tmdb-results';
+    host.style.cssText = 'display:grid;gap:.5rem';
+    host.appendChild(el('p', 'muted text-sm', 'Type a movie or TV title above, then Search.'));
+    wrap.appendChild(host);
+    q.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runBlockedSearch(); } });
+    openDrawer({
+      kicker: 'Blocked Titles',
+      title: 'Block a title',
+      sub: 'Search TMDB, pick a title, confirm — identity locks to media:TMDB ID.',
+      node: wrap,
+    });
+    try { q.focus(); } catch { /* noop */ }
+  }
+
+  async function runBlockedSearch() {
+    const host = $('blocked-tmdb-results');
+    const qEl = $('blocked-tmdb-q');
+    const query = qEl ? String(qEl.value || '').trim() : '';
+    if (!query) { if (host) host.innerHTML = '<p class="muted text-sm">Type a title first.</p>'; return; }
+    if (query.length > 120) { if (host) host.innerHTML = '<p class="muted text-sm">Query must be at most 120 characters.</p>'; return; }
+    const myGen = ++blockedSearchGen;
+    if (host) {
+      host.innerHTML = '';
+      stateBox(host, 'loading', 'Searching TMDB…');
+    }
+    try {
+      const [tmdbRes, blockedRes] = await Promise.allSettled([
+        tmdbSearchFetch(query),
+        api(API.blocked),
+      ]);
+      if (myGen !== blockedSearchGen) return; // stale: a newer query owns the list
+      if (!isDrawerOpen()) return;
+      if (tmdbRes.status === 'rejected') throw tmdbRes.reason;
+      if (blockedRes.status === 'fulfilled' && Array.isArray(blockedRes.value)) blockedCache = blockedRes.value;
+      const results = normalizeTmdbSearchResults(tmdbRes.value);
+      if (myGen !== blockedSearchGen || !isDrawerOpen()) return;
+      renderBlockedSearchResults(host, results, query);
+    } catch (e) {
+      if (myGen !== blockedSearchGen || !isDrawerOpen()) return;
+      if (host) {
+        host.innerHTML = '';
+        stateBox(host, 'error', 'Search failed', (e && e.message) || String(e));
+      }
+      notice('err', 'TMDB search failed: ' + ((e && e.message) || e));
+    }
+  }
+
+  function renderBlockedSearchResults(host, results, query) {
+    if (!host) return;
+    host.innerHTML = '';
+    if (!results.length) {
+      stateBox(host, 'empty', 'No matches', 'No matches for "' + query + '". Try another spelling.');
+      return;
+    }
+    results.forEach((r) => {
+      const card = el('div', 'data-row blocked-pick-row');
+      const row = el('div', '');
+      row.style.cssText = 'display:flex;gap:.75rem';
+      const img = document.createElement('img');
+      img.className = 'search-thumb';
+      img.loading = 'lazy';
+      img.alt = '';
+      img.src = tmdbPosterUrl(r.poster) || 'https://via.placeholder.com/48x72?text=?';
+      row.appendChild(img);
+      const body = el('div', '');
+      body.style.cssText = 'min-width:0;flex:1';
+      const head = el('div', 'row-top');
+      head.appendChild(el('span', 'row-title', r.title));
+      head.appendChild(el('span', 'badge', r.media === 'tv' ? 'TV' : 'Movie'));
+      const already = isBlockedCached(r.media, r.id);
+      if (already) head.appendChild(el('span', 'badge badge-blocked', 'Blocked'));
+      body.appendChild(head);
+      const metaBits = [(r.year || '—'), 'TMDB ' + r.media + ':' + r.id];
+      body.appendChild(el('p', 'row-meta', metaBits.join(' · ')));
+      if (r.overview) body.appendChild(el('p', 'row-meta', r.overview));
+      row.appendChild(body);
+      card.appendChild(row);
+      if (already) {
+        card.appendChild(rowButtons([
+          ['Unblock', 'danger', () => unblockTitle({ media: r.media, tmdb_id: r.id, title: r.title }), 'Remove this title from the blocklist'],
+        ]));
+      } else {
+        card.appendChild(rowButtons([
+          ['Block…', 'go', () => openBlockConfirm(r), 'Review and block this title'],
+        ]));
+      }
+      host.appendChild(card);
+    });
+    // The workspace list behind the drawer stays in sync with the fresh read.
+    if (currentView === 'blocked') renderBlocked();
+  }
+
+  // Block confirmation: poster, title, year, media, TMDB ID — then an
+  // explicit Block Title action (never a one-click block from search).
+  function openBlockConfirm(r) {
+    const wrap = el('div', '');
+    wrap.style.cssText = 'display:grid;gap:.8rem';
+    const top = el('div', 'blocked-confirm');
+    const img = document.createElement('img');
+    img.className = 'blocked-confirm-art';
+    img.alt = '';
+    img.src = tmdbPosterUrl(r.poster) || 'https://via.placeholder.com/96x144?text=?';
+    top.appendChild(img);
+    const body = el('div', '');
+    body.style.cssText = 'min-width:0;display:grid;gap:.3rem;align-content:start';
+    const head = el('div', 'row-top');
+    head.appendChild(el('span', 'row-title', r.title));
+    head.appendChild(el('span', 'badge', r.media === 'tv' ? 'TV' : 'Movie'));
+    body.appendChild(head);
+    body.appendChild(el('p', 'row-mono muted', r.media + ':' + r.id + (r.year ? ' · ' + r.year : '')));
+    if (r.overview) body.appendChild(el('p', 'row-meta', r.overview));
+    top.appendChild(body);
+    wrap.appendChild(top);
+    wrap.appendChild(el('p', 'muted text-sm', 'This title will be permanently excluded from Greybox discovery, search and detail pages until unblocked. Identity locks to ' + r.media + ':' + r.id + ' — title text is display only.'));
+    const row = el('div', '');
+    row.style.cssText = 'display:flex;gap:.5rem;flex-wrap:wrap';
+    const back = el('button', 'btn btn-ghost btn-sm', '← Back to results');
+    back.type = 'button';
+    back.addEventListener('click', openBlockPicker);
+    const cancel = el('button', 'btn btn-secondary btn-sm', 'Cancel');
+    cancel.type = 'button';
+    cancel.addEventListener('click', closeDrawer);
+    const block = el('button', 'btn btn-primary btn-sm', 'Block Title');
+    block.type = 'button';
+    block.addEventListener('click', () => confirmBlockTitle(r, block));
+    row.appendChild(block);
+    row.appendChild(cancel);
+    row.appendChild(back);
+    wrap.appendChild(row);
+    openDrawer({
+      kicker: 'Blocked Titles',
+      title: 'Block "' + String(r.title || '').slice(0, 60) + '"?',
+      sub: r.media + ':' + r.id + ' — review, then confirm.',
+      node: wrap,
+    });
+  }
+
+  async function confirmBlockTitle(r, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = 'Blocking…'; }
+    try {
+      const payload = {
+        media: r.media,
+        tmdb_id: r.id,
+        title: String(r.title || '').slice(0, 200),
+        poster_path: (typeof r.poster === 'string' && r.poster) ? r.poster : null,
+        backdrop_path: null,
+        year: String(r.year || '').slice(0, 4),
+      };
+      await api(API.blocked, { method: 'POST', body: payload });
+      // Never trust the 201 alone: read the row back before showing success.
+      const readBack = await readBlockedRow(r.media, r.id);
+      if (!readBack || blockedKey(readBack.media, readBack.tmdb_id) !== blockedKey(r.media, r.id)) {
+        notice('err', 'Block reported success, but a fresh read-back differs — not showing success. Refresh and retry.');
+      } else {
+        notice('ok', 'Blocked ' + r.media + ':' + r.id + ' ("' + String(r.title || '').slice(0, 80) + '").');
+      }
+      blockedSearchGen++;
+      closeDrawer();
+      await loadBlocked();
+      if (currentView === 'dashboard') loadDashboard();
+    } catch (e) {
+      if (e && e.status === 409) {
+        notice('err', 'That title is already blocked (' + r.media + ':' + r.id + ').');
+        try { await loadBlocked(); } catch { /* keep drawer state */ }
+      } else {
+        notice('err', (e && e.message) || e);
+      }
+    } finally {
+      if (btn && btn.isConnected) { btn.disabled = false; btn.textContent = 'Block Title'; }
+    }
+  }
+
   /* ================= GREYBOX PICKS (read view over existing overrides) ================= */
   async function loadPicks() {
     const host = $('picks-list');
@@ -4190,7 +4570,7 @@
   /* ================= TMDB SEARCH (admin helper, existing systems only) ================= */
   const EDITOR_PICKS_SLUG = 'editor-picks';
   const TMDB_IMG = 'https://image.tmdb.org/t/p/w500';
-  let searchState = { query: '', results: [], epItems: null }; // epItems null = unknown
+  let searchState = { query: '', results: [], epItems: null, blockedKeys: null }; // epItems null = unknown
 
   function detailUrlFor(media, id) {
     const n = parseInt(id, 10);
@@ -4332,10 +4712,11 @@
     if (q.length > 120) { notice('err', 'Query must be at most 120 characters.'); return; }
     if (host) stateBox(host, 'loading', 'Searching TMDB…');
     try {
-      const [tmdbRes, epRes, ovRes] = await Promise.allSettled([
+      const [tmdbRes, epRes, ovRes, blockedRes] = await Promise.allSettled([
         tmdbSearchFetch(q),
         api(API.collections + '/' + EDITOR_PICKS_SLUG),
         api(API.overrides),
+        api(API.blocked),
       ]);
       if (tmdbRes.status === 'rejected') throw tmdbRes.reason;
       if (ovRes.status === 'fulfilled') ovCache = ovRes.value;
@@ -4344,6 +4725,11 @@
         results: normalizeTmdbSearchResults(tmdbRes.value),
         epItems: epRes.status === 'fulfilled' && epRes.value && epRes.value.source
           ? normalizeEpItems(epRes.value.source.items)
+          : null,
+        // Admin search never hides blocked titles — it marks them BLOCKED
+        // (public search filters them out via js/data.js instead).
+        blockedKeys: blockedRes.status === 'fulfilled' && Array.isArray(blockedRes.value)
+          ? new Set(blockedRes.value.map((b) => blockedKey(b.media, b.tmdb_id)).filter(Boolean))
           : null,
       };
       renderSearchCards();
@@ -4382,6 +4768,9 @@
       const head = el('div', 'row-top');
       head.appendChild(el('span', 'row-title', r.title));
       head.appendChild(el('span', 'badge', r.media === 'tv' ? 'TV' : 'Movie'));
+      if (searchState.blockedKeys && searchState.blockedKeys.has(blockedKey(r.media, r.id))) {
+        head.appendChild(el('span', 'badge badge-blocked', 'Blocked'));
+      }
       if (isGreyboxPick(findCachedOverride(r.media, r.id))) {
         head.appendChild(el('span', 'badge badge-pick', '★ Greybox Pick'));
       }
@@ -4776,6 +5165,10 @@
     if (tr) tr.addEventListener('click', loadTags);
     const orr = $('ov-refresh');
     if (orr) orr.addEventListener('click', loadOverrides);
+    const brNew = $('blocked-new');
+    if (brNew) brNew.addEventListener('click', openBlockPicker);
+    const br = $('blocked-refresh');
+    if (br) br.addEventListener('click', loadBlocked);
     const dr = $('dash-refresh');
     if (dr) dr.addEventListener('click', loadDashboard);
     const hr = $('heroes-refresh');
@@ -4822,6 +5215,10 @@
     if (om) om.addEventListener('change', renderOverrides);
     const op = $('ov-pick');
     if (op) op.addEventListener('change', renderOverrides);
+    const bs = $('blocked-search');
+    if (bs) bs.addEventListener('input', renderBlocked);
+    const bm = $('blocked-media');
+    if (bm) bm.addEventListener('change', renderBlocked);
   }
 
   function bindChrome() {
@@ -4926,6 +5323,8 @@
       stableCollectionJson, refreshCollectionPreview,
       fillOverrideForm, readOverrideForm, readHeroForm,
       ovDisplayLabel, ovEffective, stableOverrideJson, ovRowHasFields,
+      blockedKey, isBlockedCached, blockedDisplayLabel, filteredBlocked,
+      openBlockPicker, openBlockConfirm, readBlockedRow,
       slugifyTag, tagCounts, stableTagJson, tagMemberKey,
       fetchGenres, genreName, GENRE_CACHE,
       PICK_BADGE, isGreyboxPick, validPickTarget,

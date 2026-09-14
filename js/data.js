@@ -65,12 +65,14 @@
       load('/api/config/collections'),
       load('/api/config/overrides'),
       load('/api/config/tags'),
-    ]).then(([home, collections, overrides, tags]) => {
+      load('/api/config/blocked'),
+    ]).then(([home, collections, overrides, tags, blocked]) => {
       _remoteConfig = {
         home: (home && typeof home === 'object' && !Array.isArray(home)) ? home : null,
         collections: Array.isArray(collections) ? collections : null,
         overrides: Array.isArray(overrides) ? overrides : null,
         tags: Array.isArray(tags) ? tags : null,
+        blocked: Array.isArray(blocked) ? blocked : null,
       };
       return _remoteConfig;
     });
@@ -79,11 +81,15 @@
 
   // Backend already shapes lists; keep the single UI filter in ONE place
   // (previously tripled across home/movie/tv + search + suggestions).
+  // Blocked titles drop out here too (central filter — see isBlockedContent),
+  // so every list surface (home, movies, TV, anime, collections, search,
+  // suggestions) enforces the blocklist without per-page checks.
   function withImages(list, fallbackType) {
     const results = Array.isArray(list && list.results) ? list.results : [];
     // Overrides first so a Greybox poster_path can rescue an imageless item.
     const items = results
       .map((x) => applyOverrides(x, fallbackType))
+      .filter((x) => x && !isBlockedItem(x, fallbackType))
       .filter((x) => x && (x.poster_path || x.backdrop_path));
     return { page: (list && list.page) || 1, total_pages: (list && list.total_pages) || 1, total_results: (list && list.total_results) || 0, results: items, _fallbackType: fallbackType };
   }
@@ -151,13 +157,24 @@
   function getMovie(id, region) {
     const clean = parseId(id);
     if (!clean) return Promise.reject(new Error('Invalid movie id'));
-    return api().gb.movie(clean, region || getRegion()).then((d) => applyOverrides(assertDetail(d, 'movie', clean), 'movie'));
+    // Blocked titles refuse normal rendering even by direct TMDB ID: the
+    // pre-check skips the fetch entirely, the post-check covers a blocklist
+    // that arrived mid-flight. The existing detail-error UI handles the rest.
+    if (isBlockedContent('movie', clean)) return Promise.reject(blockedError('movie', clean));
+    return api().gb.movie(clean, region || getRegion()).then((d) => {
+      if (isBlockedContent('movie', clean)) throw blockedError('movie', clean);
+      return applyOverrides(assertDetail(d, 'movie', clean), 'movie');
+    });
   }
 
   function getTVDetails(id, region) {
     const clean = parseId(id);
     if (!clean) return Promise.reject(new Error('Invalid tv id'));
-    return api().gb.show(clean, region || getRegion()).then((d) => applyOverrides(assertDetail(d, 'tv', clean), 'tv'));
+    if (isBlockedContent('tv', clean)) return Promise.reject(blockedError('tv', clean));
+    return api().gb.show(clean, region || getRegion()).then((d) => {
+      if (isBlockedContent('tv', clean)) throw blockedError('tv', clean);
+      return applyOverrides(assertDetail(d, 'tv', clean), 'tv');
+    });
   }
 
   // Alias — some callers think "show", some think "tv details".
@@ -183,6 +200,7 @@
       if (!person || !person.id) throw new Error('Greybox API returned an error for person/' + clean);
       const knownFor = ((credits && credits.cast) || [])
         .filter((x) => x && (x.media_type === 'movie' || x.media_type === 'tv'))
+        .filter((x) => !isBlockedContent(x.media_type, parseId(x.id)))
         .sort((a, b) => (b.popularity || 0) - (a.popularity || 0))
         .slice(0, 12);
       return { person, knownFor };
@@ -199,9 +217,13 @@
       page: d.page || 1,
       total_pages: d.total_pages || 1,
       total_results: d.total_results || 0,
+      // Public search never surfaces blocked titles (central filter). Admin
+      // TMDB search uses the raw /api/tmdb proxy directly, so it still finds
+      // them (marked BLOCKED in the Blocked Titles workspace).
       results: ((d.results || [])
         .filter((x) => x.media_type === 'movie' || x.media_type === 'tv')
-        .map((x) => applyOverrides(x))),
+        .map((x) => applyOverrides(x))
+        .filter((x) => x && !isBlockedItem(x))),
     }));
   }
 
@@ -264,6 +286,7 @@
         total_results: d.total_results || 0,
         results: results
           .map((x) => applyOverrides(shapeRawItem(x, mt), mt))
+          .filter((x) => x && !isBlockedItem(x, mt))
           .filter((x) => x && (x.poster_path || x.backdrop_path)),
       };
     });
@@ -393,11 +416,15 @@
   // Ordered hand-picked IDs through the Greybox API. Config order is
   // preserved exactly (TMDB never re-sorts); failed IDs are dropped.
   // Shared by homepage `ids` shelves and Greybox collections.
+  // Blocked IDs drop out twice: the detail getters reject them (so they
+  // never resolve here) and the final filter covers a block that landed
+  // mid-flight — pins, custom lists and tag memberships included.
   function resolveIdItems(items) {
     const list = Array.isArray(items) ? items : [];
     return Promise.allSettled(list.map((it) =>
       (it.media === 'tv' ? getTVDetails(it.id) : getMovie(it.id)).then((d) => ({ ...d, media_type: it.media }))
     )).then((settled) => settled.filter((s) => s.status === 'fulfilled').map((s) => s.value)
+      .filter((x) => x && !isBlockedItem(x))
       .filter((x) => x.poster_path || x.backdrop_path));
   }
 
@@ -1169,6 +1196,121 @@
     return out;
   }
 
+  /* ---------------- permanent blocklist (Blocked Titles workspace) ----------------
+   *
+   * D1 (`blocked_titles`, managed through /api/admin/blocked) is the live
+   * source of truth; the public site reads identity-only rows via
+   * GET /api/config/blocked (preloaded once at boot above, offline fallback
+   * `js/blocked.config.js`). Enforcement lives HERE, centrally:
+   *
+   *   TMDB/content data
+   *           ↓  applyOverrides (existing) + blocklist filter (below)
+   *   Greybox content pipeline (withImages / search / discover / resolveIdItems)
+   *           ↓  detail guards (getMovie / getTVDetails refuse blocked IDs)
+   *   Home / Movies / TV / Collections / Search / etc.
+   *
+   * No page, renderer, or collection/section resolver carries its own
+   * `if (blocked)` check — they all flow through these helpers.
+   *
+   * Identity is ALWAYS media_type + TMDB ID (never title/poster/slug):
+   * "movie:123" and "tv:123" are different identities and can never
+   * cross-block. Media resolution mirrors applyOverrides so a TV-shaped
+   * object missing media_type is never miskeyed as a movie (or vice versa).
+   */
+
+  function getBlockedConfig() {
+    if (_remoteConfig && Array.isArray(_remoteConfig.blocked)) return _remoteConfig.blocked;
+    const raw = (typeof window !== 'undefined' && window.GreyboxBlocked) || null;
+    return Array.isArray(raw) ? raw : [];
+  }
+
+  // One normalized identity { media, id }, or null. Accepts the public
+  // { media, id } shape (and { media, tmdb_id } defensively); anything else
+  // — titles, posters, slugs — is ignored, never identity.
+  function normalizeBlockedEntry(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const media = raw.media === 'tv' ? 'tv' : (raw.media === 'movie' ? 'movie' : null);
+    const id = parseId(raw.id != null ? raw.id : raw.tmdb_id);
+    if (!media || !id) return null;
+    return { media, id };
+  }
+
+  // Normalized blocklist (for tests/inspection): [{ media, id }].
+  function getBlockedList() {
+    const out = [];
+    const seen = new Set();
+    for (const entry of getBlockedConfig()) {
+      const n = normalizeBlockedEntry(entry);
+      if (!n) continue;
+      const key = n.media + ':' + n.id;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(n);
+    }
+    return out;
+  }
+
+  // Membership set, memoized on the config array identity (same pattern as
+  // the override/tag caches) so list rendering (dozens of lookups) never
+  // re-normalizes per item.
+  let _blockedCacheRef = null;
+  let _blockedCacheSet = null;
+
+  function blockedSet() {
+    const raw = getBlockedConfig();
+    if (raw !== _blockedCacheRef) {
+      const set = new Set();
+      for (const entry of (Array.isArray(raw) ? raw : [])) {
+        const n = normalizeBlockedEntry(entry);
+        if (n) set.add(n.media + ':' + n.id);
+      }
+      _blockedCacheRef = raw;
+      _blockedCacheSet = set;
+    }
+    return _blockedCacheSet;
+  }
+
+  // THE seam: is this identity blocked? Strict (media, id) pair only.
+  // Never throws; unknown media or bad ids are simply "not blocked".
+  function isBlockedContent(media, id) {
+    const mt = media === 'tv' ? 'tv' : (media === 'movie' ? 'movie' : null);
+    const clean = parseId(id);
+    if (!mt || !clean) return false;
+    return blockedSet().has(mt + ':' + clean);
+  }
+
+  // Item-shaped variant: resolves media exactly like applyOverrides (explicit
+  // media_type wins, caller fallback next, title/first_air_date heuristic
+  // last) so cross-type miskeying is impossible.
+  function isBlockedItem(item, fallbackMedia) {
+    if (!item || typeof item !== 'object') return false;
+    const media = item.media_type === 'tv' || item.media_type === 'movie' ? item.media_type
+      : (fallbackMedia === 'tv' || fallbackMedia === 'movie' ? fallbackMedia
+      : ((item.title && !item.first_air_date) ? 'movie' : 'tv'));
+    return isBlockedContent(media, item.id);
+  }
+
+  // Non-mutating list filter: everything not blocked passes through untouched
+  // (same object references — no copies, no reordering, totals preserved by
+  // callers that need them).
+  function filterBlocked(items, fallbackMedia) {
+    const list = Array.isArray(items) ? items : [];
+    return list.filter((x) => !isBlockedItem(x, fallbackMedia));
+  }
+
+  // Refusal for direct-detail access to a blocked identity. Generic copy only
+  // (no blocklist internals); the existing detail-error UI renders it as the
+  // standard "Not available" state. `blocked: true` lets tests and future
+  // callers distinguish it from a network/TMDB failure without parsing text.
+  function blockedError(media, id) {
+    const e = new Error('This title is not available in Greybox.');
+    e.blocked = true;
+    e.status = 404;
+    e.media = media;
+    e.tmdb_id = id;
+    return e;
+  }
+
   /* ---------------- My List (localStorage, no database) ---------------- */
 
   const LS_KEY = 'sb_mylist';
@@ -1232,6 +1374,7 @@
     getHeroItem,
     getCollectionHeroConfig,
     getCollectionHeroItem,
+    resolveIdItems,
     normalizeSlug,
     normalizeCollection,
     getCollections,
@@ -1247,6 +1390,10 @@
     getOverrides,
     getOverride,
     applyOverrides,
+    normalizeBlockedEntry,
+    getBlockedList,
+    isBlockedContent,
+    filterBlocked,
     getMyList,
     saveMyList,
     toggleMyListItem,

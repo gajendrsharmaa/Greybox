@@ -136,10 +136,16 @@ t('23a all touched + adjacent modules parse', checkOk, checkErr);
 let diff = '';
 try { diff = execSync('git status --short', { cwd: ROOT }).toString(); } catch (e) { diff = 'GIT-UNAVAILABLE'; }
 const changed = diff.split('\n').map((l) => l.trim()).filter(Boolean);
-const allowed = ['M index.html', 'M js/stream.js', 'M js/greybox-player.js', 'M tests/greybox-player.test.cjs', 'M README.md', '?? css/player.css', '?? js/greybox-player.js', '?? js/greybox-test-source.js', '?? tests/'];
+// Intended-file allowlist, extended per increment (Blocked Titles increment
+// adds the blocklist's own files; the guard still fails on any UNintended
+// change, e.g. playback/provider/hero/router edits).
+const allowed = ['M index.html', 'M admin.html', 'M css/admin.css', 'M functions/lib/db.js', 'M functions/lib/validate.js', 'M js/stream.js', 'M js/greybox-player.js', 'M js/admin.js', 'M js/data.js', 'M tests/greybox-player.test.cjs', 'M tests/source-routing.test.cjs', 'M tests/blocked.test.cjs', 'M README.md', '?? css/player.css', '?? js/greybox-player.js', '?? js/greybox-test-source.js', '?? functions/api/admin/blocked.js', '?? functions/api/admin/blocked/', '?? functions/api/config/blocked.js', '?? js/blocked.config.js', '?? migrations/0004_blocked.sql', '?? tests/'];
 const unexpected = changed.filter((l) => !allowed.some((a) => l === a || (a.endsWith('/') && l.startsWith(a))));
 t('23b only intended files changed', diff === 'GIT-UNAVAILABLE' || unexpected.length === 0, unexpected.join(', '));
-t('23c router/app/data/hero untouched by diff', !changed.some((l) => /js\/(router|app|data|hero|api|pages|components)\.js/.test(l)), changed.join(', '));
+// The Blocked Titles increment filters centrally in js/data.js by design
+// (spec: global filtering with minimal duplicated code), so data.js is an
+// intended change; router/app/hero/api/pages/components stay untouched.
+t('23c router/app/hero untouched by diff', !changed.some((l) => /js\/(router|app|hero|api|pages|components)\.js/.test(l)), changed.join(', '));
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed.');
 process.exit(fail ? 1 : 0);

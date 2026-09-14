@@ -428,6 +428,65 @@ export function validateTagBody(body) {
   };
 }
 
+/* ---------------- permanent blocklist (Blocked Titles workspace) ----------------
+ *
+ * Identity is ALWAYS media + tmdb_id (strict — no bare-number leniency, no
+ * title matching). Snapshots are optional display conveniences for the Admin
+ * workspace; the public filter never reads them.
+ */
+
+const BLOCKED_IMG_RE = /^\/[A-Za-z0-9/_\-.]+$/;
+
+function validateBlockedTitle(v) {
+  if (v === undefined || v === null) return '';
+  if (typeof v !== 'string') fail('title must be a string');
+  const s = v.trim().slice(0, 200);
+  return s;
+}
+
+function validateBlockedImage(v, field) {
+  if (v === undefined || v === null || v === '') return null;
+  if (typeof v !== 'string') fail(`${field} must be a TMDB image path`);
+  const s = v.trim();
+  if (s.length > 200) fail(`${field} must be at most 200 characters`);
+  if (s.indexOf('..') >= 0 || !BLOCKED_IMG_RE.test(s)) fail(`${field} must be a TMDB image path like "/abc123.jpg"`);
+  return s;
+}
+
+function validateBlockedYear(v) {
+  if (v === undefined || v === null || v === '') return '';
+  const s = String(v).trim().slice(0, 10);
+  // Accept a bare year (preferred) or a full release date; anything else is
+  // kept as a short display string but never trusted for identity.
+  if (/^\d{4}$/.test(s)) {
+    const y = parseInt(s, 10);
+    if (y < 1900 || y > 2100) fail('year must be 1900..2100');
+    return s;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s.slice(0, 4);
+  if (s.length > 10) fail('year must be at most 10 characters');
+  return s;
+}
+
+/**
+ * Validate a block body (POST /api/admin/blocked).
+ * Returns the normalized object ready for storage: identity (strict) plus
+ * optional snapshot fields. Title text is NEVER identity — it is display only.
+ */
+export function validateBlockedBody(body) {
+  if (!isObj(body)) fail('body must be a JSON object');
+  const media = reqMedia(body.media);
+  const tmdbId = reqTmdbId(body.tmdb_id != null ? body.tmdb_id : body.id);
+  return {
+    media,
+    tmdb_id: tmdbId,
+    title: validateBlockedTitle(body.title),
+    poster_path: validateBlockedImage(body.poster_path, 'poster_path'),
+    backdrop_path: validateBlockedImage(body.backdrop_path, 'backdrop_path'),
+    year: validateBlockedYear(body.year),
+  };
+}
+
 /**
  * Validate the home hero setting.
  *

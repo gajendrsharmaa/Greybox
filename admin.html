@@ -73,7 +73,7 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
       <button class="nav-item" data-view="collections" data-label="Collections" title="Collections"><svg class="nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg><span class="nav-label">Collections</span></button>
       <button class="nav-item" data-view="tags" data-label="Tags" title="Tags"><svg class="nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg><span class="nav-label">Tags</span></button>
       <button class="nav-item" data-view="overrides" data-label="Overrides" title="Overrides"><svg class="nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg><span class="nav-label">Overrides</span></button>
-      <button class="nav-item nav-soon" data-view="soon" data-soon="Blocked Titles" data-group="Content" data-label="Blocked Titles" title="Blocked Titles — permanent blocklist, coming in a later increment"><svg class="nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="4.9" y1="4.9" x2="19.1" y2="19.1"/></svg><span class="nav-label">Blocked Titles</span><span class="badge badge-soon">Soon</span></button>
+      <button class="nav-item" data-view="blocked" data-label="Blocked Titles" title="Blocked Titles"><svg class="nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="4.9" y1="4.9" x2="19.1" y2="19.1"/></svg><span class="nav-label">Blocked Titles</span></button>
       <button class="nav-item" data-view="search" data-label="TMDB Search" title="TMDB Search"><svg class="nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><span class="nav-label">TMDB Search</span></button>
       <button class="nav-item" data-view="picks" data-label="Greybox Picks" title="Greybox Picks"><svg class="nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="7"/><path d="M8.2 13.9L7 23l5-3 5 3-1.2-9.1"/></svg><span class="nav-label">Greybox Picks</span></button>
 
@@ -292,6 +292,30 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
         <div id="ov-list" class="row-list ov-workspace"></div>
       </section>
 
+      <!-- BLOCKED TITLES (permanent server-side blocklist) -->
+      <section id="view-blocked" class="admin-view hidden" aria-labelledby="blocked-title">
+        <div class="page-head">
+          <div>
+            <h1 id="blocked-title" class="page-title">Blocked Titles</h1>
+            <p class="page-desc">Permanently exclude specific movies and TV shows from Greybox discovery. Identity is always <code>media:TMDB ID</code> — never title text.</p>
+          </div>
+          <div class="page-actions">
+            <button id="blocked-new" class="btn btn-primary btn-sm">+ Block Title</button>
+            <button id="blocked-refresh" class="btn btn-secondary btn-sm">Refresh</button>
+          </div>
+        </div>
+        <div class="toolbar" role="search">
+          <input id="blocked-search" class="input" type="search" placeholder="Search title or media:id…" aria-label="Search blocked titles" autocomplete="off" />
+          <select id="blocked-media" class="input input-select" aria-label="Filter blocked titles by media type">
+            <option value="all">All media</option>
+            <option value="movie">Movies</option>
+            <option value="tv">TV Shows</option>
+          </select>
+        </div>
+        <p id="blocked-count" class="muted text-sm" style="margin-bottom:.6rem" aria-live="polite"></p>
+        <div id="blocked-list" class="row-list blocked-workspace"></div>
+      </section>
+
       <!-- HEROES (Part 2 Hero Control Center) -->
       <section id="view-heroes" class="admin-view hidden" aria-labelledby="heroes-title">
         <div class="page-head">
@@ -351,7 +375,7 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
       <!-- PLACEHOLDER for disabled/soon views (never linked from enabled nav) -->
       <section id="view-soon" class="admin-view hidden" aria-labelledby="soon-title">
         <div class="page-head"><div><h1 id="soon-title" class="page-title">Coming soon</h1><p class="page-desc">This area is scaffolded for a later increment. No placeholder controls were added on purpose.</p></div></div>
-        <div class="empty"><p class="empty-title">Not built yet</p><p id="soon-desc" class="empty-desc">This area is reserved for a later increment. Dashboard, Home, Collections, Tags, Overrides, Greybox Picks, TMDB Search and General Settings are live.</p><button class="btn btn-secondary btn-sm" data-goto="dashboard">Back to Dashboard</button></div>
+        <div class="empty"><p class="empty-title">Not built yet</p><p id="soon-desc" class="empty-desc">This area is reserved for a later increment. Dashboard, Home, Heroes, Collections, Tags, Overrides, Blocked Titles, Greybox Picks, TMDB Search and General Settings are live.</p><button class="btn btn-secondary btn-sm" data-goto="dashboard">Back to Dashboard</button></div>
       </section>
     </main>
 

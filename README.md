@@ -37,7 +37,8 @@ functions/api/config/overrides.js     # Cloudflare: GET /api/config/overrides (o
 functions/api/config/tags.js          # Cloudflare: GET /api/config/tags (visible tags with ordered members)
 functions/api/admin/tags.js, functions/api/admin/tags/[slug].js  # Cloudflare: tag CRUD + membership (requireAdmin)
 js/tags.config.js                 # Offline tag fallback (window.GreyboxTags, starts empty)
-migrations/0001_schema.sql, migrations/0002_seed.sql, migrations/0003_tags.sql  # D1 schema + seed + tags (mirrors js/*.config.js)
+js/blocked.config.js              # Offline blocklist fallback (window.GreyboxBlocked, starts empty)
+migrations/0001_schema.sql, migrations/0002_seed.sql, migrations/0003_tags.sql, migrations/0004_blocked.sql  # D1 schema + seed + tags + blocklist (mirrors js/*.config.js)
 wrangler.toml                     # Pages + D1 binding (DB); secrets stay in .dev.vars / dashboard
 api/trending.js, api/search.js, api/movies/[category].js, api/movie/[id].js, api/anime/[kind].js, api/tv/[...rest].js
                         # Vercel equivalents of the same Greybox contract
@@ -125,6 +126,7 @@ in bulk, never API secrets:
 | `overrides` | Explicit per-title field overrides (`media`, `tmdb_id`, override fields only) |
 | `tags` | Custom editorial tags (`slug`, `name`, `description`, `visible`, `badge`) |
 | `tag_members` | Ordered tag membership (identity only: `media` + `tmdb_id`, never titles/posters) |
+| `blocked_titles` | Permanent blocklist (`media`, `tmdb_id`, display snapshots, timestamps) — identity is always `media` + TMDB ID, enforced by PRIMARY KEY |
 | `settings` | Single-row settings: `home_hero` (the ONE authoritative Home Hero config) and `collection_heroes` (separate per-collection scope) |
 
 Authoritative Home Hero (`settings.home_hero` — the Admin and the public
@@ -204,9 +206,10 @@ npx wrangler d1 create greybox          # once: paste the id into wrangler.toml
 npx wrangler d1 execute greybox-db --local --file=migrations/0001_schema.sql
 npx wrangler d1 execute greybox-db --local --file=migrations/0002_seed.sql
 npx wrangler d1 execute greybox-db --local --file=migrations/0003_tags.sql
+npx wrangler d1 execute greybox-db --local --file=migrations/0004_blocked.sql
 npx wrangler pages dev .
 # verify: curl /api/config/home, /api/config/collections,
-#         /api/config/collections/science-fiction, /api/config/overrides, /api/config/tags
+#         /api/config/collections/science-fiction, /api/config/overrides, /api/config/tags, /api/config/blocked
 # edit check: wrangler d1 execute greybox-db --local --command="UPDATE home_sections SET title='X' WHERE id='popular-movies'"
 #             → hard-refresh shows the new title (config cache is ~60s)
 ```
@@ -234,6 +237,8 @@ no accounts and no login flow beyond the token.
 | `/api/admin/home-sections`, `/api/admin/home-sections/:id` | list · read · create (201) · full update · delete (204) |
 | `/api/admin/overrides`, `/api/admin/overrides/:media/:id` | list · read · create (201) · replace fields · delete (204) |
 | `/api/admin/tags`, `/api/admin/tags/:slug` | list (with counts) · read (members + usage) · create (201) · full update incl. members · delete (204, 409 while referenced) |
+| `/api/admin/blocked`, `/api/admin/blocked/:media/:id` | list blocked titles · block (201, 409 when already blocked) · read one · unblock (204, 404 when not blocked) |
+| `/api/config/blocked` | public identity-only blocklist (`[{ media, id }]`, short cache) — the browser filters through `isBlockedContent()` |
 | `/api/admin/settings/home-hero` | read · replace hero setting (PUT is full-replace: send the complete hero object) |
 | `/api/admin/settings/collection-heroes` | read · replace the collection-heroes map (read-modify-write so other collections are never clobbered) |
 
@@ -282,8 +287,8 @@ Roadmap entries are enabled buttons with a subtle `Soon` badge that open a
 labeled Coming-soon panel — never dead/disabled rows. The sticky topbar
 reads `[section] / [workspace]` (e.g. Content / Heroes); the ⌘K control is
 a declared future affordance (per-workspace filters are the real search).
-Live views: Dashboard, Home, Heroes, Collections, Tags, Overrides, Greybox
-Picks, TMDB Search, General Settings. Auth stays a memory-only token
+Live views: Dashboard, Home, Heroes, Collections, Tags, Overrides, Blocked
+Titles, Greybox Picks, TMDB Search, General Settings. Auth stays a memory-only token
 session; no shell change touches API contracts, D1, or workspace logic.
 
 Collections workspace (`/admin` → Collections): cards with live counts,
@@ -340,10 +345,42 @@ identity. A Greybox Pick is exactly `featured + custom_badge:
 "Greybox Pick"` on the same row (ON/OFF switch, no second system).
 Saves verify with a fresh GET (mismatch is reported, never shown as
 success); deletes verify with a read-back 404; identity is permanent
-(rename = delete + create, future Blocked Titles will reuse
-`media + TMDB ID`). Overrides apply everywhere TMDB data renders (lists,
+(rename = delete + create, same `media + TMDB ID` identity the Blocked
+Titles workspace uses for its blocklist). Overrides apply everywhere TMDB data renders (lists,
 collections, detail pages, search, Heroes) via `applyOverrides` — Heroes
 and Collections configuration itself is never touched.
+
+Blocked Titles workspace (`/admin` → Blocked Titles): permanent
+server-side blocklist over D1 `blocked_titles` (migration
+`0004_blocked.sql`; starts empty). Authoritative identity is always
+`media_type` + TMDB ID — never title text (titles change, and `movie:123`
+vs `tv:123` are different identities that never cross-block; the
+`(media, tmdb_id)` PRIMARY KEY plus a server-side 409 makes duplicates
+impossible). Stored rows carry display snapshots only (title, poster /
+backdrop paths, year, timestamps) for the workspace cards — zero per-row
+TMDB fetches. Workflow is search-first: + Block Title → TMDB search
+(existing server-side proxy, stale-guarded) → select → confirmation
+(poster, title, year, media, TMDB ID) → Block Title (201 + read-back
+verification). Already-blocked results show BLOCKED + Unblock instead of a
+duplicate action. Unblock uses the shared confirmation dialog, DELETEs the
+D1 row, verifies a read-back 404, and re-renders without a reload.
+Public filtering is central, not scattered: the browser loads the
+identity-only `GET /api/config/blocked` once at boot and every
+TMDB-derived surface filters through the `isBlockedContent()` seam in
+`js/data.js` (lists via `withImages`, search + suggestions, discover /
+genre, hand-picked id lists including pins/custom/tag memberships).
+Blocked detail URLs (`/movie/:id`, `/tv/:id`) refuse normal rendering and
+show the existing "Not available" state with generic copy (no blocklist
+internals leak). Admin TMDB search still finds blocked titles and marks
+them BLOCKED. Greybox Picks on a blocked title never render because the
+underlying title never resolves. Limitations: enforcement lives in the
+Greybox frontend pipeline (direct `/api/movie/:id` calls still answer —
+like overrides/tags, which are also client-rendered); My List (explicit
+user saves in localStorage) is not filtered; block edits surface within
+~60s (public config cache). Automated checks:
+`node tests/blocked.test.cjs` (81 assertions: identity, duplicates,
+validation, auth gating, public filtering, detail blocking, admin UX,
+no-leak/no-regression guards, plus both older suites green).
 
 Authentication is a **memory-only session**: paste the token once per tab; it
 lives in a single JS variable, is sent as an `Authorization: Bearer` header,

@@ -2,7 +2,7 @@
  * Greybox D1 access layer — the ONLY place that contains raw SQL.
  *
  * Reads Greybox-OWNED configuration (homepage structure, collections,
- * explicit metadata overrides, custom editorial tags). Never touches TMDB data or secrets; those
+ * explicit metadata overrides, custom editorial tags, permanent blocklist). Never touches TMDB data or secrets; those
  * keep flowing through functions/lib/greybox.js + TMDB credentials.
  *
  * Every helper returns plain config-shaped JSON (the same shape as the
@@ -518,6 +518,93 @@ export async function findTagUsage(db, slug) {
     sections: (sec.results || []).map((r) => ({ id: r.id, title: r.title })),
     collections: (col.results || []).map((r) => ({ slug: r.slug, title: r.title })),
   };
+}
+
+/* ---------------- permanent blocklist (Blocked Titles workspace) ----------------
+ *
+ * A blocked title is globally excluded from public Greybox discovery.
+ * Authoritative identity is ALWAYS (media, tmdb_id) — never title text —
+ * enforced by the PRIMARY KEY. Snapshots (title/poster/backdrop/year) are
+ * Admin-workspace display conveniences only; public filtering compares the
+ * identity pair via readPublicBlocked() (identity only, no snapshots).
+ */
+
+function rowToBlocked(r) {
+  return {
+    media: r.media,
+    tmdb_id: r.tmdb_id,
+    title: r.title || '',
+    poster_path: r.poster_path || null,
+    backdrop_path: r.backdrop_path || null,
+    year: r.year || '',
+    created_at: r.created_at || null,
+    updated_at: r.updated_at || null,
+  };
+}
+
+/** All blocked titles (admin view, with snapshots), newest first. */
+export async function readBlockedTitles(db) {
+  const { results } = await db
+    .prepare(
+      'SELECT media, tmdb_id, title, poster_path, backdrop_path, year, created_at, updated_at ' +
+        'FROM blocked_titles ORDER BY created_at DESC, media ASC, tmdb_id ASC',
+    )
+    .all();
+  return (results || [])
+    .filter((r) => (r.media === 'movie' || r.media === 'tv') && Number.isInteger(r.tmdb_id) && r.tmdb_id > 0)
+    .map(rowToBlocked);
+}
+
+/** Public blocklist: identity only ([{ media, id }]), in stable order.
+ *  Two fields, nothing else — no snapshots, no timestamps, no D1 internals. */
+export async function readPublicBlocked(db) {
+  const { results } = await db
+    .prepare('SELECT media, tmdb_id AS id FROM blocked_titles ORDER BY media ASC, tmdb_id ASC')
+    .all();
+  return (results || [])
+    .filter((r) => (r.media === 'movie' || r.media === 'tv') && Number.isInteger(r.id) && r.id > 0)
+    .map((r) => ({ media: r.media, id: r.id }));
+}
+
+/** Single blocked title by (media, tmdb_id), or null when not blocked. */
+export async function readBlocked(db, media, tmdbId) {
+  if ((media !== 'movie' && media !== 'tv') || !(tmdbId > 0)) return null;
+  const row = await db
+    .prepare(
+      'SELECT media, tmdb_id, title, poster_path, backdrop_path, year, created_at, updated_at ' +
+        'FROM blocked_titles WHERE media = ? AND tmdb_id = ?',
+    )
+    .bind(media, tmdbId)
+    .first();
+  return row ? rowToBlocked(row) : null;
+}
+
+/** Block a title ({ media, tmdb_id, title?, poster_path?, backdrop_path?, year? }).
+ *  Throws { status: 409 } when the same media + TMDB ID is already blocked. */
+export async function createBlocked(db, b) {
+  if (await readBlocked(db, b.media, b.tmdb_id)) {
+    throw { status: 409, message: 'Title already blocked: ' + b.media + ':' + b.tmdb_id };
+  }
+  await db
+    .prepare(
+      'INSERT INTO blocked_titles (media, tmdb_id, title, poster_path, backdrop_path, year) ' +
+        'VALUES (?, ?, ?, ?, ?, ?)',
+    )
+    .bind(
+      b.media, b.tmdb_id,
+      b.title || '', b.poster_path || null, b.backdrop_path || null, b.year || '',
+    )
+    .run();
+  return readBlocked(db, b.media, b.tmdb_id);
+}
+
+/** Unblock a title. Returns true when a row was removed. */
+export async function deleteBlocked(db, media, tmdbId) {
+  const out = await db
+    .prepare('DELETE FROM blocked_titles WHERE media = ? AND tmdb_id = ?')
+    .bind(media, tmdbId)
+    .run();
+  return changesOf(out) > 0;
 }
 
 /** Raw setting value (parsed JSON) by key, or null when absent/unparseable. */
