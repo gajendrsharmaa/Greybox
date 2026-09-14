@@ -38,7 +38,7 @@ functions/api/config/tags.js          # Cloudflare: GET /api/config/tags (visibl
 functions/api/admin/tags.js, functions/api/admin/tags/[slug].js  # Cloudflare: tag CRUD + membership (requireAdmin)
 js/tags.config.js                 # Offline tag fallback (window.GreyboxTags, starts empty)
 js/blocked.config.js              # Offline blocklist fallback (window.GreyboxBlocked, starts empty)
-migrations/0001_schema.sql, migrations/0002_seed.sql, migrations/0003_tags.sql, migrations/0004_blocked.sql, migrations/0005_navigation.sql, migrations/0006_detail_pages.sql  # D1 schema + seed + tags + blocklist + navigation + detail pages (mirrors js/*.config.js)
+migrations/0001_schema.sql, migrations/0002_seed.sql, migrations/0003_tags.sql, migrations/0004_blocked.sql, migrations/0005_navigation.sql, migrations/0006_detail_pages.sql, migrations/0007_playback.sql  # D1 schema + seed + tags + blocklist + navigation + detail pages + playback (mirrors js/*.config.js)
 wrangler.toml                     # Pages + D1 binding (DB); secrets stay in .dev.vars / dashboard
 api/trending.js, api/search.js, api/movies/[category].js, api/movie/[id].js, api/anime/[kind].js, api/tv/[...rest].js
                         # Vercel equivalents of the same Greybox contract
@@ -127,7 +127,7 @@ in bulk, never API secrets:
 | `tags` | Custom editorial tags (`slug`, `name`, `description`, `visible`, `badge`) |
 | `tag_members` | Ordered tag membership (identity only: `media` + `tmdb_id`, never titles/posters) |
 | `blocked_titles` | Permanent blocklist (`media`, `tmdb_id`, display snapshots, timestamps) — identity is always `media` + TMDB ID, enforced by PRIMARY KEY |
-| `settings` | Single-row settings: `home_hero` (the ONE authoritative Home Hero config), `collection_heroes` (separate per-collection scope), `navigation` (the public navbar: ordered items + header-search flag), and `detail_pages` (movie/TV detail visibility flags: header/actions/content/tv) |
+| `settings` | Single-row settings: `home_hero` (the ONE authoritative Home Hero config), `collection_heroes` (separate per-collection scope), `navigation` (the public navbar: ordered items + header-search flag), `detail_pages` (movie/TV detail visibility flags: header/actions/content/tv), and `playback` (catalog resolver strategy: `auto`/`direct`/`embed`) |
 
 Authoritative Home Hero (`settings.home_hero` — the Admin and the public
 homepage read the same row; `js/homepage.config.js` is the offline fallback):
@@ -209,9 +209,10 @@ npx wrangler d1 execute greybox-db --local --file=migrations/0003_tags.sql
 npx wrangler d1 execute greybox-db --local --file=migrations/0004_blocked.sql
 npx wrangler d1 execute greybox-db --local --file=migrations/0005_navigation.sql
 npx wrangler d1 execute greybox-db --local --file=migrations/0006_detail_pages.sql
+npx wrangler d1 execute greybox-db --local --file=migrations/0007_playback.sql
 npx wrangler pages dev .
 # verify: curl /api/config/home, /api/config/collections,
-#         /api/config/collections/science-fiction, /api/config/overrides, /api/config/tags, /api/config/blocked, /api/config/navigation, /api/config/detail-pages
+#         /api/config/collections/science-fiction, /api/config/overrides, /api/config/tags, /api/config/blocked, /api/config/navigation, /api/config/detail-pages, /api/config/playback
 # edit check: wrangler d1 execute greybox-db --local --command="UPDATE home_sections SET title='X' WHERE id='popular-movies'"
 #             → hard-refresh shows the new title (config cache is ~60s)
 ```
@@ -244,6 +245,8 @@ no accounts and no login flow beyond the token.
 | `/api/config/navigation` | public navigation config (all items with visible flags, display order, controlled routes + `searchVisible`, short cache) — the browser filters by `visible` |
 | `/api/admin/settings/detail-pages` | read the detail presentation config (GET) · replace it (PUT is full-replace: send all four groups with every boolean flag) |
 | `/api/config/detail-pages` | public detail visibility flags (header/actions/content/tv, short cache) — the detail modal hides what is flagged off |
+| `/api/admin/settings/playback` | read the playback resolver config (GET) · replace it (PUT is full-replace: send `{ mode }` with `auto`/`direct`/`embed`) |
+| `/api/config/playback` | public playback mode (`{ mode }`, short cache) — the catalog resolver reads it via `getPlaybackConfig()`; unreachable config falls back to `auto` |
 | `/api/config/blocked` | public identity-only blocklist (`[{ media, id }]`, short cache) — the browser filters through `isBlockedContent()` |
 | `/api/admin/settings/home-hero` | read · replace hero setting (PUT is full-replace: send the complete hero object) |
 | `/api/admin/settings/collection-heroes` | read · replace the collection-heroes map (read-modify-write so other collections are never clobbered) |
@@ -294,7 +297,7 @@ labeled Coming-soon panel — never dead/disabled rows. The sticky topbar
 reads `[section] / [workspace]` (e.g. Content / Heroes); the ⌘K control is
 a declared future affordance (per-workspace filters are the real search).
 Live views: Dashboard, Home, Heroes, Collections, Tags, Overrides, Blocked
-Titles, Navigation, Detail Pages, Greybox Picks, TMDB Search, General Settings. Auth stays a memory-only token
+Titles, Navigation, Detail Pages, Playback, Greybox Picks, TMDB Search, General Settings. Auth stays a memory-only token
 session; no shell change touches API contracts, D1, or workspace logic.
 
 Collections workspace (`/admin` → Collections): cards with live counts,
@@ -476,6 +479,62 @@ reproduce the current detail page exactly, offline fallback
   reset/defaults, stale protection, workspace UX, no-duplicate/no-leak
   guards, plus all four older suites green).
 
+Playback workspace (`/admin` → Playback): catalog resolver strategy over
+the D1 `settings` row `playback` (migration `0007_playback.sql`; seeded
+`{"mode":"auto"}` to reproduce the historical behavior exactly, offline
+fallback `js/playback.config.js`).
+
+- Model: exactly ONE setting with stable mode-key identity (never display
+  labels) — `mode: auto | direct | embed`. PUT validates the complete
+  object (unknown modes, missing mode, unexpected keys, invalid types →
+  `400`). No provider URLs, tokens, or secrets are accepted or stored.
+- Modes (implemented in `js/stream.js` `resolvePlayback`, read via
+  `js/data.js` `getPlaybackConfig()`): `auto` = normal Greybox resolver
+  strategy (catalog titles use the configured embed source; direct files
+  use the Greybox Player); `direct` = catalog titles require a valid
+  direct source and fail cleanly when none exists; `embed` = catalog
+  titles use the configured embed source. Direct-file intents
+  (user-pasted URLs, `?play-test=1`) always route to the Greybox Player
+  regardless of mode. No mode ever converts an embed URL into a media URL.
+- Direct-source availability: the EMBED resolver supplies embed-page URLs
+  only, so today there is NO direct production source for normal
+  movies/episodes. Direct mode is configured/validated but fails cleanly
+  with "no direct production source" instead of iframing. The Admin Source
+  Status panel states this honestly (mode, embed configured + hostname,
+  direct Not configured, test available) without exposing tokens, cookies,
+  headers, or full URLs. No scraping or extraction is added to manufacture
+  a direct source.
+- Player behaviors preserved (documented, not toggled in V1): autoplay is
+  attempted for direct files but browsers may block audible autoplay;
+  resume continues from localStorage progress keys; quality is Auto with
+  manual heights only when the manifest exposes 2+ levels (Safari native
+  HLS is platform-managed); captions appear only when the caller supplies
+  tracks (catalog supplies none); cleanup destroys the previous HLS/Plyr
+  instance and stale requests can never overwrite the current source.
+- Public rendering: the browser preloads `GET /api/config/playback` once
+  at boot (`js/data.js`, same batch as the other config) and catalog Watch
+  paths (`playMovie`/`playEpisode`/hero Watch) resolve through
+  `resolveCatalogMovie`/`resolveCatalogEpisode`. If the config cannot load,
+  mode reads as `auto` and playback works as before. Public cache is
+  `max-age=60`.
+- Order stays: blocked filtering → detail presentation → playback. This
+  workspace can never render blocked titles or override Detail Pages
+  visibility. Hero trailers (YouTube background video, 7-second activation)
+  are unaffected; only the hero Watch action follows the mode.
+- Admin workflow is staged like Navigation/Detail Pages: mode cards edit a
+  local draft (Unsaved-changes badge + Save/Discard, confirm-guarded
+  Reset-to-defaults, Refresh); Save Changes PUTs `{ mode }` and verifies
+  with a fresh GET. Loads and saves are stale-guarded; failures show
+  loading/error/retry states through the existing toast/notice/stateBox
+  primitives. A clearly marked Playback Test action opens `/?play-test=1`
+  (existing safe Mux HLS test manifest — never a production source).
+- Automated checks: `node tests/playback.test.cjs` (102 assertions:
+  defaults, modes, invalid rejection, Admin GET/PUT, auth gating, public
+  shape/fallback, resolver receives mode, direct clean failure, embed
+  functional, auto preserved, player/test-source intact, no secret
+  leakage, no extraction, Blocked/Detail/Hero interactions, workspace UX,
+  no-duplicate/no-regression guards).
+
 Authentication is a **memory-only session**: paste the token once per tab; it
 lives in a single JS variable, is sent as an `Authorization: Bearer` header,
 and is never written to source, git, D1, cookies, `localStorage`,
@@ -619,6 +678,31 @@ GreyboxPlayer.open()          legacy compatibility iframe (#embed-frame)
   direct URL): DevTools Network should show the `.m3u8` request + media
   segments with no provider iframe created for direct sources; Console
   should show no Plyr, HLS.js, or duplicate-initialization errors.
+
+## 6.3) Playback mode (Admin-configured resolver strategy)
+
+```
+Admin Playback workspace (/admin → Playback)
+  → D1 settings.playback { mode } (/api/admin/settings/playback)
+  → public /api/config/playback (+ js/playback.config.js fallback)
+  → js/data.js getPlaybackConfig()
+  → js/stream.js resolvePlayback() / resolveCatalogMovie() / resolveCatalogEpisode()
+  → GreyboxPlayer (direct files) or legacy iframe (embed pages)
+```
+
+- **Modes**: `auto` (default, historical behavior), `direct` (catalog
+  requires a valid direct source — fails cleanly when none exists),
+  `embed` (catalog uses the configured embed source). Strict enum,
+  case-insensitive on read, `400` on unknown via Admin PUT.
+- **Current availability**: embed configured (see `EMBED.base`);
+  direct Not configured for normal movies/episodes; test available via
+  `?play-test=1` (Mux HLS manifest, dev only). The Admin Source Status
+  panel states exactly this with hostname-only diagnostics.
+- **Preserved**: HLS quality rules (2+ heights → Auto + heights, Safari
+  native-managed), Plyr controls, resume (localStorage), cleanup + stale
+  guards (`playerGen`/`routeGen`/`modalGen`), hero 7-second trailer
+  activation and visuals, Blocked → Detail → Playback order.
+- **Automated checks**: `node tests/playback.test.cjs` (102 assertions).
 
 ## 7) Going further (all legal, all Pages-compatible)
 

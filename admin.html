@@ -80,7 +80,7 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
       <p class="nav-group">Experience</p>
       <button class="nav-item" data-view="navigation" data-label="Navigation" title="Navigation"><svg class="nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M16.2 7.8l-2.5 6-6 2.5 2.5-6z"/></svg><span class="nav-label">Navigation</span></button>
       <button class="nav-item" data-view="detail" data-label="Detail Pages" title="Detail Pages"><svg class="nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg><span class="nav-label">Detail Pages</span></button>
-      <button class="nav-item nav-soon" data-view="soon" data-soon="Playback" data-group="Experience" data-label="Playback" title="Playback — coming soon"><svg class="nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M10 8l6 4-6 4z"/></svg><span class="nav-label">Playback</span><span class="badge badge-soon">Soon</span></button>
+      <button class="nav-item" data-view="playback" data-label="Playback" title="Playback"><svg class="nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M10 8l6 4-6 4z"/></svg><span class="nav-label">Playback</span></button>
 
       <p class="nav-group">Appearance</p>
       <button class="nav-item nav-soon" data-view="soon" data-soon="Branding" data-group="Appearance" data-label="Branding" title="Branding — coming soon"><svg class="nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.7l5.7 5.7a8 8 0 1 1-11.4 0z"/></svg><span class="nav-label">Branding</span><span class="badge badge-soon">Soon</span></button>
@@ -358,6 +358,32 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
         <div id="dp-groups"></div>
       </section>
 
+      <!-- PLAYBACK (catalog resolver strategy) -->
+      <section id="view-playback" class="admin-view hidden" aria-labelledby="pb-title">
+        <div class="page-head">
+          <div>
+            <h1 id="pb-title" class="page-title">Playback</h1>
+            <p class="page-desc">Control how Greybox resolves and presents supported playback sources.</p>
+          </div>
+          <div class="page-actions">
+            <span id="pb-dirty" class="badge badge-dirty hidden" role="status">Unsaved changes</span>
+            <button id="pb-save" class="btn btn-primary btn-sm">Save Changes</button>
+            <button id="pb-discard" class="btn btn-secondary btn-sm">Discard</button>
+            <button id="pb-reset" class="btn btn-secondary btn-sm">Reset to defaults</button>
+            <button id="pb-refresh" class="btn btn-secondary btn-sm">Refresh</button>
+          </div>
+        </div>
+        <div id="pb-mode"></div>
+        <h2 class="section-subhead" style="margin-top:1.1rem">Source status</h2>
+        <div id="pb-status"></div>
+        <h2 class="section-subhead" style="margin-top:1.1rem">Player</h2>
+        <div id="pb-player"></div>
+        <h2 class="section-subhead" style="margin-top:1.1rem">Playback test</h2>
+        <div id="pb-test"></div>
+        <h2 class="section-subhead" style="margin-top:1.1rem">Notes</h2>
+        <div id="pb-notes"></div>
+      </section>
+
       <!-- HEROES (Part 2 Hero Control Center) -->
       <section id="view-heroes" class="admin-view hidden" aria-labelledby="heroes-title">
         <div class="page-head">
@@ -417,7 +443,7 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
       <!-- PLACEHOLDER for disabled/soon views (never linked from enabled nav) -->
       <section id="view-soon" class="admin-view hidden" aria-labelledby="soon-title">
         <div class="page-head"><div><h1 id="soon-title" class="page-title">Coming soon</h1><p class="page-desc">This area is scaffolded for a later increment. No placeholder controls were added on purpose.</p></div></div>
-        <div class="empty"><p class="empty-title">Not built yet</p><p id="soon-desc" class="empty-desc">This area is reserved for a later increment. Dashboard, Home, Heroes, Collections, Tags, Overrides, Blocked Titles, Navigation, Greybox Picks, TMDB Search and General Settings are live.</p><button class="btn btn-secondary btn-sm" data-goto="dashboard">Back to Dashboard</button></div>
+        <div class="empty"><p class="empty-title">Not built yet</p><p id="soon-desc" class="empty-desc">This area is reserved for a later increment. Dashboard, Home, Heroes, Collections, Tags, Overrides, Blocked Titles, Navigation, Detail Pages, Playback, Greybox Picks, TMDB Search and General Settings are live.</p><button class="btn btn-secondary btn-sm" data-goto="dashboard">Back to Dashboard</button></div>
       </section>
     </main>
 

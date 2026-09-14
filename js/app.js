@@ -720,9 +720,20 @@
       if (!currentDetail) return;
       if (currentDetail.media_type === 'movie') playMovie();
       else {
-        // TV: scroll to episodes; play first episode if source configured
+        // TV: scroll to episodes; play first episode if the mode-aware
+        // resolver succeeds (direct mode fails cleanly with its message).
         $('m-tv-wrap').scrollIntoView({ behavior: 'smooth', block: 'center' });
-        if (currentEpisodes.length && Stream.isConfigured('tv')) playEpisode(currentEpisodes[0]);
+        if (currentEpisodes.length) {
+          if (Stream.resolveCatalogEpisode) {
+            const seasonNum = +($('m-season').value || currentSeasonNum || 1);
+            const res = Stream.resolveCatalogEpisode(currentDetail.id, seasonNum, currentEpisodes[0].episode_number);
+            if (res && res.ok) { playEpisode(currentEpisodes[0]); return; }
+            C.setStreamMessage(res && res.error ? res.error : 'Pick an episode below. To enable playback, put your official API streaming link here — open js/stream.js (EMBED.base in js/stream.js).');
+            return;
+          }
+          if (Stream.isConfigured('tv')) playEpisode(currentEpisodes[0]);
+          else C.setStreamMessage('Pick an episode below. To enable playback, put your official API streaming link here — open js/stream.js (EMBED.base in js/stream.js).');
+        }
         else if (!Stream.isConfigured('tv')) C.setStreamMessage('Pick an episode below. To enable playback, put your official API streaming link here — open js/stream.js (EMBED.base in js/stream.js).');
       }
     };
@@ -730,6 +741,23 @@
 
   function playMovie() {
     const d = currentDetail;
+    // Playback V1: catalog resolution honors the configured mode
+    // (blocked → detail → playback order stays: blocked titles never reach
+    // here because getMovie/getTVDetails rejects them upstream).
+    if (Stream.resolveCatalogMovie) {
+      const res = Stream.resolveCatalogMovie(d.id);
+      if (!res.ok) { C.setStreamMessage(res.error || 'Playback is not available for this title in the current mode.'); return; }
+      C.setStreamMessage('');
+      closeDetail();
+      Stream.Player.open({
+        title: d.title || d.name || 'Movie',
+        sub: 'Movie',
+        url: res.url,
+        mode: 'embed',
+        progressKey: 'movie:' + d.id,
+      });
+      return;
+    }
     const url = Stream.getMovieUrl(d.id);
     if (!url) { C.setStreamMessage('No stream source configured yet. Put your official API streaming link here — open js/stream.js (EMBED.base in js/stream.js). Trailers play without it.'); return; }
     C.setStreamMessage('');
@@ -786,6 +814,24 @@
   function playEpisode(ep) {
     const d = currentDetail;
     const seasonNum = +($('m-season').value || currentSeasonNum || 1);
+    // Playback V1: catalog resolution honors the configured mode.
+    if (Stream.resolveCatalogEpisode) {
+      const res = Stream.resolveCatalogEpisode(d.id, seasonNum, ep.episode_number);
+      if (!res.ok) { C.setStreamMessage(res.error || 'Playback is not available for this title in the current mode.'); return; }
+      C.setStreamMessage('');
+      const title = d.name || d.title || 'Show';
+      closeDetail();
+      Stream.Player.open({
+        title,
+        sub: `S${seasonNum} E${ep.episode_number} · ${ep.name || ''}`,
+        url: res.url,
+        mode: 'embed',
+        progressKey: `tv:${d.id}:${seasonNum}:${ep.episode_number}`,
+        showPrevNext: true,
+        onEnded: () => autoNext(seasonNum, ep.episode_number),
+      });
+      return;
+    }
     const url = Stream.getEpisodeUrl(d.id, seasonNum, ep.episode_number);
     if (!url) { C.setStreamMessage('No stream source configured yet. Put your official API streaming link here — open js/stream.js (EMBED.base in js/stream.js).'); return; }
     C.setStreamMessage('');
@@ -816,6 +862,22 @@
   function playEpisodeFromPlayer(ep) {
     const d = currentDetail;
     const seasonNum = currentSeasonNum;
+    // Playback V1: honor the configured mode even for in-player Prev/Next.
+    // Direct mode fails cleanly (leave the player at its ended state).
+    if (Stream.resolveCatalogEpisode) {
+      const res = Stream.resolveCatalogEpisode(d.id, seasonNum, ep.episode_number);
+      if (!res.ok) { try { C.setStreamMessage(res.error || 'Playback is not available for this title in the current mode.'); } catch { /* noop */ } return; }
+      Stream.Player.open({
+        title: d.name || d.title || 'Show',
+        sub: `S${seasonNum} E${ep.episode_number} · ${ep.name || ''}`,
+        url: res.url,
+        mode: 'embed',
+        progressKey: `tv:${d.id}:${seasonNum}:${ep.episode_number}`,
+        showPrevNext: true,
+        onEnded: () => autoNext(seasonNum, ep.episode_number),
+      });
+      return;
+    }
     const url = Stream.getEpisodeUrl(d.id, seasonNum, ep.episode_number);
     if (!url) return;
     Stream.Player.open({
@@ -833,6 +895,13 @@
     const idx = currentEpisodes.findIndex((x) => x.episode_number === epNum);
     const next = currentEpisodes[idx + 1];
     if (!next) return; // season finished — leave player open at ended state
+    // Playback V1: auto-next honors the mode (direct mode stops cleanly).
+    if (Stream.resolveCatalogEpisode) {
+      const res = Stream.resolveCatalogEpisode(currentDetail.id, seasonNum, next.episode_number);
+      if (!res.ok) return;
+      playEpisodeFromPlayer(next);
+      return;
+    }
     if (!Stream.getEpisodeUrl(currentDetail.id, seasonNum, next.episode_number)) return;
     playEpisodeFromPlayer(next);
   }
@@ -1047,17 +1116,37 @@
   function watchHeroItem(item) {
     const mt = heroMedia(item);
     try {
-      if (mt === 'movie' && window.Stream && typeof window.Stream.getMovieUrl === 'function') {
-        const url = window.Stream.getMovieUrl(item.id);
-        if (url && window.Stream.Player && typeof window.Stream.Player.open === 'function') {
-          window.Stream.Player.open({
-            title: item.title || item.name || 'Movie',
-            sub: 'Movie',
-            url,
-            mode: 'embed',
-            progressKey: 'movie:' + item.id,
-          });
-          return;
+      // Playback V1: hero Watch follows the configured mode (trailer,
+      // visuals, timing untouched — only this movie Watch action resolves
+      // through the mode-aware catalog resolver).
+      if (mt === 'movie' && window.Stream && typeof window.Stream.Player.open === 'function') {
+        if (typeof window.Stream.resolveCatalogMovie === 'function') {
+          const res = window.Stream.resolveCatalogMovie(item.id);
+          if (res && res.ok && res.url) {
+            window.Stream.Player.open({
+              title: item.title || item.name || 'Movie',
+              sub: 'Movie',
+              url: res.url,
+              mode: 'embed',
+              progressKey: 'movie:' + item.id,
+            });
+            return;
+          }
+          // Direct-mode clean failure (or unconfigured embed): fall through
+          // to the detail route so the message shows with trailer/actions.
+          if (res && !res.ok) { navTo(detailURL(item.id, mt)); return; }
+        } else if (typeof window.Stream.getMovieUrl === 'function') {
+          const url = window.Stream.getMovieUrl(item.id);
+          if (url) {
+            window.Stream.Player.open({
+              title: item.title || item.name || 'Movie',
+              sub: 'Movie',
+              url,
+              mode: 'embed',
+              progressKey: 'movie:' + item.id,
+            });
+            return;
+          }
         }
       }
     } catch (e) { /* fall through to detail route */ }
@@ -1183,6 +1272,9 @@
   // failure — and preloadGreyboxConfig itself never rejects, so the first
   // render always happens.
   Data.preloadGreyboxConfig().then(() => {
+    // Playback V1: sync the resolver to the live mode once D1 lands (the
+    // resolver also reads it live per call, so this is a warm-up, not a fork).
+    try { if (window.Stream && typeof window.Stream.syncPlaybackMode === 'function') window.Stream.syncPlaybackMode(); } catch { /* resolver keeps fallback */ }
     renderFooter();
     if (R) {
       R.init();

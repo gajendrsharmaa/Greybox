@@ -672,6 +672,55 @@ export function sanitizeDetailPages(raw) {
   return out;
 }
 
+/* ---------------- playback mode (Playback workspace) ----------------
+ *
+ * V1 exposes exactly ONE setting: `mode` (auto/direct/embed). Identity is
+ * ALWAYS the mode key — never a display label. No provider URLs, tokens,
+ * or secrets are accepted here: the embed host stays in js/stream.js
+ * EMBED.base and the test manifest stays in js/greybox-test-source.js.
+ *
+ * Semantics (mirrored in js/data.js normalizePlayback + js/stream.js
+ * resolvePlayback):
+ *   auto   — normal Greybox resolver strategy (catalog titles use the
+ *            configured embed source; direct files use the Greybox Player).
+ *   direct — catalog titles require a valid direct source and fail cleanly
+ *            when none exists (today: no direct production source).
+ *   embed  — catalog titles use the configured embed source.
+ */
+
+export const PLAYBACK_MODES = ['auto', 'direct', 'embed'];
+
+/**
+ * Validate a full playback body (PUT full replace — staged Admin saves
+ * always send the complete object). Only `mode` is accepted; unknown keys,
+ * unknown modes, malformed values, and invalid types fail.
+ * Returns the normalized object ready for storage: { mode }.
+ */
+export function validatePlaybackBody(body) {
+  if (!isObj(body)) fail('body must be a JSON object');
+  for (const k of Object.keys(body)) {
+    if (k !== 'mode') fail(`unknown playback setting: "${k}"`);
+  }
+  if (!('mode' in body)) fail('missing playback setting: "mode" (use "auto", "direct" or "embed")');
+  const m = String(body.mode == null ? '' : body.mode).trim().toLowerCase();
+  if (PLAYBACK_MODES.indexOf(m) < 0) fail('mode must be one of: ' + PLAYBACK_MODES.join(', '));
+  return { mode: m };
+}
+
+/**
+ * Lenient read-side sanitizer for the stored playback setting. A
+ * hand-edited or older row can never break public rendering: unknown or
+ * missing modes read as auto. Never throws.
+ */
+export function sanitizePlayback(raw) {
+  try {
+    const src = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+    const m = String(src.mode == null ? '' : src.mode).trim().toLowerCase();
+    if (PLAYBACK_MODES.indexOf(m) >= 0) return { mode: m };
+  } catch { /* fall through to default */ }
+  return { mode: 'auto' };
+}
+
 /**
  * Validate the home hero setting.
  *

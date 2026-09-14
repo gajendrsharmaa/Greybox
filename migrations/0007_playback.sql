@@ -1,0 +1,43 @@
+-- Greybox D1 migration 0007: playback mode configuration.
+--
+-- The catalog resolver strategy (which supported source the Watch buttons
+-- use) is configurable from Admin → Playback. Stored as ONE settings row
+-- (key 'playback'), mirroring the existing 'navigation' / 'detail_pages'
+-- settings pattern — no new table, no new router, no per-title rows for a
+-- single site-wide enum:
+--
+--   { "mode": "auto" | "direct" | "embed" }
+--
+-- Conventions (same as every other Greybox-owned setting):
+--   - Stable identity is the mode KEY (auto, direct, embed) — never a
+--     display label.
+--   - auto   = normal Greybox resolver strategy (catalog titles use the
+--              configured embed source; direct files use the Greybox Player).
+--   - direct = catalog titles require a valid direct source and fail cleanly
+--              when none exists. The EMBED resolver supplies embed-page URLs
+--              only, so today there is NO direct production source for normal
+--              movies/episodes — direct mode reports "no direct source"
+--              instead of iframing. No scraping or extraction is added.
+--   - embed  = catalog titles use the configured embed source.
+--   - Direct-file intents (user-pasted URLs, the dev-only ?play-test=1
+--     manifest) always route to the Greybox Player regardless of mode.
+--   - No provider URLs, tokens, or secrets are stored here: the embed host
+--     stays in js/stream.js EMBED.base and the test manifest stays in
+--     js/greybox-test-source.js.
+--   - Public reads sanitize unknown/missing modes to auto, so a corrupt row
+--     renders the historical behavior, never a broken player.
+--   - Playback never overrides Blocked Titles or Detail Pages visibility:
+--     blocking is enforced in js/data.js getMovie/getTVDetails before any
+--     rendering, and detail flags only hide already-resolved sections.
+--     Order stays: blocked filtering → detail presentation → playback.
+--
+-- The seed below reproduces the historical behavior exactly (auto), so
+-- applying this migration changes nothing visible until an Admin saves.
+--
+-- Apply AFTER 0006_detail_pages.sql. Re-running is safe (INSERT OR REPLACE,
+-- but note: re-applying resets playback to this default — Admin edits made
+-- after migration live in the same row and would be overwritten).
+-- Remote: `wrangler d1 execute greybox-db --remote --file=migrations/0007_playback.sql`
+
+INSERT OR REPLACE INTO settings (key, value_json)
+VALUES ('playback', '{"mode":"auto"}');

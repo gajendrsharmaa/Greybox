@@ -68,7 +68,8 @@
       load('/api/config/blocked'),
       load('/api/config/navigation'),
       load('/api/config/detail-pages'),
-    ]).then(([home, collections, overrides, tags, blocked, navigation, detailPages]) => {
+      load('/api/config/playback'),
+    ]).then(([home, collections, overrides, tags, blocked, navigation, detailPages, playback]) => {
       _remoteConfig = {
         home: (home && typeof home === 'object' && !Array.isArray(home)) ? home : null,
         collections: Array.isArray(collections) ? collections : null,
@@ -77,6 +78,7 @@
         blocked: Array.isArray(blocked) ? blocked : null,
         navigation: (navigation && typeof navigation === 'object' && !Array.isArray(navigation)) ? navigation : null,
         detailPages: (detailPages && typeof detailPages === 'object' && !Array.isArray(detailPages)) ? detailPages : null,
+        playback: (playback && typeof playback === 'object' && !Array.isArray(playback)) ? playback : null,
       };
       return _remoteConfig;
     });
@@ -1499,6 +1501,67 @@
     catch { return normalizeDetailPages(null); }
   }
 
+  /* ---------------- playback mode (D1 first, local file fallback) ----------------
+   *
+   * D1 (`settings` row `playback`, managed through
+   * /api/admin/settings/playback and the Admin Playback workspace) is the
+   * live source of truth; the public resolver reads it via
+   * GET /api/config/playback (preloaded once at boot above, offline
+   * fallback `js/playback.config.js`).
+   *
+   * V1 exposes exactly ONE setting: `mode` (auto/direct/embed). Identity is
+   * ALWAYS the mode key — never a display label. No provider URLs, tokens,
+   * or secrets live here: the embed host stays in js/stream.js EMBED.base
+   * and the test manifest stays in js/greybox-test-source.js.
+   *
+   * Semantics (implemented in js/stream.js resolvePlayback):
+   *   auto   — normal Greybox resolver strategy (catalog titles use the
+   *            configured embed source; direct files use the Greybox Player).
+   *   direct — catalog titles require a valid direct source and fail cleanly
+   *            when none exists (today: no direct production source, so
+   *            catalog Watch reports "no direct source" instead of iframing).
+   *   embed  — catalog titles use the configured embed source.
+   * Direct-file intents (user-pasted URLs, ?play-test=1) always route to the
+   * Greybox Player regardless of mode — they are explicit direct sources,
+   * not catalog resolution.
+   *
+   * Failure fallback: any fetch problem leaves _remoteConfig.playback null
+   * and the getter below uses the local fallback file (auto) — a config
+   * failure never makes playback unusable.
+   */
+
+  const PLAYBACK_MODES = ['auto', 'direct', 'embed'];
+  const PLAYBACK_DEFAULT = { mode: 'auto' };
+
+  function getPlaybackSource() {
+    if (_remoteConfig && _remoteConfig.playback && typeof _remoteConfig.playback === 'object' && !Array.isArray(_remoteConfig.playback)) {
+      return _remoteConfig.playback;
+    }
+    const raw = (typeof window !== 'undefined' && window.GreyboxPlayback) || null;
+    return (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : null;
+  }
+
+  // Lenient normalizer (mirrors sanitizePlayback server-side): unknown modes
+  // fall back to auto, non-object input falls back to auto. Never throws —
+  // malformed config renders as the default auto resolver.
+  function normalizePlayback(raw) {
+    try {
+      const src = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+      const m = String(src.mode == null ? '' : src.mode).trim().toLowerCase();
+      if (PLAYBACK_MODES.indexOf(m) >= 0) return { mode: m };
+      return { mode: 'auto' };
+    } catch {
+      return { mode: 'auto' };
+    }
+  }
+
+  // Full normalized config ({ mode }) — for the resolver (js/stream.js),
+  // the Admin workspace, and tests.
+  function getPlaybackConfig() {
+    try { return normalizePlayback(getPlaybackSource()); }
+    catch { return normalizePlayback(null); }
+  }
+
   /* ---------------- My List (localStorage, no database) ---------------- */
 
   const LS_KEY = 'sb_mylist';
@@ -1591,6 +1654,10 @@
     DETAIL_GROUPS,
     normalizeDetailPages,
     getDetailPagesConfig,
+    PLAYBACK_MODES,
+    PLAYBACK_DEFAULT,
+    normalizePlayback,
+    getPlaybackConfig,
     getMyList,
     saveMyList,
     toggleMyListItem,

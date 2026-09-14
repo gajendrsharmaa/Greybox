@@ -952,19 +952,41 @@
     // Existing Greybox behavior: movies play straight through Stream when a
     // source is configured; TV goes to detail (episode selection lives there).
     // Anything unplayable falls back to the detail route.
+    // Playback V1: hero Watch follows the configured mode (trailer visuals,
+    // 7-second activation, layers, ambient, fade untouched — only this movie
+    // Watch action resolves through the mode-aware catalog resolver).
     try {
       var mt = mediaOf(item);
-      if (mt === 'movie' && window.Stream && typeof window.Stream.getMovieUrl === 'function') {
-        var url = window.Stream.getMovieUrl(item.id);
-        if (url && window.Stream.Player && typeof window.Stream.Player.open === 'function') {
-          window.Stream.Player.open({
-            title: item.title || item.name || 'Movie',
-            sub: 'Movie',
-            url: url,
-            mode: 'embed',
-            progressKey: 'movie:' + item.id,
-          });
+      if (mt === 'movie' && window.Stream && window.Stream.Player && typeof window.Stream.Player.open === 'function') {
+        if (typeof window.Stream.resolveCatalogMovie === 'function') {
+          var res = window.Stream.resolveCatalogMovie(item.id);
+          if (res && res.ok && res.url) {
+            window.Stream.Player.open({
+              title: item.title || item.name || 'Movie',
+              sub: 'Movie',
+              url: res.url,
+              mode: 'embed',
+              progressKey: 'movie:' + item.id,
+            });
+            return;
+          }
+          // Direct-mode clean failure (or unconfigured embed): detail route
+          // shows the message with trailer/actions (never an iframe here).
+          defaultInfo(item);
           return;
+        }
+        if (typeof window.Stream.getMovieUrl === 'function') {
+          var url = window.Stream.getMovieUrl(item.id);
+          if (url) {
+            window.Stream.Player.open({
+              title: item.title || item.name || 'Movie',
+              sub: 'Movie',
+              url: url,
+              mode: 'embed',
+              progressKey: 'movie:' + item.id,
+            });
+            return;
+          }
         }
       }
     } catch (e) { /* fall through to detail */ }

@@ -11,7 +11,7 @@
  * decide what to do when the DB binding is missing (see getDb).
  */
 
-import { sanitizeNavigation, sanitizeDetailPages } from './validate.js';
+import { sanitizeDetailPages, sanitizeNavigation, sanitizePlayback } from './validate.js';
 
 /** D1 binding (wrangler.toml `[[d1_databases]] binding = "DB"`), or null. */
 export function getDb(env) {
@@ -652,6 +652,26 @@ export async function readDetailPages(db) {
     return sanitizeDetailPages(raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null);
   } catch {
     return sanitizeDetailPages(null);
+  }
+}
+
+/* ---------------- playback mode (Playback workspace) ----------------
+ *
+ * The catalog resolver strategy lives in ONE settings row (key
+ * 'playback'), mirroring 'navigation' / 'detail_pages' — no new table for
+ * a single enum. Stored shape: { mode: 'auto' | 'direct' | 'embed' }.
+ * Read-side shaping reuses the lenient sanitizePlayback() from validate.js
+ * so a corrupt row resolves as auto (the historical behavior), never a
+ * broken player. No provider URLs, tokens, or secrets are stored here.
+ */
+
+/** Full playback config ({ mode }). */
+export async function readPlayback(db) {
+  const raw = await readSetting(db, 'playback');
+  try {
+    return sanitizePlayback(raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null);
+  } catch {
+    return sanitizePlayback(null);
   }
 }
 

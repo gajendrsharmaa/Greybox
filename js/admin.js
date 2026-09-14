@@ -75,6 +75,7 @@
     hero: '/api/admin/settings/home-hero',
     colHeroes: '/api/admin/settings/collection-heroes',
     detailPages: '/api/admin/settings/detail-pages',
+    playback: '/api/admin/settings/playback',
   };
 
   async function api(path, opts) {
@@ -226,6 +227,7 @@
     blockedSearchGen++;
     navGen++;
     dpGen++;
+    pbGen++;
     try { if (drawerPrevFocus && drawerPrevFocus.focus) drawerPrevFocus.focus(); } catch { /* noop */ }
     drawerPrevFocus = null;
   }
@@ -246,6 +248,7 @@
     blocked: { title: 'Blocked Titles', sub: 'Content' },
     navigation: { title: 'Navigation', sub: 'Experience' },
     detail: { title: 'Detail Pages', sub: 'Experience' },
+    playback: { title: 'Playback', sub: 'Experience' },
     picks: { title: 'Greybox Picks', sub: 'Content' },
     search: { title: 'TMDB Search', sub: 'Content' },
     settings: { title: 'General Settings', sub: 'Site' },
@@ -285,7 +288,7 @@
     if ($('crumb-sub')) $('crumb-sub').textContent = (section === workspace) ? '' : workspace;
     if (key === 'soon' && currentSoon) {
       if ($('soon-title')) $('soon-title').textContent = currentSoon.label;
-      if ($('soon-desc')) $('soon-desc').textContent = currentSoon.label + ' is on the Control Center roadmap and has no editor yet. Dashboard, Home, Heroes, Collections, Tags, Overrides, Blocked Titles, Navigation, Detail Pages, Greybox Picks, TMDB Search and General Settings are live.';
+      if ($('soon-desc')) $('soon-desc').textContent = currentSoon.label + ' is on the Control Center roadmap and has no editor yet. Dashboard, Home, Heroes, Collections, Tags, Overrides, Blocked Titles, Navigation, Detail Pages, Playback, Greybox Picks, TMDB Search and General Settings are live.';
     }
     closeMobileNav();
     if (!ADMIN_TOKEN) return;
@@ -298,6 +301,7 @@
     if (key === 'blocked') loadBlocked();
     if (key === 'navigation') loadNavigation();
     if (key === 'detail') loadDetailPages();
+    if (key === 'playback') loadPlayback();
     if (key === 'picks') loadPicks();
     if (key === 'settings') loadHero();
   }
@@ -4461,6 +4465,284 @@
     renderDetailPages();
   }
 
+  /* ================= PLAYBACK (catalog resolver strategy) =================
+   *
+   * Admin workspace over /api/admin/settings/playback (GET read, PUT
+   * full-replace) for the D1 `settings` row `playback`. Staged editing like
+   * Navigation/Detail Pages: the mode picker edits a local draft; nothing
+   * touches the server until Save Changes, which PUTs the complete object
+   * and verifies with a fresh GET (a 200 alone is never shown as success).
+   * Identity is always the mode key (auto/direct/embed) — never a display
+   * label. V1 exposes exactly ONE setting (mode); player behaviors that are
+   * not cleanly configurable (autoplay guarantees, resume toggles, global
+   * default quality, subtitle fetching) are documented, not added.
+   * Direct mode fails cleanly for catalog titles because the EMBED resolver
+   * supplies embed-page URLs only — there is no direct production source
+   * today, and no scraping/extraction is added to manufacture one.
+   */
+  const PB_MODES = [
+    { key: 'auto', label: 'Auto', desc: 'Uses the normal Greybox resolver strategy: catalog titles use the configured embed source; direct files use the Greybox Player.' },
+    { key: 'direct', label: 'Direct', desc: 'Only succeeds when a valid direct source is available. Catalog titles fail cleanly today — no direct production source is configured.' },
+    { key: 'embed', label: 'Embed', desc: 'Uses the configured embed source for catalog titles (today: the normal movie/episode path).' },
+  ];
+
+  let pbServer = null; // last saved config from GET (null until loaded)
+  let pbDraft = null; // staged edits { mode }
+  let pbGen = 0; // stale-guard generation for loads/saves
+  let pbSaving = false;
+
+  function pbDefaults() {
+    return { mode: 'auto' };
+  }
+
+  function pbClone(v) {
+    try { return JSON.parse(JSON.stringify(v)); }
+    catch { return pbDefaults(); }
+  }
+
+  function pbModeOf(v) {
+    try {
+      const m = String(v && v.mode == null ? '' : v.mode).trim().toLowerCase();
+      if (m === 'auto' || m === 'direct' || m === 'embed') return m;
+    } catch { /* fall through */ }
+    return 'auto';
+  }
+
+  // Client-side first pass (mirrors validatePlaybackBody server-side; the
+  // server re-validates everything — a failed save is never shown as ok).
+  function pbValidateDraft(draft) {
+    if (!draft || typeof draft !== 'object' || Array.isArray(draft)) return 'Playback data is missing.';
+    const keys = Object.keys(draft);
+    if (keys.length !== 1 || keys[0] !== 'mode') return 'Playback must contain exactly one setting: mode.';
+    if (PB_MODES.map((m) => m.key).indexOf(draft.mode) < 0) return 'Unknown playback mode: ' + String(draft.mode == null ? '?' : draft.mode).slice(0, 32) + ' (use auto, direct or embed).';
+    return null;
+  }
+
+  function pbStableJson(v) {
+    return JSON.stringify({ mode: pbModeOf(v) });
+  }
+
+  function pbIsDirty() {
+    if (!pbServer || !pbDraft) return false;
+    return pbStableJson(pbDraft) !== pbStableJson(pbServer);
+  }
+
+  // Lenient shaping for GET responses (mirrors the server sanitizer):
+  // unknown/missing modes read as auto. Never throws.
+  function normalizePbServer(cfg) {
+    return { mode: pbModeOf(cfg) };
+  }
+
+  async function loadPlayback() {
+    const host = $('pb-mode');
+    if (!host) return;
+    const myGen = ++pbGen;
+    stateBox(host, 'loading', 'Loading playback…');
+    renderPbStatus(null);
+    renderPbPlayer();
+    renderPbTest();
+    renderPbNotes();
+    pbServer = null;
+    pbDraft = null;
+    updatePbChrome();
+    try {
+      const cfg = await api(API.playback);
+      if (myGen !== pbGen) return; // stale: a newer load owns the view
+      pbServer = normalizePbServer(cfg);
+      pbDraft = pbClone(pbServer);
+      if (myGen !== pbGen) return;
+      renderPlayback();
+    } catch (e) {
+      if (myGen !== pbGen) return;
+      host.innerHTML = '';
+      const box = stateBox(host, 'error', 'Playback failed to load', (e && e.message) || String(e));
+      const retry = el('button', 'btn btn-secondary btn-sm', 'Retry');
+      retry.type = 'button';
+      retry.addEventListener('click', loadPlayback);
+      box.appendChild(retry);
+      renderPbStatus(null);
+      renderPbPlayer();
+      renderPbTest();
+      renderPbNotes();
+      notice('err', 'Playback failed to load: ' + ((e && e.message) || e));
+    }
+  }
+
+  function pbPick(mode) {
+    if (!pbDraft || pbSaving) return;
+    if (PB_MODES.map((m) => m.key).indexOf(mode) < 0) return;
+    pbDraft.mode = mode;
+    renderPlayback();
+  }
+
+  function pbModeCard(meta) {
+    const on = pbDraft && pbDraft.mode === meta.key;
+    const card = el('div', 'data-row' + (on ? ' is-selected' : ''));
+    const head = el('div', 'row-top');
+    head.appendChild(el('span', 'row-title', meta.label));
+    head.appendChild(el('span', 'badge ' + (on ? 'badge-live' : 'badge-hidden'), on ? 'Active' : meta.key));
+    card.appendChild(head);
+    card.appendChild(el('p', 'row-meta', meta.desc));
+    card.appendChild(rowButtons([
+      [on ? 'Selected' : 'Use ' + meta.label, on ? '' : 'go', () => pbPick(meta.key), on ? 'Already the staged mode' : 'Stage ' + meta.label + ' mode (nothing saves until Save Changes)', on],
+    ]));
+    return card;
+  }
+
+  function renderPlayback() {
+    const host = $('pb-mode');
+    if (!host || !pbDraft) return;
+    host.innerHTML = '';
+    const head = el('h2', 'section-subhead', 'Playback mode');
+    host.appendChild(head);
+    const list = el('div', 'row-list');
+    for (const m of PB_MODES) list.appendChild(pbModeCard(m));
+    host.appendChild(list);
+    renderPbStatus(pbDraft);
+    renderPbPlayer();
+    renderPbTest();
+    renderPbNotes();
+    updatePbChrome();
+  }
+
+  // Source status: useful non-sensitive diagnostics only (mode, booleans,
+  // hostname). Never tokens, cookies, headers, full URLs, or D1 internals.
+  function renderPbStatus(draft) {
+    const host = $('pb-status');
+    if (!host) return;
+    host.innerHTML = '';
+    const card = el('div', 'data-row');
+    if (!draft) {
+      card.appendChild(el('p', 'row-meta', 'Source status is unavailable until playback configuration loads.'));
+      host.appendChild(card);
+      return;
+    }
+    const mode = pbModeOf(draft);
+    card.appendChild(el('p', 'row-meta', 'Playback mode: ' + mode));
+    // Embed status is derived client-side from the same EMBED slot the
+    // resolver uses (hostname only — never the full URL or credentials).
+    let embedLine = 'Embed source: unknown (open the public site console for Stream.getSourceStatus()).';
+    try {
+      if (typeof window !== 'undefined' && window.Stream && typeof window.Stream.getSourceStatus === 'function') {
+        const st = window.Stream.getSourceStatus();
+        if (st && st.embedConfigured) embedLine = 'Embed source: Configured' + (st.embedHost ? ' (' + st.embedHost + ')' : '');
+        else embedLine = 'Embed source: Not configured (Watch buttons report "No stream source configured").';
+      } else {
+        embedLine = 'Embed source: configured embed page resolver (see js/stream.js EMBED.base). Player status reads live in the public site.';
+      }
+    } catch { /* static copy stands */ }
+    card.appendChild(el('p', 'row-meta', embedLine));
+    card.appendChild(el('p', 'row-meta', 'Direct source: Not configured — no direct production source is currently available for normal movies/episodes. Direct mode is validated but fails cleanly until a legitimate direct source exists.'));
+    card.appendChild(el('p', 'row-meta', 'Test source: available in local dev via ?play-test=1 (legitimate public HLS test manifest — never used for normal playback).'));
+    host.appendChild(card);
+  }
+
+  // Player behaviors genuinely in the build (documented, not toggled in V1).
+  function renderPbPlayer() {
+    const host = $('pb-player');
+    if (!host) return;
+    host.innerHTML = '';
+    const card = el('div', 'data-row');
+    card.appendChild(el('p', 'row-meta', 'V1 exposes the resolver mode only — no player switches were added because the current player does not offer clean global toggles for them:'));
+    card.appendChild(el('p', 'row-meta', 'Autoplay is attempted for direct files, but browsers may block audible autoplay — playback starts paused and the user presses play.'));
+    card.appendChild(el('p', 'row-meta', 'Resume continues from the saved position (localStorage progress keys); quality is Auto with manual heights only when the manifest exposes 2+ levels (Safari native HLS is platform-managed); captions appear only when the caller supplies subtitle tracks (catalog titles supply none). Cleanup destroys the previous HLS/Plyr instance and stale requests can never overwrite the current source.'));
+    host.appendChild(card);
+  }
+
+  function renderPbTest() {
+    const host = $('pb-test');
+    if (!host) return;
+    host.innerHTML = '';
+    const card = el('div', 'data-row');
+    card.appendChild(el('p', 'row-meta', 'Verify the Greybox Player with the existing safe test manifest (Mux HLS test stream, dev only — never a production source).'));
+    card.appendChild(rowButtons([
+      ['Open playback test', 'go', () => { try { window.open('/?play-test=1', '_blank', 'noopener'); } catch { /* noop */ } }, 'Open the public site with ?play-test=1 in a new tab'],
+    ]));
+    host.appendChild(card);
+  }
+
+  function renderPbNotes() {
+    const host = $('pb-notes');
+    if (!host) return;
+    host.innerHTML = '';
+    const card = el('div', 'data-row');
+    card.appendChild(el('p', 'row-meta', 'Order is always: blocked filtering, then detail presentation, then playback — this workspace can never render blocked titles or override Detail Pages visibility. Hero trailers (YouTube background video, 7-second activation) are unaffected by the mode; only the hero Watch action follows it. Public config is cached ~60s and falls back to auto when unreachable.'));
+    host.appendChild(card);
+  }
+
+  function updatePbChrome() {
+    const dirty = pbIsDirty();
+    const badge = $('pb-dirty');
+    if (badge) badge.classList.toggle('hidden', !dirty);
+    const save = $('pb-save');
+    if (save) save.disabled = !dirty || pbSaving || !pbDraft;
+    const discard = $('pb-discard');
+    if (discard) discard.disabled = !dirty || pbSaving || !pbDraft;
+    const reset = $('pb-reset');
+    if (reset) reset.disabled = pbSaving || !pbDraft;
+  }
+
+  async function savePlayback() {
+    if (pbSaving || !pbDraft) return;
+    const err = pbValidateDraft(pbDraft);
+    if (err) {
+      notice('err', err);
+      renderPlayback();
+      return;
+    }
+    const myGen = ++pbGen;
+    pbSaving = true;
+    updatePbChrome();
+    const saveBtn = $('pb-save');
+    const prevLabel = saveBtn ? saveBtn.textContent : '';
+    if (saveBtn) { saveBtn.textContent = 'Saving…'; saveBtn.disabled = true; }
+    try {
+      const payload = JSON.parse(pbStableJson(pbDraft));
+      await api(API.playback, { method: 'PUT', body: payload });
+      // Never trust the 200 alone: read the row back before showing success.
+      const readBack = await api(API.playback);
+      if (myGen !== pbGen) return; // stale: a newer load/save owns the view
+      const shaped = normalizePbServer(readBack);
+      if (pbStableJson(shaped) !== pbStableJson(payload)) {
+        notice('err', 'Save reported success, but a fresh read-back differs — not showing success. Refresh and retry.');
+      } else {
+        notice('ok', 'Playback saved. The public resolver updates within ~a minute.');
+      }
+      pbServer = shaped;
+      pbDraft = pbClone(shaped);
+      renderPlayback();
+    } catch (e) {
+      if (myGen !== pbGen) return;
+      notice('err', 'Playback save failed: ' + ((e && e.message) || e));
+    } finally {
+      pbSaving = false;
+      if (myGen === pbGen) {
+        if (saveBtn && saveBtn.isConnected) saveBtn.textContent = prevLabel || 'Save Changes';
+        updatePbChrome();
+      }
+    }
+  }
+
+  function discardPlayback() {
+    if (!pbServer || pbSaving) return;
+    if (!pbIsDirty()) return;
+    pbDraft = pbClone(pbServer);
+    renderPlayback();
+    notice('ok', 'Unsaved Playback changes discarded.');
+  }
+
+  async function resetPlayback() {
+    if (!pbDraft || pbSaving) return;
+    const ok = await confirmDialog({
+      title: 'Reset playback?',
+      message: 'Stage the default resolver (Auto)? Your unsaved draft edits will be lost; nothing is saved until you press Save Changes.',
+      okLabel: 'Reset to defaults',
+    });
+    if (!ok) return;
+    pbDraft = pbDefaults();
+    renderPlayback();
+  }
+
   /* ================= GREYBOX PICKS (read view over existing overrides) ================= */
   async function loadPicks() {
     const host = $('picks-list');
@@ -5784,6 +6066,14 @@
     if (dpReset) dpReset.addEventListener('click', resetDetailPages);
     const dpRefresh = $('dp-refresh');
     if (dpRefresh) dpRefresh.addEventListener('click', loadDetailPages);
+    const pbSave = $('pb-save');
+    if (pbSave) pbSave.addEventListener('click', savePlayback);
+    const pbDiscard = $('pb-discard');
+    if (pbDiscard) pbDiscard.addEventListener('click', discardPlayback);
+    const pbReset = $('pb-reset');
+    if (pbReset) pbReset.addEventListener('click', resetPlayback);
+    const pbRefresh = $('pb-refresh');
+    if (pbRefresh) pbRefresh.addEventListener('click', loadPlayback);
     const dr = $('dash-refresh');
     if (dr) dr.addEventListener('click', loadDashboard);
     const hr = $('heroes-refresh');
@@ -5945,6 +6235,8 @@
       NAV_LABEL_MAX,
       DP_GROUPS, dpDefaults, dpValidateDraft, dpStableJson,
       normalizeDpServer, loadDetailPages, renderDetailPages, dpIsDirty,
+      PB_MODES, pbDefaults, pbValidateDraft, pbStableJson,
+      normalizePbServer, loadPlayback, renderPlayback, pbIsDirty,
       slugifyTag, tagCounts, stableTagJson, tagMemberKey,
       fetchGenres, genreName, GENRE_CACHE,
       PICK_BADGE, isGreyboxPick, validPickTarget,

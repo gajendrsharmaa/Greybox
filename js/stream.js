@@ -68,6 +68,154 @@
     return !!embedBase();
   }
 
+  /* ---- playback mode (Playback V1: Admin-configured resolver strategy) ----
+   * Single canonical mode system — there is no second/competitor:
+   *   auto   — normal Greybox resolver strategy (catalog titles use the
+   *            configured embed source; direct files use the Greybox Player).
+   *   direct — catalog titles require a valid direct source and fail cleanly
+   *            when none exists. Today the EMBED resolver supplies embed-page
+   *            URLs only, so catalog titles have NO direct production source
+   *            and direct mode reports "no direct source" instead of iframing.
+   *   embed  — catalog titles use the configured embed source.
+   * Direct-file intents (user-pasted URLs via playFile, the dev-only
+   * ?play-test=1 manifest) always route to the Greybox Player regardless of
+   * mode — they are explicit direct sources, not catalog resolution, and no
+   * mode ever converts an embed URL into a media URL (no scraping, no
+   * extraction, no auth/Referer bypass of any kind).
+   * The live value comes from js/data.js getPlaybackConfig() (D1 with local
+   * fallback); _playbackMode is the offline override used before D1 loads
+   * and in headless tests.
+   */
+  const PLAYBACK_MODES = ['auto', 'direct', 'embed'];
+  const PLAYBACK_DEFAULT_MODE = 'auto';
+  let _playbackMode = 'auto';
+
+  const DIRECT_UNAVAILABLE_ERROR = 'Direct mode is active, but no direct production source is currently available for this title. Switch to Auto or Embed, or play a direct file you own.';
+  const EMBED_UNCONFIGURED_ERROR = 'No stream source configured yet. Put your official API streaming link here — open js/stream.js (EMBED.base in js/stream.js). Trailers play without it.';
+
+  function normalizePlaybackMode(v) {
+    const m = String(v == null ? '' : v).trim().toLowerCase();
+    return PLAYBACK_MODES.indexOf(m) >= 0 ? m : '';
+  }
+
+  // Strict setter for Admin/headless use: returns true when accepted.
+  function setPlaybackMode(m) {
+    const clean = normalizePlaybackMode(m);
+    if (!clean) return false;
+    _playbackMode = clean;
+    return true;
+  }
+
+  // Effective mode: live D1-backed config when available, else the staged
+  // override, else the offline fallback file, else auto. Never throws and
+  // never returns an unknown value — malformed config reads as auto.
+  function getPlaybackMode() {
+    try {
+      if (typeof window !== 'undefined' && window.GreyboxData && typeof window.GreyboxData.getPlaybackConfig === 'function') {
+        const cfg = window.GreyboxData.getPlaybackConfig();
+        const m = normalizePlaybackMode(cfg && cfg.mode);
+        if (m) return m;
+      }
+    } catch { /* fall through to override */ }
+    try {
+      const fb = (typeof window !== 'undefined' && window.GreyboxPlayback) || null;
+      if (fb && normalizePlaybackMode(fb.mode) && _playbackMode === 'auto') {
+        // No staged override yet: honor the offline fallback file directly
+        // so static previews behave before D1 loads.
+        const m = normalizePlaybackMode(fb.mode);
+        if (m) return m;
+      }
+    } catch { /* ignore */ }
+    return normalizePlaybackMode(_playbackMode) || PLAYBACK_DEFAULT_MODE;
+  }
+
+  // Pull the live config into the staged override (called once D1 preload
+  // resolves, and safe to call repeatedly). Keeps Stream in sync without
+  // adding a second source of truth.
+  function syncPlaybackMode() {
+    try {
+      if (typeof window !== 'undefined' && window.GreyboxData && typeof window.GreyboxData.getPlaybackConfig === 'function') {
+        const cfg = window.GreyboxData.getPlaybackConfig();
+        const m = normalizePlaybackMode(cfg && cfg.mode);
+        if (m) { _playbackMode = m; return m; }
+      }
+    } catch { /* keep current */ }
+    return _playbackMode;
+  }
+
+  // Catalog titles currently have NO legitimate direct production source:
+  // the EMBED resolver supplies embed-page URLs only, the dev test manifest
+  // is dev-only, and custom files are user-pasted (not catalog). This helper
+  // exists so the Admin status panel and tests can state that honestly.
+  function isDirectCatalogAvailable() {
+    return false;
+  }
+
+  function getEmbedHost() {
+    try {
+      const b = embedBase();
+      if (!b) return '';
+      return new URL(b).hostname || '';
+    } catch {
+      return '';
+    }
+  }
+
+  // Non-sensitive diagnostics for the Admin Source Status panel. Never
+  // includes tokens, cookies, headers, URLs with query strings, or D1 data —
+  // only the mode, a boolean, a hostname, and static availability flags.
+  function getSourceStatus() {
+    let testAvailable = false;
+    try {
+      testAvailable = !!(typeof window !== 'undefined' && window.GreyboxTestSource && typeof window.GreyboxTestSource.getTestUrl === 'function');
+    } catch { testAvailable = false; }
+    return {
+      mode: getPlaybackMode(),
+      embedConfigured: isConfigured(),
+      embedHost: getEmbedHost(),
+      directAvailable: isDirectCatalogAvailable(),
+      testAvailable,
+    };
+  }
+
+  // Catalog movie resolution honoring the configured mode. Pure apart from
+  // reading the mode + EMBED slot. Returns { ok, url, mode, error } where
+  // mode is the PLAYER bucket ('embed' for iframe, 'direct' for the clean
+  // direct failure) — callers must check ok before opening anything.
+  function resolveCatalogMovie(tmdbId) {
+    const mode = getPlaybackMode();
+    if (mode === 'direct') {
+      return { ok: false, url: null, mode: 'direct', error: DIRECT_UNAVAILABLE_ERROR };
+    }
+    const url = getMovieUrl(tmdbId);
+    if (!url) return { ok: false, url: null, mode: 'embed', error: EMBED_UNCONFIGURED_ERROR };
+    return { ok: true, url, mode: 'embed', error: null };
+  }
+
+  function resolveCatalogEpisode(tmdbId, season, episode) {
+    const mode = getPlaybackMode();
+    if (mode === 'direct') {
+      return { ok: false, url: null, mode: 'direct', error: DIRECT_UNAVAILABLE_ERROR };
+    }
+    const url = getEpisodeUrl(tmdbId, season, episode);
+    if (!url) return { ok: false, url: null, mode: 'embed', error: EMBED_UNCONFIGURED_ERROR };
+    return { ok: true, url, mode: 'embed', error: null };
+  }
+
+  // Generic catalog entry point used by app.js/hero.js and tests:
+  //   resolvePlayback({ kind: 'movie', tmdbId })
+  //   resolvePlayback({ kind: 'episode', tmdbId, season, episode })
+  // Blocked/detail filtering stays upstream (js/data.js + js/detail-pages.js):
+  // this function only decides embed-vs-clean-failure for allowed titles.
+  function resolvePlayback(opts) {
+    const o = (opts && typeof opts === 'object') ? opts : {};
+    const kind = String(o.kind || o.type || 'movie').trim().toLowerCase();
+    if (kind === 'episode' || kind === 'tv') {
+      return resolveCatalogEpisode(o.tmdbId != null ? o.tmdbId : o.id, o.season, o.episode);
+    }
+    return resolveCatalogMovie(o.tmdbId != null ? o.tmdbId : o.id);
+  }
+
   /* ---- source-type resolution (Increment 2: connect direct sources) ----
    * Decides, AFTER a source is resolved, whether it is directly playable
    * (Greybox Player) or embed-only (legacy compatibility iframe).
@@ -359,6 +507,11 @@
   const StreamAPI = {
     EMBED, getMovieUrl, getEpisodeUrl, isConfigured,
     resolveSourceType, SOURCE_TYPES,
+    PLAYBACK_MODES, PLAYBACK_DEFAULT_MODE,
+    getPlaybackMode, setPlaybackMode, syncPlaybackMode,
+    isDirectCatalogAvailable, getEmbedHost, getSourceStatus,
+    resolveCatalogMovie, resolveCatalogEpisode, resolvePlayback,
+    DIRECT_UNAVAILABLE_ERROR, EMBED_UNCONFIGURED_ERROR,
     Progress, Player: { open, close, current, retry: () => ctx && open(ctx) },
     fmtTime: fmt, resumeLabel: playResumeLabel,
   };
@@ -370,6 +523,11 @@
     module.exports = {
       EMBED, getMovieUrl, getEpisodeUrl, isConfigured,
       resolveSourceType, SOURCE_TYPES,
+      PLAYBACK_MODES, PLAYBACK_DEFAULT_MODE,
+      getPlaybackMode, setPlaybackMode, syncPlaybackMode,
+      isDirectCatalogAvailable, getEmbedHost, getSourceStatus,
+      resolveCatalogMovie, resolveCatalogEpisode, resolvePlayback,
+      DIRECT_UNAVAILABLE_ERROR, EMBED_UNCONFIGURED_ERROR,
       fmtTime: fmt, Progress,
     };
   }
