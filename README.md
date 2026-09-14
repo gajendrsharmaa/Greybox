@@ -274,6 +274,18 @@ toggles, and delete confirmations, with per-field validation mirroring the
 backend and a server read-back after every mutation (a 200 alone is never
 shown as success).
 
+Control Center shell (`admin.html` + `css/admin.css`, same vanilla stack):
+grouped icon sidebar (Control Center / Content / Experience / Appearance /
+Site / System) with a refined active state (accent tint + edge indicator),
+a desktop-only collapsible icon rail, and a mobile drawer under 60rem.
+Roadmap entries are enabled buttons with a subtle `Soon` badge that open a
+labeled Coming-soon panel — never dead/disabled rows. The sticky topbar
+reads `[section] / [workspace]` (e.g. Content / Heroes); the ⌘K control is
+a declared future affordance (per-workspace filters are the real search).
+Live views: Dashboard, Home, Heroes, Collections, Tags, Overrides, Greybox
+Picks, TMDB Search, General Settings. Auth stays a memory-only token
+session; no shell change touches API contracts, D1, or workspace logic.
+
 Collections workspace (`/admin` → Collections): cards with live counts,
 real search/visibility/source-type/media filters (all evaluated against
 actual collection data — `source.type` and the media each collection

@@ -231,7 +231,7 @@
 
   /* ---------------- navigation / views ---------------- */
   const VIEWS = {
-    dashboard: { title: 'Dashboard', sub: 'Overview' },
+    dashboard: { title: 'Dashboard', sub: 'Control Center' },
     sections: { title: 'Home', sub: 'Content' },
     heroes: { title: 'Heroes', sub: 'Content' },
     collections: { title: 'Collections', sub: 'Content' },
@@ -239,16 +239,28 @@
     overrides: { title: 'Overrides', sub: 'Content' },
     picks: { title: 'Greybox Picks', sub: 'Content' },
     search: { title: 'TMDB Search', sub: 'Content' },
-    settings: { title: 'General Settings', sub: 'System' },
-    soon: { title: 'Coming soon', sub: '' },
+    settings: { title: 'General Settings', sub: 'Site' },
+    soon: { title: 'Coming soon', sub: 'Roadmap' },
   };
   let currentView = 'dashboard';
+  // Active roadmap item when the Soon panel is shown ({ label, group }).
+  let currentSoon = null;
 
-  function showView(name) {
+  // opts is display-only ({ label, group } for the Soon panel); omitting it
+  // keeps every existing showView(name)/showTab(name) call working as before.
+  function showView(name, opts) {
     const key = VIEWS[name] ? name : 'dashboard';
     currentView = key;
+    if (key === 'soon') {
+      const o = (opts && typeof opts === 'object') ? opts : {};
+      const label = String((o.label != null ? o.label : '')).trim() || 'Coming soon';
+      const group = String((o.group != null ? o.group : '')).trim() || 'Roadmap';
+      currentSoon = { label, group };
+    } else {
+      currentSoon = null;
+    }
     document.querySelectorAll('#admin-nav .nav-item[data-view]').forEach((b) => {
-      const on = b.dataset.view === key;
+      const on = b.dataset.view === key && (key !== 'soon' || b.dataset.soon === (currentSoon && currentSoon.label));
       b.classList.toggle('is-active', on);
       if (on) b.setAttribute('aria-current', 'page');
       else b.removeAttribute('aria-current');
@@ -256,9 +268,16 @@
     document.querySelectorAll('.admin-view').forEach((p) => p.classList.add('hidden'));
     const panel = $('view-' + key);
     if (panel) panel.classList.remove('hidden');
+    // Breadcrumb reads [section] / [workspace], e.g. Content / Heroes.
     const meta = VIEWS[key];
-    if ($('crumb-section')) $('crumb-section').textContent = meta.title;
-    if ($('crumb-sub')) $('crumb-sub').textContent = meta.sub || '';
+    const section = key === 'soon' && currentSoon ? currentSoon.group : (meta.sub || meta.title);
+    const workspace = key === 'soon' && currentSoon ? currentSoon.label : meta.title;
+    if ($('crumb-section')) $('crumb-section').textContent = section;
+    if ($('crumb-sub')) $('crumb-sub').textContent = (section === workspace) ? '' : workspace;
+    if (key === 'soon' && currentSoon) {
+      if ($('soon-title')) $('soon-title').textContent = currentSoon.label;
+      if ($('soon-desc')) $('soon-desc').textContent = currentSoon.label + ' is on the Control Center roadmap and has no editor yet. Dashboard, Home, Heroes, Collections, Tags, Overrides, Greybox Picks, TMDB Search and General Settings are live.';
+    }
     closeMobileNav();
     if (!ADMIN_TOKEN) return;
     if (key === 'dashboard') loadDashboard();
@@ -4641,8 +4660,17 @@
   /* ---------------- boot ---------------- */
   function bindNav() {
     document.querySelectorAll('#admin-nav .nav-item[data-view]').forEach((b) => {
+      // Legacy guard: disabled buttons never fire click events, so a disabled
+      // Soon row is a dead control — Soon items are enabled buttons now.
       if (b.disabled) {
         b.addEventListener('click', () => showView('soon'));
+        return;
+      }
+      if (b.dataset.view === 'soon') {
+        b.addEventListener('click', () => showView('soon', {
+          label: b.dataset.soon || (b.textContent || '').trim() || 'Coming soon',
+          group: b.dataset.group || 'Roadmap',
+        }));
         return;
       }
       b.addEventListener('click', () => showView(b.dataset.view));
@@ -4727,6 +4755,17 @@
   }
 
   function bindChrome() {
+    // Desktop sidebar collapse: icon rail ⇄ full labels. Purely presentational
+    // (no navigation, auth, or data impact); hidden on mobile via CSS.
+    const sc = $('side-collapse');
+    if (sc) sc.addEventListener('click', () => {
+      const app = document.querySelector('.admin-shell');
+      if (!app) return;
+      const collapsed = app.classList.toggle('is-collapsed');
+      sc.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      sc.setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
+      sc.title = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+    });
     const t = $('nav-toggle');
     if (t) t.addEventListener('click', () => {
       const s = $('admin-sidebar');
