@@ -17,6 +17,11 @@
   --gx-glass: rgba(14, 14, 20, 0.58);
   --gx-glass-strong: rgba(14, 14, 20, 0.84);
   --gx-glass-wash: rgba(255, 255, 255, 0.06);
+  /* Floating nav panel: background-only translucency (contents stay opaque),
+     tuned so hero/ambient light passes through while text stays readable. */
+  --gx-glass-nav: rgba(15, 15, 20, 0.52);
+  --gx-glass-nav-scrolled: rgba(15, 15, 20, 0.68);
+  --gx-glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.07);
 
   /* ——— borders (low-opacity white only) ——— */
   --gx-border: rgba(255, 255, 255, 0.08);

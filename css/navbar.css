@@ -8,7 +8,11 @@
   top: 0;
   z-index: 40;
   padding: 12px 0 10px;
-  background: linear-gradient(to bottom, rgba(7, 7, 12, 0.72), rgba(7, 7, 12, 0));
+  /* Transparent wrapper: no static black wash behind the panel, so the
+     hero + ambient atmosphere stays visible around and through the glass.
+     Readability over bright hero tops still holds via the hero's own top
+     scrim (see css/hero.css .gx-hero-shade). */
+  background: transparent;
 }
 
 .gx-header-inner {
@@ -18,7 +22,10 @@
   min-width: 0;
 }
 
-/* ——— floating bar ——— */
+/* ——— floating bar ———
+ * Premium dark-glass panel: ONLY the background is translucent (rgba), so
+ * nav text/icons/search stay fully opaque while hero/ambient light shows
+ * through the blur behind them. Never `opacity:` on this element. */
 .gx-bar {
   display: flex;
   align-items: center;
@@ -27,18 +34,28 @@
   max-width: 100%;
   padding: 8px 10px;
   border-radius: var(--gx-radius-bar);
-  background: var(--gx-glass);
-  border: 1px solid var(--gx-border);
-  box-shadow: var(--gx-shadow-soft);
-  backdrop-filter: blur(18px) saturate(1.25);
-  -webkit-backdrop-filter: blur(18px) saturate(1.25);
+  background: var(--gx-glass-nav);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: var(--gx-shadow-soft), var(--gx-glass-highlight);
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
   transition: background var(--gx-transition), border-color var(--gx-transition), box-shadow var(--gx-transition);
 }
 
 .gx-header.is-scrolled .gx-bar {
-  background: var(--gx-glass-strong);
+  background: var(--gx-glass-nav-scrolled);
   border-color: var(--gx-border-strong);
-  box-shadow: var(--gx-shadow-bar);
+  box-shadow: var(--gx-shadow-bar), var(--gx-glass-highlight);
+}
+
+/* Graceful fallback where backdrop-filter is unavailable: a near-solid
+ * surface keeps the navbar readable instead of plain translucent wash. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .gx-bar { background: rgba(18, 18, 26, 0.94); }
+  .gx-header.is-scrolled .gx-bar { background: rgba(18, 18, 26, 0.97); }
+  .gx-mobile,
+  .collections-menu,
+  #search-results { background: rgba(18, 18, 26, 0.97); }
 }
 
 /* ——— logo ——— */
