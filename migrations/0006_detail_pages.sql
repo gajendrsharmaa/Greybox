@@ -1,0 +1,47 @@
+-- Greybox D1 migration 0006: detail page presentation configuration.
+--
+-- The public movie/TV detail modal (backdrop, poster, badge, title,
+-- metadata line, synopsis, Watch/Trailer/My List actions, where-to-watch,
+-- cast, and the TV season/episode section) is configurable from
+-- Admin → Detail Pages. Stored as ONE settings row (key 'detail_pages'),
+-- mirroring the existing 'home_hero' / 'collection_heroes' / 'navigation'
+-- settings pattern — no new table, no new router, no per-title rows for
+-- site-wide presentation flags:
+--
+--   {
+--     "header":  { "backdrop": true, "poster": true, "badge": true,
+--                  "title": true, "meta": true, "rating": true,
+--                  "genres": true, "overview": true },
+--     "actions": { "watch": true, "trailer": true, "myList": true },
+--     "content": { "providers": true, "cast": true },
+--     "tv":      { "episodes": true, "episodeOverview": true,
+--                  "episodeMeta": true }
+--   }
+--
+-- Conventions (same as every other Greybox-owned setting):
+--   - Stable identity is the group.key path (header.backdrop, tv.episodes,
+--     ...) — never a display label. Every flag is a plain boolean.
+--   - Hiding a section removes it from the rendered detail page but keeps
+--     the flag server-side, so re-showing restores it. Nothing is deleted.
+--   - Only elements that actually exist in the detail modal are exposed:
+--     there is no recommendations/original-title/logo control because the
+--     detail page renders none of those (see js/pages.js
+--     renderTitleDetail). TV-only flags safely no-op for movies.
+--   - Detail presentation NEVER overrides Blocked Titles: blocking is
+--     enforced in js/data.js getMovie/getTVDetails before any rendering,
+--     so a blocked title stays unavailable no matter what these flags say.
+--   - Playback, routing, TMDB queries, and episode loading are untouched —
+--     these flags only control whether already-fetched sections paint.
+--
+-- The seed below reproduces the current detail page exactly (everything
+-- shown), so applying this migration changes nothing visible until an
+-- Admin saves.
+--
+-- Apply AFTER 0005_navigation.sql. Re-running is safe (INSERT OR REPLACE,
+-- but note: re-applying resets detail pages to these defaults — Admin
+-- edits made after migration live in the same row and would be
+-- overwritten).
+-- Remote: `wrangler d1 execute greybox-db --remote --file=migrations/0006_detail_pages.sql`
+
+INSERT OR REPLACE INTO settings (key, value_json)
+VALUES ('detail_pages', '{"header":{"backdrop":true,"poster":true,"badge":true,"title":true,"meta":true,"rating":true,"genres":true,"overview":true},"actions":{"watch":true,"trailer":true,"myList":true},"content":{"providers":true,"cast":true},"tv":{"episodes":true,"episodeOverview":true,"episodeMeta":true}}');

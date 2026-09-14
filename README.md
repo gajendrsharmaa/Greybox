@@ -38,7 +38,7 @@ functions/api/config/tags.js          # Cloudflare: GET /api/config/tags (visibl
 functions/api/admin/tags.js, functions/api/admin/tags/[slug].js  # Cloudflare: tag CRUD + membership (requireAdmin)
 js/tags.config.js                 # Offline tag fallback (window.GreyboxTags, starts empty)
 js/blocked.config.js              # Offline blocklist fallback (window.GreyboxBlocked, starts empty)
-migrations/0001_schema.sql, migrations/0002_seed.sql, migrations/0003_tags.sql, migrations/0004_blocked.sql, migrations/0005_navigation.sql  # D1 schema + seed + tags + blocklist + navigation (mirrors js/*.config.js)
+migrations/0001_schema.sql, migrations/0002_seed.sql, migrations/0003_tags.sql, migrations/0004_blocked.sql, migrations/0005_navigation.sql, migrations/0006_detail_pages.sql  # D1 schema + seed + tags + blocklist + navigation + detail pages (mirrors js/*.config.js)
 wrangler.toml                     # Pages + D1 binding (DB); secrets stay in .dev.vars / dashboard
 api/trending.js, api/search.js, api/movies/[category].js, api/movie/[id].js, api/anime/[kind].js, api/tv/[...rest].js
                         # Vercel equivalents of the same Greybox contract
@@ -127,7 +127,7 @@ in bulk, never API secrets:
 | `tags` | Custom editorial tags (`slug`, `name`, `description`, `visible`, `badge`) |
 | `tag_members` | Ordered tag membership (identity only: `media` + `tmdb_id`, never titles/posters) |
 | `blocked_titles` | Permanent blocklist (`media`, `tmdb_id`, display snapshots, timestamps) — identity is always `media` + TMDB ID, enforced by PRIMARY KEY |
-| `settings` | Single-row settings: `home_hero` (the ONE authoritative Home Hero config), `collection_heroes` (separate per-collection scope), and `navigation` (the public navbar: ordered items + header-search flag) |
+| `settings` | Single-row settings: `home_hero` (the ONE authoritative Home Hero config), `collection_heroes` (separate per-collection scope), `navigation` (the public navbar: ordered items + header-search flag), and `detail_pages` (movie/TV detail visibility flags: header/actions/content/tv) |
 
 Authoritative Home Hero (`settings.home_hero` — the Admin and the public
 homepage read the same row; `js/homepage.config.js` is the offline fallback):
@@ -208,9 +208,10 @@ npx wrangler d1 execute greybox-db --local --file=migrations/0002_seed.sql
 npx wrangler d1 execute greybox-db --local --file=migrations/0003_tags.sql
 npx wrangler d1 execute greybox-db --local --file=migrations/0004_blocked.sql
 npx wrangler d1 execute greybox-db --local --file=migrations/0005_navigation.sql
+npx wrangler d1 execute greybox-db --local --file=migrations/0006_detail_pages.sql
 npx wrangler pages dev .
 # verify: curl /api/config/home, /api/config/collections,
-#         /api/config/collections/science-fiction, /api/config/overrides, /api/config/tags, /api/config/blocked, /api/config/navigation
+#         /api/config/collections/science-fiction, /api/config/overrides, /api/config/tags, /api/config/blocked, /api/config/navigation, /api/config/detail-pages
 # edit check: wrangler d1 execute greybox-db --local --command="UPDATE home_sections SET title='X' WHERE id='popular-movies'"
 #             → hard-refresh shows the new title (config cache is ~60s)
 ```
@@ -241,6 +242,8 @@ no accounts and no login flow beyond the token.
 | `/api/admin/blocked`, `/api/admin/blocked/:media/:id` | list blocked titles · block (201, 409 when already blocked) · read one · unblock (204, 404 when not blocked) |
 | `/api/admin/navigation` | read the full navigation config (GET) · replace it (PUT is full-replace: send all six items in display order + `searchVisible`) |
 | `/api/config/navigation` | public navigation config (all items with visible flags, display order, controlled routes + `searchVisible`, short cache) — the browser filters by `visible` |
+| `/api/admin/settings/detail-pages` | read the detail presentation config (GET) · replace it (PUT is full-replace: send all four groups with every boolean flag) |
+| `/api/config/detail-pages` | public detail visibility flags (header/actions/content/tv, short cache) — the detail modal hides what is flagged off |
 | `/api/config/blocked` | public identity-only blocklist (`[{ media, id }]`, short cache) — the browser filters through `isBlockedContent()` |
 | `/api/admin/settings/home-hero` | read · replace hero setting (PUT is full-replace: send the complete hero object) |
 | `/api/admin/settings/collection-heroes` | read · replace the collection-heroes map (read-modify-write so other collections are never clobbered) |
@@ -291,7 +294,7 @@ labeled Coming-soon panel — never dead/disabled rows. The sticky topbar
 reads `[section] / [workspace]` (e.g. Content / Heroes); the ⌘K control is
 a declared future affordance (per-workspace filters are the real search).
 Live views: Dashboard, Home, Heroes, Collections, Tags, Overrides, Blocked
-Titles, Navigation, Greybox Picks, TMDB Search, General Settings. Auth stays a memory-only token
+Titles, Navigation, Detail Pages, Greybox Picks, TMDB Search, General Settings. Auth stays a memory-only token
 session; no shell change touches API contracts, D1, or workspace logic.
 
 Collections workspace (`/admin` → Collections): cards with live counts,
@@ -419,12 +422,59 @@ exactly, offline fallback `js/navigation.config.js`).
   rewritten). If the config cannot be loaded, the static navbar stays
   exactly as-is. Public cache is `max-age=60`, so edits surface within
   ~a minute like every other config surface.
-- Automated checks: `node tests/navigation.test.cjs` (86 assertions:
+- Automated checks: `node tests/navigation.test.cjs` (87 assertions:
   defaults, visibility, labels, ordering, key stability, invalid
   key/label/order rejection, auth gating, public shape, fallback,
   save-to-navbar flow, hidden/reordered/relabeled rendering, My List and
   Search preservation, workspace UX, no-duplicate/no-leak guards, plus
   all three older suites green).
+
+Detail Pages workspace (`/admin` → Detail Pages): site-wide visibility
+flags for the public movie/TV detail modal over the D1 `settings` row
+`detail_pages` (migration `0006_detail_pages.sql`; seeded all-shown to
+reproduce the current detail page exactly, offline fallback
+`js/detail-pages.config.js`).
+
+- Model: four groups with stable `group.key` identity (never display
+  labels), every flag a plain boolean defaulting to shown — `header`
+  (backdrop, poster, badge, title, meta, rating, genres, overview),
+  `actions` (watch, trailer, myList), `content` (providers, cast), `tv`
+  (episodes, episodeOverview, episodeMeta). Only elements that actually
+  exist in `renderTitleDetail` are exposed: there is no recommendations /
+  original-title / logo setting because the detail page renders none of
+  those. TV-only flags safely no-op for movies (movies never reach the
+  season/episode renderers). PUT validates the complete grouped object
+  (unknown groups/keys, missing keys, non-booleans → `400`).
+- Public rendering: the browser preloads `GET /api/config/detail-pages`
+  once at boot (`js/data.js`, same batch as the other config) and the new
+  `js/detail-pages.js` wraps the four existing `GreyboxPages` entry
+  points in place — `renderTitleDetail` (post-apply hide + meta-segment
+  filtering), `renderSeasons`/`renderEpisodes` (section stays hidden when
+  off; episode preferences folded into a copy, resume state and playback
+  callbacks untouched), `renderPerson` (person pages always render full).
+  No second renderer, no caller changes: `js/app.js`, `js/pages.js`,
+  `js/components.js`, the router, playback, and TMDB queries are
+  untouched. If the config cannot load, every flag reads as shown and the
+  current detail page renders unchanged. Public cache is `max-age=60`.
+- Blocked Titles always win: blocking is enforced in `js/data.js`
+  `getMovie`/`getTVDetails` before any rendering, so the presentation
+  layer only ever sees resolved, allowed titles — no flag here can
+  render blocked content. The error state is never wrapped and always
+  renders full.
+- Admin workflow is staged like Navigation: grouped Show/Hide toggles
+  edit a local draft (Unsaved-changes badge + Save/Discard,
+  confirm-guarded Reset-to-defaults, Refresh); Save Changes PUTs the
+  complete object and verifies with a fresh GET. Loads and saves are
+  stale-guarded; failures show loading/error/retry states through the
+  existing toast/notice/stateBox primitives. No live preview: a preview
+  would duplicate the detail renderer, so the toggle list is the source
+  of truth.
+- Automated checks: `node tests/detail-pages.test.cjs` (80 assertions:
+  defaults, GET/PUT, auth gating, invalid rejection, public shape,
+  fallback, movie/TV/episode/cast/action integration, no invented
+  recommendations, blocked-still-rejected, unblocked-unaffected,
+  reset/defaults, stale protection, workspace UX, no-duplicate/no-leak
+  guards, plus all four older suites green).
 
 Authentication is a **memory-only session**: paste the token once per tab; it
 lives in a single JS variable, is sent as an `Authorization: Bearer` header,

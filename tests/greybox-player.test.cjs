@@ -138,9 +138,10 @@ try { diff = execSync('git status --short', { cwd: ROOT }).toString(); } catch (
 const changed = diff.split('\n').map((l) => l.trim()).filter(Boolean);
 // Intended-file allowlist, extended per increment (Blocked Titles increment
 // adds the blocklist's own files; the Navigation V1 increment adds the
-// navbar-config files below; the guard still fails on any UNintended
-// change, e.g. playback/provider/hero/router edits).
-const allowed = ['M index.html', 'M admin.html', 'M css/admin.css', 'M functions/lib/db.js', 'M functions/lib/validate.js', 'M js/stream.js', 'M js/greybox-player.js', 'M js/admin.js', 'M js/data.js', 'M tests/greybox-player.test.cjs', 'M tests/source-routing.test.cjs', 'M tests/blocked.test.cjs', 'M README.md', '?? css/player.css', '?? js/greybox-player.js', '?? js/greybox-test-source.js', '?? functions/api/admin/blocked.js', '?? functions/api/admin/blocked/', '?? functions/api/config/blocked.js', '?? js/blocked.config.js', '?? migrations/0004_blocked.sql', '?? functions/api/admin/navigation.js', '?? functions/api/config/navigation.js', '?? js/navigation.config.js', '?? js/navigation.js', '?? migrations/0005_navigation.sql', '?? tests/'];
+// navbar-config files; the Detail Pages V1 increment adds the detail-flags
+// files below; the guard still fails on any UNintended change, e.g.
+// playback/provider/hero/router/renderer edits).
+const allowed = ['M index.html', 'M admin.html', 'M css/admin.css', 'M functions/lib/db.js', 'M functions/lib/validate.js', 'M js/stream.js', 'M js/greybox-player.js', 'M js/admin.js', 'M js/data.js', 'M tests/greybox-player.test.cjs', 'M tests/source-routing.test.cjs', 'M tests/blocked.test.cjs', 'M README.md', '?? css/player.css', '?? js/greybox-player.js', '?? js/greybox-test-source.js', '?? functions/api/admin/blocked.js', '?? functions/api/admin/blocked/', '?? functions/api/config/blocked.js', '?? js/blocked.config.js', '?? migrations/0004_blocked.sql', '?? functions/api/admin/navigation.js', '?? functions/api/config/navigation.js', '?? js/navigation.config.js', '?? js/navigation.js', '?? migrations/0005_navigation.sql', '?? functions/api/admin/settings/detail-pages.js', '?? functions/api/config/detail-pages.js', '?? js/detail-pages.config.js', '?? js/detail-pages.js', '?? migrations/0006_detail_pages.sql', 'M tests/navigation.test.cjs', '?? tests/'];
 const unexpected = changed.filter((l) => !allowed.some((a) => l === a || (a.endsWith('/') && l.startsWith(a))));
 t('23b only intended files changed', diff === 'GIT-UNAVAILABLE' || unexpected.length === 0, unexpected.join(', '));
 // The Blocked Titles increment filters centrally in js/data.js by design

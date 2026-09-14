@@ -67,7 +67,8 @@
       load('/api/config/tags'),
       load('/api/config/blocked'),
       load('/api/config/navigation'),
-    ]).then(([home, collections, overrides, tags, blocked, navigation]) => {
+      load('/api/config/detail-pages'),
+    ]).then(([home, collections, overrides, tags, blocked, navigation, detailPages]) => {
       _remoteConfig = {
         home: (home && typeof home === 'object' && !Array.isArray(home)) ? home : null,
         collections: Array.isArray(collections) ? collections : null,
@@ -75,6 +76,7 @@
         tags: Array.isArray(tags) ? tags : null,
         blocked: Array.isArray(blocked) ? blocked : null,
         navigation: (navigation && typeof navigation === 'object' && !Array.isArray(navigation)) ? navigation : null,
+        detailPages: (detailPages && typeof detailPages === 'object' && !Array.isArray(detailPages)) ? detailPages : null,
       };
       return _remoteConfig;
     });
@@ -1426,6 +1428,77 @@
     };
   }
 
+  /* ---------------- detail page presentation (D1 first, local file fallback) ----------------
+   *
+   * D1 (`settings` row `detail_pages`, managed through
+   * /api/admin/settings/detail-pages and the Admin Detail Pages workspace)
+   * is the live source of truth; the public detail modal reads it via
+   * GET /api/config/detail-pages (preloaded once at boot above, offline
+   * fallback `js/detail-pages.config.js`).
+   *
+   * Site-wide visibility flags in four groups — identity is ALWAYS the
+   * group.key path (header.backdrop, tv.episodes, ...), never a display
+   * label. Every flag defaults to shown, so a missing/corrupt row renders
+   * exactly the current detail page. Only elements that actually exist in
+   * js/pages.js renderTitleDetail are listed (no recommendations setting:
+   * the detail page renders no recommendations). TV-only flags safely
+   * no-op for movies, and these flags never override Blocked Titles:
+   * blocking is enforced in getMovie/getTVDetails above, before any
+   * rendering happens — js/detail-pages.js only ever sees resolved,
+   * allowed titles.
+   *
+   * Failure fallback: any fetch problem leaves
+   * _remoteConfig.detailPages null and the getter below uses the local
+   * fallback file — a config failure never makes detail pages unusable.
+   */
+
+  const DETAIL_GROUPS = {
+    header: ['backdrop', 'poster', 'badge', 'title', 'meta', 'rating', 'genres', 'overview'],
+    actions: ['watch', 'trailer', 'myList'],
+    content: ['providers', 'cast'],
+    tv: ['episodes', 'episodeOverview', 'episodeMeta'],
+  };
+
+  function getDetailPagesSource() {
+    if (_remoteConfig && _remoteConfig.detailPages && typeof _remoteConfig.detailPages === 'object' && !Array.isArray(_remoteConfig.detailPages)) {
+      return _remoteConfig.detailPages;
+    }
+    const raw = (typeof window !== 'undefined' && window.GreyboxDetailPages) || null;
+    return (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : null;
+  }
+
+  // Lenient normalizer (mirrors sanitizeDetailPages server-side): unknown
+  // groups/keys dropped, missing flags read as shown, non-boolean values
+  // fall back to shown. Never throws — malformed config renders the
+  // default detail page.
+  function normalizeDetailPages(raw) {
+    const out = {};
+    try {
+      const src = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+      for (const g of Object.keys(DETAIL_GROUPS)) {
+        const node = src[g] && typeof src[g] === 'object' && !Array.isArray(src[g]) ? src[g] : {};
+        const clean = {};
+        for (const k of DETAIL_GROUPS[g]) {
+          clean[k] = node[k] === false ? false : true;
+        }
+        out[g] = clean;
+      }
+    } catch {
+      for (const g of Object.keys(DETAIL_GROUPS)) {
+        out[g] = {};
+        for (const k of DETAIL_GROUPS[g]) out[g][k] = true;
+      }
+    }
+    return out;
+  }
+
+  // Full normalized config (all groups with boolean flags) — for the
+  // detail presentation layer (js/detail-pages.js) and tests.
+  function getDetailPagesConfig() {
+    try { return normalizeDetailPages(getDetailPagesSource()); }
+    catch { return normalizeDetailPages(null); }
+  }
+
   /* ---------------- My List (localStorage, no database) ---------------- */
 
   const LS_KEY = 'sb_mylist';
@@ -1515,6 +1588,9 @@
     normalizeNavigation,
     getNavigationConfig,
     getVisibleNavigation,
+    DETAIL_GROUPS,
+    normalizeDetailPages,
+    getDetailPagesConfig,
     getMyList,
     saveMyList,
     toggleMyListItem,

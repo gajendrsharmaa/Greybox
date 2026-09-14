@@ -11,7 +11,7 @@
  * decide what to do when the DB binding is missing (see getDb).
  */
 
-import { sanitizeNavigation } from './validate.js';
+import { sanitizeNavigation, sanitizeDetailPages } from './validate.js';
 
 /** D1 binding (wrangler.toml `[[d1_databases]] binding = "DB"`), or null. */
 export function getDb(env) {
@@ -630,6 +630,28 @@ export async function readNavigation(db) {
     return sanitizeNavigation(raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null);
   } catch {
     return sanitizeNavigation(null);
+  }
+}
+
+/* ---------------- detail page presentation (Detail Pages workspace) ----------------
+ *
+ * The public detail modal's visibility flags live in ONE settings row (key
+ * 'detail_pages'), mirroring 'navigation' — no new table for site-wide
+ * presentation booleans. Stored shape: { header: {...8}, actions: {...3},
+ * content: {...2}, tv: {...3} }, every flag boolean, all default shown.
+ * Read-side shaping reuses the lenient sanitizeDetailPages() from
+ * validate.js so a corrupt row renders the default detail page, never a
+ * broken one. Blocking stays upstream in js/data.js: these flags only
+ * decide whether already-resolved sections paint.
+ */
+
+/** Full detail-pages config (all groups with boolean flags). */
+export async function readDetailPages(db) {
+  const raw = await readSetting(db, 'detail_pages');
+  try {
+    return sanitizeDetailPages(raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null);
+  } catch {
+    return sanitizeDetailPages(null);
   }
 }
 

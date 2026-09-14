@@ -597,6 +597,81 @@ export function sanitizeNavigation(raw) {
   return { items, searchVisible };
 }
 
+/* ---------------- detail page presentation (Detail Pages workspace) ----------------
+ *
+ * The public movie/TV detail modal exposes site-wide visibility flags in
+ * four groups. Identity is ALWAYS the group.key path (header.backdrop,
+ * tv.episodes, ...) — never a display label. Every flag is a plain
+ * boolean; TV-only flags safely no-op for movies. Only elements that
+ * actually exist in js/pages.js renderTitleDetail are exposed (no
+ * recommendations/original-title/logo setting exists because the detail
+ * page renders none of those). Presentation never overrides Blocked
+ * Titles: blocking is enforced in js/data.js before any rendering.
+ */
+
+export const DETAIL_GROUPS = {
+  header: ['backdrop', 'poster', 'badge', 'title', 'meta', 'rating', 'genres', 'overview'],
+  actions: ['watch', 'trailer', 'myList'],
+  content: ['providers', 'cast'],
+  tv: ['episodes', 'episodeOverview', 'episodeMeta'],
+};
+
+/**
+ * Validate a full detail-pages body (PUT full replace — staged Admin saves
+ * always send the complete grouped object). Every group must be present
+ * with exactly its known boolean keys; unknown groups/keys fail.
+ * Returns the normalized object ready for storage.
+ */
+export function validateDetailPagesBody(body) {
+  if (!isObj(body)) fail('body must be a JSON object');
+  const groups = Object.keys(DETAIL_GROUPS);
+  for (const g of Object.keys(body)) {
+    if (groups.indexOf(g) < 0) fail(`unknown detail group: "${g}"`);
+  }
+  const out = {};
+  for (const g of groups) {
+    const node = body[g];
+    if (!isObj(node)) fail(`"${g}" must be an object`);
+    for (const k of Object.keys(node)) {
+      if (DETAIL_GROUPS[g].indexOf(k) < 0) fail(`unknown detail setting: "${g}.${k}"`);
+    }
+    const clean = {};
+    for (const k of DETAIL_GROUPS[g]) {
+      if (!(k in node)) fail(`missing detail setting: "${g}.${k}" (hide with false, never by omission)`);
+      clean[k] = reqBool(node[k], `"${g}.${k}"`);
+    }
+    out[g] = clean;
+  }
+  return out;
+}
+
+/**
+ * Lenient read-side sanitizer for the stored detail-pages setting. A
+ * hand-edited or older row can never break public rendering: unknown
+ * groups/keys are dropped, missing flags read as shown (true), and
+ * non-boolean values fall back to shown. Never throws.
+ */
+export function sanitizeDetailPages(raw) {
+  const out = {};
+  try {
+    const src = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+    for (const g of Object.keys(DETAIL_GROUPS)) {
+      const node = src[g] && typeof src[g] === 'object' && !Array.isArray(src[g]) ? src[g] : {};
+      const clean = {};
+      for (const k of DETAIL_GROUPS[g]) {
+        clean[k] = node[k] === false ? false : true;
+      }
+      out[g] = clean;
+    }
+  } catch {
+    for (const g of Object.keys(DETAIL_GROUPS)) {
+      out[g] = {};
+      for (const k of DETAIL_GROUPS[g]) out[g][k] = true;
+    }
+  }
+  return out;
+}
+
 /**
  * Validate the home hero setting.
  *

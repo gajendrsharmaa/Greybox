@@ -204,9 +204,9 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
       <div id="m-video-wrap" class="mt-4 hidden aspect-video rounded-xl overflow-hidden bg-black">
         <iframe id="m-video" class="w-full h-full" allow="autoplay; encrypted-media" allowfullscreen></iframe>
       </div>
-      <h3 class="mt-6 font-bold">Where to watch legally</h3>
+      <h3 id="m-providers-head" class="mt-6 font-bold">Where to watch legally</h3>
       <div id="m-providers" class="mt-2 text-sm text-zinc-300">Loading...</div>
-      <h3 class="mt-6 font-bold">Cast</h3>
+      <h3 id="m-cast-head" class="mt-6 font-bold">Cast</h3>
       <div id="m-cast" class="mt-2 flex gap-3 overflow-x-auto text-xs text-zinc-300"></div>
       <h3 class="mt-6 font-bold">Your stream source (HLS / MP4)</h3>
       <p class="text-xs text-zinc-400 mt-1">Put your official API streaming link here — a direct <code>.m3u8</code> or <code>.mp4</code> from a source you own or license (your API, Cloudflare Stream, R2, S3, Mux).</p>
@@ -308,9 +308,11 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
 <script src="/js/tags.config.js?v=1"></script>
 <script src="/js/blocked.config.js?v=1"></script>
 <script src="/js/navigation.config.js?v=1"></script>
-<script src="/js/data.js?v=4"></script>
+<script src="/js/detail-pages.config.js?v=1"></script>
+<script src="/js/data.js?v=5"></script>
 <script src="/js/components.js?v=1"></script>
 <script src="/js/pages.js?v=1"></script>
+<script src="/js/detail-pages.js?v=1"></script>
 <script src="/js/hero.js?v=1"></script>
 <script src="/js/app.js?v=9"></script>
 <script src="/js/greybox-test-source.js?v=1"></script>

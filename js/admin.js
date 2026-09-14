@@ -74,6 +74,7 @@
     navigation: '/api/admin/navigation',
     hero: '/api/admin/settings/home-hero',
     colHeroes: '/api/admin/settings/collection-heroes',
+    detailPages: '/api/admin/settings/detail-pages',
   };
 
   async function api(path, opts) {
@@ -224,6 +225,7 @@
     tagAddGen++;
     blockedSearchGen++;
     navGen++;
+    dpGen++;
     try { if (drawerPrevFocus && drawerPrevFocus.focus) drawerPrevFocus.focus(); } catch { /* noop */ }
     drawerPrevFocus = null;
   }
@@ -243,6 +245,7 @@
     overrides: { title: 'Overrides', sub: 'Content' },
     blocked: { title: 'Blocked Titles', sub: 'Content' },
     navigation: { title: 'Navigation', sub: 'Experience' },
+    detail: { title: 'Detail Pages', sub: 'Experience' },
     picks: { title: 'Greybox Picks', sub: 'Content' },
     search: { title: 'TMDB Search', sub: 'Content' },
     settings: { title: 'General Settings', sub: 'Site' },
@@ -282,7 +285,7 @@
     if ($('crumb-sub')) $('crumb-sub').textContent = (section === workspace) ? '' : workspace;
     if (key === 'soon' && currentSoon) {
       if ($('soon-title')) $('soon-title').textContent = currentSoon.label;
-      if ($('soon-desc')) $('soon-desc').textContent = currentSoon.label + ' is on the Control Center roadmap and has no editor yet. Dashboard, Home, Heroes, Collections, Tags, Overrides, Blocked Titles, Navigation, Greybox Picks, TMDB Search and General Settings are live.';
+      if ($('soon-desc')) $('soon-desc').textContent = currentSoon.label + ' is on the Control Center roadmap and has no editor yet. Dashboard, Home, Heroes, Collections, Tags, Overrides, Blocked Titles, Navigation, Detail Pages, Greybox Picks, TMDB Search and General Settings are live.';
     }
     closeMobileNav();
     if (!ADMIN_TOKEN) return;
@@ -294,6 +297,7 @@
     if (key === 'overrides') loadOverrides();
     if (key === 'blocked') loadBlocked();
     if (key === 'navigation') loadNavigation();
+    if (key === 'detail') loadDetailPages();
     if (key === 'picks') loadPicks();
     if (key === 'settings') loadHero();
   }
@@ -4203,6 +4207,260 @@
     renderNavigation();
   }
 
+  /* ================= DETAIL PAGES (movie/TV detail presentation) =================
+   *
+   * Admin workspace over /api/admin/settings/detail-pages (GET read, PUT
+   * full-replace) for the D1 `settings` row `detail_pages`. Staged editing
+   * like Navigation: grouped Show/Hide toggles edit a local draft; nothing
+   * touches the server until Save Changes, which PUTs the complete grouped
+   * object and verifies with a fresh GET (a 200 alone is never shown as
+   * success). Identity is always the group.key path — every flag is a
+   * plain boolean, all default shown. Reset stages the defaults behind a
+   * confirmation (destructive to the draft, not the server, until saved).
+   *
+   * No live preview: a preview would duplicate the detail renderer
+   * (js/pages.js renderTitleDetail). The toggle list below is the source
+   * of truth; the public modal applies it via js/detail-pages.js.
+   */
+  const DP_GROUPS = [
+    {
+      key: 'header', title: 'Header', settings: [
+        { key: 'backdrop', label: 'Backdrop artwork', desc: 'Cinematic backdrop behind the title (falls back to poster art).' },
+        { key: 'poster', label: 'Poster image', desc: 'Poster thumbnail beside the synopsis.' },
+        { key: 'badge', label: 'Title badge', desc: 'Greybox Pick / custom badge pill plus tag badges.' },
+        { key: 'title', label: 'Title', desc: 'Movie or show title heading.' },
+        { key: 'meta', label: 'Metadata line', desc: 'Year · type · rating · genres line under the title.' },
+        { key: 'rating', label: 'Rating in metadata', desc: 'Star-rating segment inside the metadata line.' },
+        { key: 'genres', label: 'Genres in metadata', desc: 'Genre-list segment inside the metadata line.' },
+        { key: 'overview', label: 'Synopsis', desc: 'Full overview text below the header.' },
+      ],
+    },
+    {
+      key: 'actions', title: 'Actions', settings: [
+        { key: 'watch', label: 'Watch Now button', desc: 'Primary playback entry point (playback itself is unchanged).' },
+        { key: 'trailer', label: 'Trailer button', desc: 'Inline trailer player trigger.' },
+        { key: 'myList', label: 'My List button', desc: 'Save-to-list toggle (list storage is unchanged).' },
+      ],
+    },
+    {
+      key: 'content', title: 'Content', settings: [
+        { key: 'providers', label: 'Where to watch', desc: 'Legal provider offers plus the JustWatch guide link.' },
+        { key: 'cast', label: 'Cast', desc: 'Top-billed cast row with photos and characters.' },
+      ],
+    },
+    {
+      key: 'tv', title: 'TV / Episodes', settings: [
+        { key: 'episodes', label: 'Episodes section', desc: 'Season picker plus episode list (TV only; ignored for movies).' },
+        { key: 'episodeOverview', label: 'Episode overviews', desc: 'Per-episode synopsis lines.' },
+        { key: 'episodeMeta', label: 'Episode details', desc: 'Runtime and air-date lines (resume state always stays).' },
+      ],
+    },
+  ];
+
+  let dpServer = null; // last saved config from GET (null until loaded)
+  let dpDraft = null; // staged edits { header, actions, content, tv }
+  let dpGen = 0; // stale-guard generation for loads/saves
+  let dpSaving = false;
+
+  function dpDefaults() {
+    const o = {};
+    for (const g of DP_GROUPS) {
+      o[g.key] = {};
+      for (const s of g.settings) o[g.key][s.key] = true;
+    }
+    return o;
+  }
+
+  function dpClone(v) {
+    try { return JSON.parse(JSON.stringify(v)); }
+    catch { return dpDefaults(); }
+  }
+
+  // Client-side first pass (mirrors validateDetailPagesBody server-side;
+  // the server re-validates everything — a failed save is never shown as
+  // ok). Returns an error string, or null when the draft is saveable.
+  function dpValidateDraft(draft) {
+    if (!draft || typeof draft !== 'object' || Array.isArray(draft)) return 'Detail Pages data is missing.';
+    for (const g of DP_GROUPS) {
+      const node = draft[g.key];
+      if (!node || typeof node !== 'object' || Array.isArray(node)) return 'Detail Pages group "' + g.key + '" is missing.';
+      for (const s of g.settings) {
+        if (typeof node[s.key] !== 'boolean') return 'Detail Pages setting "' + g.key + '.' + s.key + '" must be on or off.';
+      }
+    }
+    return null;
+  }
+
+  function dpStableJson(v) {
+    const d = (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
+    const out = {};
+    for (const g of DP_GROUPS) {
+      const node = d[g.key] && typeof d[g.key] === 'object' ? d[g.key] : {};
+      out[g.key] = {};
+      for (const s of g.settings) out[g.key][s.key] = node[s.key] !== false;
+    }
+    return JSON.stringify(out);
+  }
+
+  function dpIsDirty() {
+    if (!dpServer || !dpDraft) return false;
+    return dpStableJson(dpDraft) !== dpStableJson(dpServer);
+  }
+
+  // Lenient shaping for GET responses (mirrors the server sanitizer):
+  // unknown groups/keys dropped, missing or non-boolean flags read as
+  // shown. Never throws.
+  function normalizeDpServer(cfg) {
+    const out = dpDefaults();
+    try {
+      const src = cfg && typeof cfg === 'object' && !Array.isArray(cfg) ? cfg : {};
+      for (const g of DP_GROUPS) {
+        const node = src[g.key] && typeof src[g.key] === 'object' && !Array.isArray(src[g.key]) ? src[g.key] : {};
+        for (const s of g.settings) {
+          out[g.key][s.key] = node[s.key] === false ? false : true;
+        }
+      }
+    } catch { /* defaults stand */ }
+    return out;
+  }
+
+  async function loadDetailPages() {
+    const host = $('dp-groups');
+    if (!host) return;
+    const myGen = ++dpGen;
+    stateBox(host, 'loading', 'Loading detail pages…');
+    dpServer = null;
+    dpDraft = null;
+    updateDpChrome();
+    try {
+      const cfg = await api(API.detailPages);
+      if (myGen !== dpGen) return; // stale: a newer load owns the view
+      dpServer = normalizeDpServer(cfg);
+      dpDraft = dpClone(dpServer);
+      if (myGen !== dpGen) return;
+      renderDetailPages();
+    } catch (e) {
+      if (myGen !== dpGen) return;
+      host.innerHTML = '';
+      const box = stateBox(host, 'error', 'Detail Pages failed to load', (e && e.message) || String(e));
+      const retry = el('button', 'btn btn-secondary btn-sm', 'Retry');
+      retry.type = 'button';
+      retry.addEventListener('click', loadDetailPages);
+      box.appendChild(retry);
+      notice('err', 'Detail Pages failed to load: ' + ((e && e.message) || e));
+    }
+  }
+
+  function dpToggle(group, key) {
+    if (!dpDraft || dpSaving) return;
+    if (!dpDraft[group] || typeof dpDraft[group][key] !== 'boolean') return;
+    dpDraft[group][key] = !dpDraft[group][key];
+    renderDetailPages();
+  }
+
+  function dpRow(group, meta, on) {
+    const card = el('div', 'data-row');
+    const head = el('div', 'row-top');
+    head.appendChild(el('span', 'row-title', meta.label));
+    head.appendChild(statusBadge({ visible: on }));
+    card.appendChild(head);
+    card.appendChild(el('p', 'row-meta', meta.desc));
+    card.appendChild(rowButtons([
+      [on ? 'Hide' : 'Show', on ? '' : 'go', () => dpToggle(group, meta.key), on ? 'Hide from detail pages' : 'Show on detail pages'],
+    ]));
+    return card;
+  }
+
+  function renderDetailPages() {
+    const host = $('dp-groups');
+    if (!host || !dpDraft) return;
+    host.innerHTML = '';
+    for (const g of DP_GROUPS) {
+      const head = el('h2', 'section-subhead', g.title);
+      if (host.children.length) head.style.marginTop = '1.1rem';
+      host.appendChild(head);
+      const list = el('div', 'row-list');
+      for (const s of g.settings) {
+        list.appendChild(dpRow(g.key, s, dpDraft[g.key] ? dpDraft[g.key][s.key] !== false : true));
+      }
+      host.appendChild(list);
+    }
+    updateDpChrome();
+  }
+
+  function updateDpChrome() {
+    const dirty = dpIsDirty();
+    const badge = $('dp-dirty');
+    if (badge) badge.classList.toggle('hidden', !dirty);
+    const save = $('dp-save');
+    if (save) save.disabled = !dirty || dpSaving || !dpDraft;
+    const discard = $('dp-discard');
+    if (discard) discard.disabled = !dirty || dpSaving || !dpDraft;
+    const reset = $('dp-reset');
+    if (reset) reset.disabled = dpSaving || !dpDraft;
+  }
+
+  async function saveDetailPages() {
+    if (dpSaving || !dpDraft) return;
+    const err = dpValidateDraft(dpDraft);
+    if (err) {
+      notice('err', err);
+      renderDetailPages();
+      return;
+    }
+    const myGen = ++dpGen;
+    dpSaving = true;
+    updateDpChrome();
+    const saveBtn = $('dp-save');
+    const prevLabel = saveBtn ? saveBtn.textContent : '';
+    if (saveBtn) { saveBtn.textContent = 'Saving…'; saveBtn.disabled = true; }
+    try {
+      const payload = JSON.parse(dpStableJson(dpDraft));
+      await api(API.detailPages, { method: 'PUT', body: payload });
+      // Never trust the 200 alone: read the row back before showing success.
+      const readBack = await api(API.detailPages);
+      if (myGen !== dpGen) return; // stale: a newer load/save owns the view
+      const shaped = normalizeDpServer(readBack);
+      if (dpStableJson(shaped) !== dpStableJson(payload)) {
+        notice('err', 'Save reported success, but a fresh read-back differs — not showing success. Refresh and retry.');
+      } else {
+        notice('ok', 'Detail Pages saved. Movie and TV details update within ~a minute.');
+      }
+      dpServer = shaped;
+      dpDraft = dpClone(shaped);
+      renderDetailPages();
+    } catch (e) {
+      if (myGen !== dpGen) return;
+      notice('err', 'Detail Pages save failed: ' + ((e && e.message) || e));
+    } finally {
+      dpSaving = false;
+      if (myGen === dpGen) {
+        if (saveBtn && saveBtn.isConnected) saveBtn.textContent = prevLabel || 'Save Changes';
+        updateDpChrome();
+      }
+    }
+  }
+
+  function discardDetailPages() {
+    if (!dpServer || dpSaving) return;
+    if (!dpIsDirty()) return;
+    dpDraft = dpClone(dpServer);
+    renderDetailPages();
+    notice('ok', 'Unsaved Detail Pages changes discarded.');
+  }
+
+  async function resetDetailPages() {
+    if (!dpDraft || dpSaving) return;
+    const ok = await confirmDialog({
+      title: 'Reset detail pages?',
+      message: 'Stage the default detail page (every section shown)? Your unsaved draft edits will be lost; nothing is saved until you press Save Changes.',
+      okLabel: 'Reset to defaults',
+    });
+    if (!ok) return;
+    dpDraft = dpDefaults();
+    renderDetailPages();
+  }
+
   /* ================= GREYBOX PICKS (read view over existing overrides) ================= */
   async function loadPicks() {
     const host = $('picks-list');
@@ -5518,6 +5776,14 @@
     if (nvReset) nvReset.addEventListener('click', resetNavigation);
     const nvRefresh = $('nav-refresh');
     if (nvRefresh) nvRefresh.addEventListener('click', loadNavigation);
+    const dpSave = $('dp-save');
+    if (dpSave) dpSave.addEventListener('click', saveDetailPages);
+    const dpDiscard = $('dp-discard');
+    if (dpDiscard) dpDiscard.addEventListener('click', discardDetailPages);
+    const dpReset = $('dp-reset');
+    if (dpReset) dpReset.addEventListener('click', resetDetailPages);
+    const dpRefresh = $('dp-refresh');
+    if (dpRefresh) dpRefresh.addEventListener('click', loadDetailPages);
     const dr = $('dash-refresh');
     if (dr) dr.addEventListener('click', loadDashboard);
     const hr = $('heroes-refresh');
@@ -5677,6 +5943,8 @@
       navDefaults, navValidateDraft, navStableJson, navRouteLabel,
       normalizeNavServer, loadNavigation, renderNavigation, navIsDirty,
       NAV_LABEL_MAX,
+      DP_GROUPS, dpDefaults, dpValidateDraft, dpStableJson,
+      normalizeDpServer, loadDetailPages, renderDetailPages, dpIsDirty,
       slugifyTag, tagCounts, stableTagJson, tagMemberKey,
       fetchGenres, genreName, GENRE_CACHE,
       PICK_BADGE, isGreyboxPick, validPickTarget,

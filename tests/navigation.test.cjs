@@ -208,9 +208,13 @@ t('17c search visibility is a separate flag (not a fake nav item)',
 /* ---- admin workspace shell ---- */
 t('A1 sidebar Navigation is a live view (Soon removed only here)',
   /data-view="navigation"/.test(adminHtml) && !/data-soon="Navigation"/.test(adminHtml));
+// Detail Pages V1 promotes Detail Pages to a live workspace (its Soon badge
+// is intentionally gone) — the guard below still pins every REMAINING Soon
+// entry so no unrelated module is silently scaffolded or un-scaffolded.
 t('A2 unrelated Soon entries untouched',
-  /data-soon="Activity"/.test(adminHtml) && /data-soon="Detail Pages"/.test(adminHtml) &&
-  /data-soon="Playback"/.test(adminHtml) && /data-soon="Branding"/.test(adminHtml) &&
+  /data-soon="Activity"/.test(adminHtml) && !/data-soon="Detail Pages"/.test(adminHtml) &&
+  /data-view="detail"/.test(adminHtml) && /data-soon="Playback"/.test(adminHtml) &&
+  /data-soon="Branding"/.test(adminHtml) &&
   /data-soon="Theme"/.test(adminHtml) && /data-soon="SEO \/ Metadata"/.test(adminHtml));
 t('A3 workspace section: actions, list, search panel, preview, dirty flag',
   /id="view-navigation"/.test(adminHtml) && /id="nav-save"/.test(adminHtml) &&
@@ -257,11 +261,15 @@ t('R2 router untouched (no second router, no route changes)',
       return !/js\/router\.js/.test(out);
     } catch { return false; }
   })());
+// Detail Pages V1 adds js/detail-pages.js + js/detail-pages.config.js —
+// new files whose names contain the substring "pages.js". The guard below
+// matches on "/pages.js" so it still fails on any real edit to the
+// js/pages.js renderer itself (same for components).
 t('R3 no playback/hero/detail/blocked/dashboard regressions in the diff',
   (() => {
     try {
       const out = execSync('git diff --name-only && git ls-files --others --exclude-standard', { cwd: ROOT, stdio: 'pipe' }).toString();
-      return !/stream\.js|greybox-player\.js|hero\.js|player\.css|pages\.js|components\.js|shelves\.js|collections-nav\.js|navbar\.css/.test(out) &&
+      return !/\/stream\.js|\/greybox-player\.js|\/hero\.js|player\.css|\/pages\.js|\/components\.js|shelves\.js|collections-nav\.js|navbar\.css/.test(out) &&
         !/0001_schema|0002_seed|0003_tags|0004_blocked/.test(out);
     } catch { return false; }
   })());

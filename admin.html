@@ -79,7 +79,7 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
 
       <p class="nav-group">Experience</p>
       <button class="nav-item" data-view="navigation" data-label="Navigation" title="Navigation"><svg class="nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M16.2 7.8l-2.5 6-6 2.5 2.5-6z"/></svg><span class="nav-label">Navigation</span></button>
-      <button class="nav-item nav-soon" data-view="soon" data-soon="Detail Pages" data-group="Experience" data-label="Detail Pages" title="Detail Pages — coming soon"><svg class="nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg><span class="nav-label">Detail Pages</span><span class="badge badge-soon">Soon</span></button>
+      <button class="nav-item" data-view="detail" data-label="Detail Pages" title="Detail Pages"><svg class="nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg><span class="nav-label">Detail Pages</span></button>
       <button class="nav-item nav-soon" data-view="soon" data-soon="Playback" data-group="Experience" data-label="Playback" title="Playback — coming soon"><svg class="nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M10 8l6 4-6 4z"/></svg><span class="nav-label">Playback</span><span class="badge badge-soon">Soon</span></button>
 
       <p class="nav-group">Appearance</p>
@@ -338,6 +338,24 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
         <h2 class="section-subhead" style="margin-top:1.1rem">Preview</h2>
         <p class="muted text-sm" style="margin-bottom:.6rem">Preview of the public navbar from the current draft — display only, not the real navbar.</p>
         <div id="nav-preview" class="panel nav-preview" aria-live="polite"></div>
+      </section>
+
+      <!-- DETAIL PAGES (movie/TV detail presentation) -->
+      <section id="view-detail" class="admin-view hidden" aria-labelledby="dp-title">
+        <div class="page-head">
+          <div>
+            <h1 id="dp-title" class="page-title">Detail Pages</h1>
+            <p class="page-desc">Control the sections and actions displayed on movie and TV detail pages. Hiding a section never deletes data — re-showing restores it, and blocked titles stay unavailable regardless of these settings.</p>
+          </div>
+          <div class="page-actions">
+            <span id="dp-dirty" class="badge badge-dirty hidden" role="status">Unsaved changes</span>
+            <button id="dp-save" class="btn btn-primary btn-sm">Save Changes</button>
+            <button id="dp-discard" class="btn btn-secondary btn-sm">Discard</button>
+            <button id="dp-reset" class="btn btn-secondary btn-sm">Reset to defaults</button>
+            <button id="dp-refresh" class="btn btn-secondary btn-sm">Refresh</button>
+          </div>
+        </div>
+        <div id="dp-groups"></div>
       </section>
 
       <!-- HEROES (Part 2 Hero Control Center) -->
