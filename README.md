@@ -153,7 +153,14 @@ never reach YouTube (`pointer-events:none`, `tabindex=-1`), and a naturally
 ending non-loop trailer falls back to the still instead of lingering on the
 endscreen. Greybox's own controls stay independent: the circular
 mute/unmute button (visible only while playing), Watch Now, More Info and
-In My List. Limitation (platform-imposed): YouTube does not offer a fully
+In My List. The bottom shade is a reduced cinematic fade covering only
+approximately the bottom 20% of the hero (upper ~80% stays clear), with
+enough darkness behind the title/buttons for readability. The page beneath
+the hero is a dynamic poster-derived ambient background (`#page-ambient`):
+the current hero artwork reused as a heavily blurred/scaled/darkened layer
+plus a translucent glass gradient fading to the base color — no hardcoded
+color, updates on every hero change, stays behind the trailer/text/navbar.
+Limitation (platform-imposed): YouTube does not offer a fully
 brand-free player — a watermark/"Watch on YouTube" affordance can still
 exist inside the video frame; what is guaranteed is no visible playback
 controls over the hero.

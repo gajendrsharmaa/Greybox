@@ -23,6 +23,13 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 </head>
 <body class="min-h-screen">
+<!-- PAGE AMBIENT — poster-derived blurred atmosphere below the hero (js/hero.js keeps
+     #page-ambient-img in sync with the current hero artwork; see css/hero.css).
+     Sits behind hero + content, never above trailer/text/navbar. -->
+<div id="page-ambient" class="gx-page-ambient" aria-hidden="true">
+  <img id="page-ambient-img" class="gx-page-ambient-img" alt="" decoding="async" />
+  <div class="gx-page-ambient-glass"></div>
+</div>
 <!-- NAV — Phase 1 floating glass system (IDs + data-nav preserved) -->
 <header id="site-header" class="gx-header">
   <div class="gx-header-inner">

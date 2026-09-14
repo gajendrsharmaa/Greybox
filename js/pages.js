@@ -564,6 +564,10 @@
       if (hi) { try { hi.removeAttribute('src'); } catch (e) { /* noop */ } }
       const ha = $('hero-ambient');
       if (ha) { try { ha.removeAttribute('src'); } catch (e) { /* noop */ } }
+      const pa = $('page-ambient-img');
+      if (pa) { try { pa.removeAttribute('src'); } catch (e) { /* noop */ } }
+      const pah = $('page-ambient');
+      if (pah) pah.classList.remove('is-visible');
     } catch (e) { /* hero optional in headless use */ }
     c.setPageLabel(1);
   }

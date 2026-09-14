@@ -467,6 +467,42 @@
     });
   }
 
+  /* Poster-derived page ambient (increment: hero ambient background).
+   * Reuses the exact poster URL already resolved for the hero still — no
+   * hardcoded color, no per-movie palette, no canvas, no video-frame
+   * processing. The blurred CSS layer (#page-ambient-img, css/hero.css)
+   * sits behind hero/main/footer and only contributes color/light, never a
+   * recognizable poster. Updated only here (hero ready) + showError/
+   * setLoading/pages renderNotFound clear paths, so it always follows the
+   * current hero identity via the same gen+identity guards as the still. */
+  function setPageAmbient(url) {
+    try {
+      var host = $('page-ambient');
+      var el = $('page-ambient-img');
+      if (!host || !el || !url) return;
+      el.alt = '';
+      // Assigning the same URL the hero just preloaded is cache-hot: no
+      // extra network cost beyond the blurred CSS presentation.
+      if (el.getAttribute('src') !== url) el.src = url;
+      host.classList.add('is-visible');
+    } catch (e) { /* ambient never breaks hero */ }
+  }
+
+  function hidePageAmbient() {
+    try {
+      var host = $('page-ambient');
+      if (host) host.classList.remove('is-visible');
+    } catch (e) { /* noop */ }
+  }
+
+  function clearPageAmbient() {
+    try {
+      var el = $('page-ambient-img');
+      if (el) { try { el.removeAttribute('src'); } catch (e) { /* noop */ } }
+    } catch (e) { /* noop */ }
+    hidePageAmbient();
+  }
+
   function loadBackdrop(item, myGen, expectedIdentity) {
     var hero = heroEl();
     var img = $('hero-img');
@@ -502,6 +538,7 @@
         img.src = url;
         img.alt = '';
         if (ambient) { ambient.src = url; ambient.alt = ''; }
+        setPageAmbient(url);
         if (hero) {
           // Restart the Ken Burns run for the new artwork.
           hero.classList.remove('is-ready');
@@ -820,6 +857,7 @@
       current = null;
       currentIdentity = null;
       if (hero) { hero.classList.add('hero-loading'); hero.classList.remove('is-ready'); }
+      hidePageAmbient();
       var badge = $('hero-badge');
       var title = $('hero-title');
       var meta = $('hero-meta');
@@ -849,6 +887,7 @@
       if (staleImg) { try { staleImg.removeAttribute('src'); } catch (e) { /* noop */ } }
       var staleAmbient = $('hero-ambient');
       if (staleAmbient) { try { staleAmbient.removeAttribute('src'); } catch (e) { /* noop */ } }
+      clearPageAmbient();
     } catch (e) { /* noop */ }
     var hero = heroEl();
     if (hero) { hero.classList.remove('hero-loading'); hero.classList.remove('is-ready'); }
