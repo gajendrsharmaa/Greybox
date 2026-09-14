@@ -140,24 +140,34 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
             <button class="btn btn-secondary btn-sm" data-quick-new="override">+ New Override</button>
           </div>
         </div>
+        <h2 class="section-subhead">Overview</h2>
         <div id="dash-cards" class="stat-grid" aria-live="polite"></div>
         <div class="dash-grid">
           <div class="panel">
-            <div class="panel-head"><h2>Current configuration</h2><button class="btn btn-ghost btn-sm" id="dash-refresh">Refresh</button></div>
+            <div class="panel-head"><h2>Site configuration</h2><button class="btn btn-ghost btn-sm" id="dash-refresh">Refresh</button></div>
             <div id="dash-config"></div>
           </div>
-          <div class="panel">
-            <div class="panel-head"><h2>Quick actions</h2></div>
-            <div class="quick-grid">
-              <button class="quick-card" data-quick-new="section"><strong>+ New Section</strong><span>Add a homepage shelf</span></button>
-              <button class="quick-card" data-quick-new="collection"><strong>+ New Collection</strong><span>Add a rule-based row</span></button>
-              <button class="quick-card" data-quick-new="tag"><strong>+ New Tag</strong><span>Add an editorial content group</span></button>
-              <button class="quick-card" data-quick-new="override"><strong>+ New Override</strong><span>Fix a title's metadata</span></button>
-              <button class="quick-card" data-goto="search"><strong>Search TMDB</strong><span>Find movies &amp; TV</span></button>
+          <div class="dash-side">
+            <div class="panel">
+              <div class="panel-head"><h2>Hero status</h2><button class="btn btn-ghost btn-sm" data-goto="heroes">Configure</button></div>
+              <div id="dash-hero" aria-live="polite"></div>
             </div>
-            <div class="panel-head" style="margin-top:1rem"><h2>Roadmap</h2></div>
-            <p class="muted text-sm">Blocked Titles, Navigation, Footer, SEO, Integrations and Diagnostics are scaffolded in the sidebar as <span class="badge badge-soon">Soon</span> — they become real editors in later increments. No placeholder controls were added.</p>
+            <div class="panel">
+              <div class="panel-head"><h2>Quick actions</h2></div>
+              <div class="quick-grid">
+                <button class="quick-card" data-quick-new="section"><strong>+ New Section</strong><span>Add a homepage shelf</span></button>
+                <button class="quick-card" data-quick-new="collection"><strong>+ New Collection</strong><span>Add a rule-based row</span></button>
+                <button class="quick-card" data-quick-new="tag"><strong>+ New Tag</strong><span>Add an editorial content group</span></button>
+                <button class="quick-card" data-quick-new="override"><strong>+ New Override</strong><span>Fix a title's metadata</span></button>
+                <button class="quick-card" data-goto="search"><strong>Search TMDB</strong><span>Find movies &amp; TV</span></button>
+              </div>
+            </div>
           </div>
+        </div>
+        <div class="panel dash-roadmap">
+          <div class="panel-head"><h2>Control Center roadmap</h2><span class="badge badge-soon">Soon</span></div>
+          <div id="dash-roadmap" class="roadmap-grid" aria-live="polite"></div>
+          <p class="muted text-sm roadmap-note">Roadmap entries mirror the sidebar — they become real editors in later increments. No placeholder controls were added.</p>
         </div>
       </section>
 

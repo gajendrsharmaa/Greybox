@@ -4569,10 +4569,70 @@
     return row;
   }
 
+  // Dashboard-only icons (static strings, no user data — safe for innerHTML).
+  // Same stroke set as the sidebar; kept local so workspace code is untouched.
+  const DASH_ICONS = {
+    sections: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg>',
+    collections: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>',
+    tags: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>',
+    overrides: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>',
+    heroes: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z"/></svg>',
+  };
+
+  // Hero status panel: mode + the same runtime summary the config row used.
+  // Values come from the live /api/admin/settings/home-hero response.
+  function renderDashHero(hero, failed) {
+    const host = $('dash-hero');
+    if (!host) return;
+    host.innerHTML = '';
+    if (!hero) {
+      host.appendChild(el('p', 'dash-hero-mode', '—'));
+      host.appendChild(el('p', 'dash-hero-detail muted text-sm', failed ? 'Hero settings unavailable.' : 'Loading…'));
+      return;
+    }
+    const mode = hero.mode === 'custom' ? 'Custom spotlight' : (hero.mode === 'spotlight' ? 'Spotlight title' : 'Follow-grid');
+    host.appendChild(el('p', 'dash-hero-mode', mode));
+    host.appendChild(el('p', 'dash-hero-detail muted text-sm', heroSummaryText(hero)));
+  }
+
+  // Roadmap mirrors the sidebar Soon entries (single source: #admin-nav).
+  // No backend, no hardcoding — regroups automatically if nav changes.
+  function renderDashRoadmap() {
+    const host = $('dash-roadmap');
+    if (!host) return;
+    host.innerHTML = '';
+    const items = document.querySelectorAll('#admin-nav .nav-item.nav-soon');
+    if (!items.length) {
+      host.appendChild(el('p', 'muted text-sm', 'No roadmap items — every section is live.'));
+      return;
+    }
+    const groups = {};
+    const order = [];
+    items.forEach((b) => {
+      const g = (b.dataset.group || 'Roadmap').trim() || 'Roadmap';
+      const label = (b.dataset.soon || (b.textContent || '').trim()).trim() || 'Coming soon';
+      if (!groups[g]) { groups[g] = []; order.push(g); }
+      groups[g].push(label);
+    });
+    order.forEach((g) => {
+      const col = el('div', 'roadmap-col');
+      col.appendChild(el('p', 'roadmap-group', g));
+      groups[g].forEach((label) => {
+        const row = el('div', 'roadmap-row');
+        row.appendChild(el('span', 'roadmap-label', label));
+        row.appendChild(el('span', 'badge badge-soon', 'Soon'));
+        col.appendChild(row);
+      });
+      host.appendChild(col);
+    });
+  }
+
   async function loadDashboard() {
     const cards = $('dash-cards');
     const cfg = $('dash-config');
     if (!cards || !cfg) return;
+    renderDashRoadmap();
+    renderDashHero(null, false);
     cards.innerHTML = '';
     for (let i = 0; i < 5; i++) {
       const sk = el('div', 'skel');
@@ -4613,8 +4673,15 @@
       const b = el('button', 'stat-card');
       b.type = 'button';
       b.setAttribute('aria-label', s.label + ': ' + s.n + '. Go to ' + s.label);
+      const top = el('span', 'stat-top');
+      const ic = document.createElement('span');
+      ic.className = 'stat-ic';
+      ic.setAttribute('aria-hidden', 'true');
+      ic.innerHTML = DASH_ICONS[s.view] || '';
+      top.appendChild(ic);
+      top.appendChild(el('span', 'stat-label', s.label));
+      b.appendChild(top);
       b.appendChild(el('p', 'stat-num', s.n));
-      b.appendChild(el('p', 'stat-label', s.label));
       b.appendChild(el('p', 'stat-sub', s.sub));
       b.addEventListener('click', () => showView(s.view));
       cards.appendChild(b);
@@ -4627,6 +4694,7 @@
       retry.type = 'button';
       retry.addEventListener('click', loadDashboard);
       box.appendChild(retry);
+      renderDashHero(null, true);
       return;
     }
     if (secs) {
@@ -4651,9 +4719,11 @@
       dashRow(cfg, 'Overrides', ovs.length ? ovs.length + ' configured · ' + picks + ' ★ picks' : 'None yet', 'Open', () => showView('overrides'));
     }
     if (hero) {
-      dashRow(cfg, 'Hero', heroSummaryText(hero), 'Configure', () => showView('heroes'));
+      renderDashHero(hero, false);
     } else if (heroRes.status === 'rejected') {
-      dashRow(cfg, 'Hero', 'Unavailable', 'Configure', () => showView('heroes'));
+      renderDashHero(null, true);
+    } else {
+      renderDashHero(null, false);
     }
   }
 
