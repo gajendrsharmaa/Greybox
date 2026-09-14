@@ -4,14 +4,22 @@
  * All route/search/collections IDs are preserved — styling only. */
 
 .gx-header {
-  position: sticky;
-  top: 0;
+  /* Floating overlay: removed from document flow so it never reserves a
+     header band or pushes the hero down — the hero starts at the viewport
+     top and extends behind this panel. Stays pinned while scrolling (same
+     as the old sticky behavior) via fixed positioning.
+     z-index 40 sits above the hero (z 1) but deliberately below the
+     modal/player overlays (z 50), so popups still cover the nav. */
+  position: fixed;
+  top: 12px;
+  left: 0;
+  right: 0;
   z-index: 40;
-  padding: 12px 0 10px;
+  padding: 0;
   /* Transparent wrapper: no static black wash behind the panel, so the
-     hero + ambient atmosphere stays visible around and through the glass.
-     Readability over bright hero tops still holds via the hero's own top
-     scrim (see css/hero.css .gx-hero-shade). */
+     hero/trailer + ambient atmosphere stays visible around and through
+     the glass. Readability over bright hero tops still holds via the
+     hero's own top scrim (see css/hero.css .gx-hero-shade). */
   background: transparent;
 }
 
