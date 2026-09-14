@@ -487,6 +487,116 @@ export function validateBlockedBody(body) {
   };
 }
 
+/* ---------------- public navigation (Navigation workspace) ----------------
+ *
+ * The public navbar is a fixed six-item menu with stable keys. Identity is
+ * ALWAYS the key (home, movies, tv, anime, collections, my-list) — never
+ * the display label. Array order IS the display order. Routes are derived
+ * server-side from the key (controlled known routes only — arbitrary URLs
+ * are never accepted, so there is no URL-injection surface). Header search
+ * visibility is a separate clearly named flag outside the item list.
+ */
+
+export const NAV_KEYS = ['home', 'movies', 'tv', 'anime', 'collections', 'my-list'];
+
+export const NAV_ROUTES = {
+  home: '/',
+  movies: '/movies',
+  tv: '/tv',
+  anime: '/anime',
+  collections: null, // the existing collections dropdown menu (no single URL)
+  'my-list': '/mylist',
+};
+
+export const NAV_DEFAULT_LABELS = {
+  home: 'Home',
+  movies: 'Movies',
+  tv: 'TV Shows',
+  anime: 'Anime',
+  collections: 'Collections',
+  'my-list': 'My List',
+};
+
+export const NAV_LABEL_MAX = 32;
+
+function validateNavKey(v) {
+  const s = String(v == null ? '' : v).trim().toLowerCase();
+  if (NAV_KEYS.indexOf(s) < 0) fail('navigation key must be one of: ' + NAV_KEYS.join(', '));
+  return s;
+}
+
+function validateNavLabel(v, key) {
+  if (typeof v !== 'string') fail(`navigation label for "${key}" must be a string`);
+  const s = v.trim();
+  if (!s) fail(`navigation label for "${key}" must not be empty`);
+  if (s.length > NAV_LABEL_MAX) fail(`navigation label for "${key}" must be at most ${NAV_LABEL_MAX} characters`);
+  return s;
+}
+
+/**
+ * Validate a full navigation body (PUT full replace — staged Admin saves
+ * always send the complete six-item menu in display order).
+ * Returns the normalized object ready for storage:
+ *   { items: [{ key, label, visible }...6 in display order], searchVisible }
+ */
+export function validateNavigationBody(body) {
+  if (!isObj(body)) fail('body must be a JSON object');
+  if (!Array.isArray(body.items)) fail('items must be an array');
+  if (body.items.length !== NAV_KEYS.length) fail(`items must contain exactly ${NAV_KEYS.length} navigation items`);
+  const seen = new Set();
+  const items = body.items.map((it) => {
+    if (!isObj(it)) fail('navigation items must be objects');
+    const key = validateNavKey(it.key);
+    if (seen.has(key)) fail(`duplicate navigation key: "${key}"`);
+    seen.add(key);
+    return {
+      key,
+      label: validateNavLabel(it.label, key),
+      visible: it.visible === undefined ? true : reqBool(it.visible, `visible for "${key}"`),
+    };
+  });
+  for (const k of NAV_KEYS) {
+    if (!seen.has(k)) fail(`missing navigation key: "${k}" (hide with visible:false, never by omission)`);
+  }
+  return {
+    items,
+    searchVisible: body.searchVisible === undefined ? true : reqBool(body.searchVisible, 'searchVisible'),
+  };
+}
+
+/**
+ * Lenient read-side sanitizer for the stored navigation setting. A
+ * hand-edited or older row can never break public rendering: unknown keys
+ * are dropped, missing keys are filled from defaults (visible, appended in
+ * canonical order), invalid labels fall back to their default label, and
+ * non-boolean flags fall back to visible. Never throws.
+ */
+export function sanitizeNavigation(raw) {
+  const items = [];
+  const seen = new Set();
+  const list = raw && Array.isArray(raw.items) ? raw.items : [];
+  for (const it of list) {
+    if (!it || typeof it !== 'object' || Array.isArray(it)) continue;
+    const key = String(it.key == null ? '' : it.key).trim().toLowerCase();
+    if (NAV_KEYS.indexOf(key) < 0 || seen.has(key)) continue;
+    seen.add(key);
+    let label = NAV_DEFAULT_LABELS[key];
+    if (typeof it.label === 'string' && it.label.trim() && it.label.trim().length <= NAV_LABEL_MAX) {
+      label = it.label.trim();
+    }
+    const visible = it.visible === false ? false : true;
+    items.push({ key, label, visible, route: NAV_ROUTES[key] });
+  }
+  for (const k of NAV_KEYS) {
+    if (!seen.has(k)) items.push({ key: k, label: NAV_DEFAULT_LABELS[k], visible: true, route: NAV_ROUTES[k] });
+  }
+  let searchVisible = true;
+  try {
+    if (raw && typeof raw.searchVisible === 'boolean') searchVisible = raw.searchVisible;
+  } catch { searchVisible = true; }
+  return { items, searchVisible };
+}
+
 /**
  * Validate the home hero setting.
  *

@@ -1,0 +1,44 @@
+-- Greybox D1 migration 0005: public navigation configuration.
+--
+-- The public Greybox navbar (Home, Movies, TV Shows, Anime, Collections,
+-- My List + the header search box) is configurable from Admin → Navigation.
+-- Stored as ONE settings row (key 'navigation'), mirroring the existing
+-- 'home_hero' / 'collection_heroes' settings pattern — no new table, no new
+-- router, no per-item rows for a fixed six-item menu:
+--
+--   {
+--     "items": [
+--       { "key": "home",        "label": "Home",        "visible": true },
+--       { "key": "movies",      "label": "Movies",      "visible": true },
+--       { "key": "tv",          "label": "TV Shows",    "visible": true },
+--       { "key": "anime",       "label": "Anime",       "visible": true },
+--       { "key": "collections", "label": "Collections", "visible": true },
+--       { "key": "my-list",     "label": "My List",     "visible": true }
+--     ],
+--     "searchVisible": true
+--   }
+--
+-- Conventions (same as every other Greybox-owned setting):
+--   - Stable identity is the item KEY (home, movies, tv, anime, collections,
+--     my-list) — never the display label. Labels are display only.
+--   - Array order IS the display order (no sort_order column needed).
+--   - Hiding (visible = false) removes the entry from the public navbar but
+--     keeps the row, so re-showing restores it. Nothing is ever deleted.
+--   - Routes are NOT stored: each key maps to its existing controlled public
+--     route (home → /, movies → /movies, tv → /tv, anime → /anime,
+--     collections → the existing collections dropdown, my-list → /mylist).
+--     No arbitrary URLs are accepted — see functions/lib/validate.js.
+--   - Header search visibility lives OUTSIDE the item list as the clearly
+--     named `searchVisible` flag (search itself is unchanged).
+--   - My List storage/behavior is unchanged — only the nav entry hides.
+--
+-- The seed below reproduces the current hardcoded navbar exactly, so
+-- applying this migration changes nothing visible until an Admin saves.
+--
+-- Apply AFTER 0004_blocked.sql. Re-running is safe (INSERT OR REPLACE, but
+-- note: re-applying resets navigation to these defaults — Admin edits made
+-- after migration live in the same row and would be overwritten).
+-- Remote: `wrangler d1 execute greybox-db --remote --file=migrations/0005_navigation.sql`
+
+INSERT OR REPLACE INTO settings (key, value_json)
+VALUES ('navigation', '{"items":[{"key":"home","label":"Home","visible":true},{"key":"movies","label":"Movies","visible":true},{"key":"tv","label":"TV Shows","visible":true},{"key":"anime","label":"Anime","visible":true},{"key":"collections","label":"Collections","visible":true},{"key":"my-list","label":"My List","visible":true}],"searchVisible":true}');

@@ -66,13 +66,15 @@
       load('/api/config/overrides'),
       load('/api/config/tags'),
       load('/api/config/blocked'),
-    ]).then(([home, collections, overrides, tags, blocked]) => {
+      load('/api/config/navigation'),
+    ]).then(([home, collections, overrides, tags, blocked, navigation]) => {
       _remoteConfig = {
         home: (home && typeof home === 'object' && !Array.isArray(home)) ? home : null,
         collections: Array.isArray(collections) ? collections : null,
         overrides: Array.isArray(overrides) ? overrides : null,
         tags: Array.isArray(tags) ? tags : null,
         blocked: Array.isArray(blocked) ? blocked : null,
+        navigation: (navigation && typeof navigation === 'object' && !Array.isArray(navigation)) ? navigation : null,
       };
       return _remoteConfig;
     });
@@ -1311,6 +1313,119 @@
     return e;
   }
 
+  /* ---------------- public navigation (D1 first, local file fallback) ----------------
+   *
+   * D1 (`settings` row `navigation`, managed through /api/admin/navigation
+   * and the Admin Navigation workspace) is the live source of truth; the
+   * public site reads it via GET /api/config/navigation (preloaded once at
+   * boot above, offline fallback `js/navigation.config.js`).
+   *
+   * The menu is a fixed six-item set with stable keys — identity is ALWAYS
+   * the key (home, movies, tv, anime, collections, my-list), never the
+   * display label. Array order IS the display order. Routes are derived
+   * from the key (controlled known routes only — a label edit can never
+   * break routing, and no arbitrary URL is ever accepted). Hiding
+   * (visible = false) removes the entry from the navbar but keeps it
+   * server-side, so re-showing restores it. Header search visibility is a
+   * separate clearly named flag OUTSIDE the item list — search itself and
+   * My List storage/behavior are untouched (only their navbar entries hide).
+   *
+   * Failure fallback: any fetch problem leaves _remoteConfig.navigation
+   * null and the getters below use the local fallback file, which
+   * reproduces the current hardcoded navbar — a config failure never makes
+   * the site unusable.
+   */
+
+  const NAV_KEYS = ['home', 'movies', 'tv', 'anime', 'collections', 'my-list'];
+
+  // Controlled known routes per stable key (single place that maps keys to
+  // the existing public routes — mirrors js/router.js + js/app.js data-nav
+  // wiring; no second router, no custom destinations in V1).
+  const NAV_ROUTES = {
+    home: '/',
+    movies: '/movies',
+    tv: '/tv',
+    anime: '/anime',
+    collections: null, // the existing collections dropdown menu (no single URL)
+    'my-list': '/mylist',
+  };
+
+  // Existing data-nav values in index.html/js/app.js per stable key.
+  // The applier (js/navigation.js) never changes these — labels reorder
+  // around them, so highlight + click behavior survives relabeling.
+  const NAV_DATA_NAV = {
+    home: 'home',
+    movies: 'movie',
+    tv: 'tv',
+    anime: 'anime',
+    collections: null, // dropdown button (no data-nav)
+    'my-list': 'mylist',
+  };
+
+  const NAV_DEFAULT_LABELS = {
+    home: 'Home',
+    movies: 'Movies',
+    tv: 'TV Shows',
+    anime: 'Anime',
+    collections: 'Collections',
+    'my-list': 'My List',
+  };
+
+  const NAV_LABEL_MAX = 32;
+
+  function getNavigationSource() {
+    if (_remoteConfig && _remoteConfig.navigation && typeof _remoteConfig.navigation === 'object' && !Array.isArray(_remoteConfig.navigation)) {
+      return _remoteConfig.navigation;
+    }
+    const raw = (typeof window !== 'undefined' && window.GreyboxNavigation) || null;
+    return (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : null;
+  }
+
+  // Lenient normalizer (mirrors sanitizeNavigation server-side): unknown
+  // keys dropped, missing keys filled from defaults in canonical order,
+  // invalid labels fall back to defaults, non-boolean flags read as
+  // visible. Never throws — malformed config renders as the default navbar.
+  function normalizeNavigation(raw) {
+    const items = [];
+    const seen = new Set();
+    const list = raw && Array.isArray(raw.items) ? raw.items : [];
+    for (const it of list) {
+      if (!it || typeof it !== 'object' || Array.isArray(it)) continue;
+      const key = String(it.key == null ? '' : it.key).trim().toLowerCase();
+      if (NAV_KEYS.indexOf(key) < 0 || seen.has(key)) continue;
+      seen.add(key);
+      let label = NAV_DEFAULT_LABELS[key];
+      if (typeof it.label === 'string' && it.label.trim() && it.label.trim().length <= NAV_LABEL_MAX) {
+        label = it.label.trim();
+      }
+      items.push({ key, label, visible: it.visible === false ? false : true, route: NAV_ROUTES[key], dataNav: NAV_DATA_NAV[key] });
+    }
+    for (const k of NAV_KEYS) {
+      if (!seen.has(k)) items.push({ key: k, label: NAV_DEFAULT_LABELS[k], visible: true, route: NAV_ROUTES[k], dataNav: NAV_DATA_NAV[k] });
+    }
+    let searchVisible = true;
+    try {
+      if (raw && typeof raw.searchVisible === 'boolean') searchVisible = raw.searchVisible;
+    } catch { searchVisible = true; }
+    return { items, searchVisible };
+  }
+
+  // Full normalized config (hidden items included with flags, display
+  // order, routes + data-nav attached) — for the navbar applier and tests.
+  function getNavigationConfig() {
+    try { return normalizeNavigation(getNavigationSource()); }
+    catch { return normalizeNavigation(null); }
+  }
+
+  // Visible entries only, in display order — what the navbar renders.
+  function getVisibleNavigation() {
+    const full = getNavigationConfig();
+    return {
+      items: full.items.filter((it) => it && it.visible !== false),
+      searchVisible: full.searchVisible !== false,
+    };
+  }
+
   /* ---------------- My List (localStorage, no database) ---------------- */
 
   const LS_KEY = 'sb_mylist';
@@ -1394,6 +1509,12 @@
     getBlockedList,
     isBlockedContent,
     filterBlocked,
+    NAV_KEYS,
+    NAV_ROUTES,
+    NAV_LABEL_MAX,
+    normalizeNavigation,
+    getNavigationConfig,
+    getVisibleNavigation,
     getMyList,
     saveMyList,
     toggleMyListItem,

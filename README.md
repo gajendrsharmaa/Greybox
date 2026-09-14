@@ -38,7 +38,7 @@ functions/api/config/tags.js          # Cloudflare: GET /api/config/tags (visibl
 functions/api/admin/tags.js, functions/api/admin/tags/[slug].js  # Cloudflare: tag CRUD + membership (requireAdmin)
 js/tags.config.js                 # Offline tag fallback (window.GreyboxTags, starts empty)
 js/blocked.config.js              # Offline blocklist fallback (window.GreyboxBlocked, starts empty)
-migrations/0001_schema.sql, migrations/0002_seed.sql, migrations/0003_tags.sql, migrations/0004_blocked.sql  # D1 schema + seed + tags + blocklist (mirrors js/*.config.js)
+migrations/0001_schema.sql, migrations/0002_seed.sql, migrations/0003_tags.sql, migrations/0004_blocked.sql, migrations/0005_navigation.sql  # D1 schema + seed + tags + blocklist + navigation (mirrors js/*.config.js)
 wrangler.toml                     # Pages + D1 binding (DB); secrets stay in .dev.vars / dashboard
 api/trending.js, api/search.js, api/movies/[category].js, api/movie/[id].js, api/anime/[kind].js, api/tv/[...rest].js
                         # Vercel equivalents of the same Greybox contract
@@ -127,7 +127,7 @@ in bulk, never API secrets:
 | `tags` | Custom editorial tags (`slug`, `name`, `description`, `visible`, `badge`) |
 | `tag_members` | Ordered tag membership (identity only: `media` + `tmdb_id`, never titles/posters) |
 | `blocked_titles` | Permanent blocklist (`media`, `tmdb_id`, display snapshots, timestamps) — identity is always `media` + TMDB ID, enforced by PRIMARY KEY |
-| `settings` | Single-row settings: `home_hero` (the ONE authoritative Home Hero config) and `collection_heroes` (separate per-collection scope) |
+| `settings` | Single-row settings: `home_hero` (the ONE authoritative Home Hero config), `collection_heroes` (separate per-collection scope), and `navigation` (the public navbar: ordered items + header-search flag) |
 
 Authoritative Home Hero (`settings.home_hero` — the Admin and the public
 homepage read the same row; `js/homepage.config.js` is the offline fallback):
@@ -207,9 +207,10 @@ npx wrangler d1 execute greybox-db --local --file=migrations/0001_schema.sql
 npx wrangler d1 execute greybox-db --local --file=migrations/0002_seed.sql
 npx wrangler d1 execute greybox-db --local --file=migrations/0003_tags.sql
 npx wrangler d1 execute greybox-db --local --file=migrations/0004_blocked.sql
+npx wrangler d1 execute greybox-db --local --file=migrations/0005_navigation.sql
 npx wrangler pages dev .
 # verify: curl /api/config/home, /api/config/collections,
-#         /api/config/collections/science-fiction, /api/config/overrides, /api/config/tags, /api/config/blocked
+#         /api/config/collections/science-fiction, /api/config/overrides, /api/config/tags, /api/config/blocked, /api/config/navigation
 # edit check: wrangler d1 execute greybox-db --local --command="UPDATE home_sections SET title='X' WHERE id='popular-movies'"
 #             → hard-refresh shows the new title (config cache is ~60s)
 ```
@@ -238,6 +239,8 @@ no accounts and no login flow beyond the token.
 | `/api/admin/overrides`, `/api/admin/overrides/:media/:id` | list · read · create (201) · replace fields · delete (204) |
 | `/api/admin/tags`, `/api/admin/tags/:slug` | list (with counts) · read (members + usage) · create (201) · full update incl. members · delete (204, 409 while referenced) |
 | `/api/admin/blocked`, `/api/admin/blocked/:media/:id` | list blocked titles · block (201, 409 when already blocked) · read one · unblock (204, 404 when not blocked) |
+| `/api/admin/navigation` | read the full navigation config (GET) · replace it (PUT is full-replace: send all six items in display order + `searchVisible`) |
+| `/api/config/navigation` | public navigation config (all items with visible flags, display order, controlled routes + `searchVisible`, short cache) — the browser filters by `visible` |
 | `/api/config/blocked` | public identity-only blocklist (`[{ media, id }]`, short cache) — the browser filters through `isBlockedContent()` |
 | `/api/admin/settings/home-hero` | read · replace hero setting (PUT is full-replace: send the complete hero object) |
 | `/api/admin/settings/collection-heroes` | read · replace the collection-heroes map (read-modify-write so other collections are never clobbered) |
@@ -288,7 +291,7 @@ labeled Coming-soon panel — never dead/disabled rows. The sticky topbar
 reads `[section] / [workspace]` (e.g. Content / Heroes); the ⌘K control is
 a declared future affordance (per-workspace filters are the real search).
 Live views: Dashboard, Home, Heroes, Collections, Tags, Overrides, Blocked
-Titles, Greybox Picks, TMDB Search, General Settings. Auth stays a memory-only token
+Titles, Navigation, Greybox Picks, TMDB Search, General Settings. Auth stays a memory-only token
 session; no shell change touches API contracts, D1, or workspace logic.
 
 Collections workspace (`/admin` → Collections): cards with live counts,
@@ -381,6 +384,47 @@ user saves in localStorage) is not filtered; block edits surface within
 `node tests/blocked.test.cjs` (81 assertions: identity, duplicates,
 validation, auth gating, public filtering, detail blocking, admin UX,
 no-leak/no-regression guards, plus both older suites green).
+
+Navigation workspace (`/admin` → Navigation): the public Greybox navbar
+(Home, Movies, TV Shows, Anime, Collections, My List + the header search
+box) as server-side configuration over the D1 `settings` row `navigation`
+(migration `0005_navigation.sql`; seeded to reproduce the current navbar
+exactly, offline fallback `js/navigation.config.js`).
+
+- Model: a fixed six-item menu with stable keys (`home, movies, tv,
+  anime, collections, my-list`) — identity is always the key, never the
+  display label. Array order IS the display order. Each item is
+  `{ key, label, visible }`; header search visibility is a separate
+  clearly named `searchVisible` flag outside the item list. Routes are
+  NOT stored: each key maps to its existing controlled route (`/` ,
+  `/movies`, `/tv`, `/anime`, the existing collections dropdown menu,
+  `/mylist`) — a label edit can never break routing and no arbitrary URL
+  is ever accepted (PUT validates keys, labels 1–32 chars, booleans,
+  exact-six/no-duplicates/no-omission → `400` on bad input).
+- Visibility hides the navbar entry only: the item stays server-side, so
+  re-showing restores it. My List storage/counts and search
+  suggestions/`/search` behavior are untouched — only their navbar
+  entries hide.
+- Admin workflow is staged: label inputs, Show/Hide toggles, ↑/↓ reorder
+  and the search flag edit a local draft (Unsaved-changes badge +
+  Save/Discard, Reset-to-defaults, Refresh); Save Changes PUTs the
+  complete menu and verifies with a fresh GET. A draft preview shows the
+  navbar order/visibility/labels (display only). Loads and saves are
+  stale-guarded; failures show loading/error/retry/empty states through
+  the existing toast/notice primitives.
+- Public rendering: the browser preloads `GET /api/config/navigation`
+  once at boot (`js/data.js`, same batch as the other config) and
+  `js/navigation.js` moves/relables/hides the existing navbar nodes
+  (listeners survive — nothing is rebuilt; `data-nav` wiring is never
+  rewritten). If the config cannot be loaded, the static navbar stays
+  exactly as-is. Public cache is `max-age=60`, so edits surface within
+  ~a minute like every other config surface.
+- Automated checks: `node tests/navigation.test.cjs` (86 assertions:
+  defaults, visibility, labels, ordering, key stability, invalid
+  key/label/order rejection, auth gating, public shape, fallback,
+  save-to-navbar flow, hidden/reordered/relabeled rendering, My List and
+  Search preservation, workspace UX, no-duplicate/no-leak guards, plus
+  all three older suites green).
 
 Authentication is a **memory-only session**: paste the token once per tab; it
 lives in a single JS variable, is sent as an `Authorization: Bearer` header,

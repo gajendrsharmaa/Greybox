@@ -71,6 +71,7 @@
     tags: '/api/admin/tags',
     overrides: '/api/admin/overrides',
     blocked: '/api/admin/blocked',
+    navigation: '/api/admin/navigation',
     hero: '/api/admin/settings/home-hero',
     colHeroes: '/api/admin/settings/collection-heroes',
   };
@@ -222,6 +223,7 @@
     tagDetailGen++;
     tagAddGen++;
     blockedSearchGen++;
+    navGen++;
     try { if (drawerPrevFocus && drawerPrevFocus.focus) drawerPrevFocus.focus(); } catch { /* noop */ }
     drawerPrevFocus = null;
   }
@@ -240,6 +242,7 @@
     tags: { title: 'Tags', sub: 'Content' },
     overrides: { title: 'Overrides', sub: 'Content' },
     blocked: { title: 'Blocked Titles', sub: 'Content' },
+    navigation: { title: 'Navigation', sub: 'Experience' },
     picks: { title: 'Greybox Picks', sub: 'Content' },
     search: { title: 'TMDB Search', sub: 'Content' },
     settings: { title: 'General Settings', sub: 'Site' },
@@ -279,7 +282,7 @@
     if ($('crumb-sub')) $('crumb-sub').textContent = (section === workspace) ? '' : workspace;
     if (key === 'soon' && currentSoon) {
       if ($('soon-title')) $('soon-title').textContent = currentSoon.label;
-      if ($('soon-desc')) $('soon-desc').textContent = currentSoon.label + ' is on the Control Center roadmap and has no editor yet. Dashboard, Home, Heroes, Collections, Tags, Overrides, Blocked Titles, Greybox Picks, TMDB Search and General Settings are live.';
+      if ($('soon-desc')) $('soon-desc').textContent = currentSoon.label + ' is on the Control Center roadmap and has no editor yet. Dashboard, Home, Heroes, Collections, Tags, Overrides, Blocked Titles, Navigation, Greybox Picks, TMDB Search and General Settings are live.';
     }
     closeMobileNav();
     if (!ADMIN_TOKEN) return;
@@ -290,6 +293,7 @@
     if (key === 'tags') loadTags();
     if (key === 'overrides') loadOverrides();
     if (key === 'blocked') loadBlocked();
+    if (key === 'navigation') loadNavigation();
     if (key === 'picks') loadPicks();
     if (key === 'settings') loadHero();
   }
@@ -3862,6 +3866,343 @@
     }
   }
 
+  /* ================= NAVIGATION (public navbar configuration) =================
+   *
+   * Admin workspace over /api/admin/navigation (GET read, PUT full-replace)
+   * for the D1 `settings` row `navigation`. Staged editing: rows edit a
+   * local draft (label inputs, visibility toggles, up/down order, search
+   * flag); nothing touches the server until Save Changes, which PUTs the
+   * complete six-item menu in display order and verifies with a fresh GET
+   * (a 200 alone is never shown as success). Stable identity is always the
+   * item key — labels are display only and routes are derived per key
+   * (controlled known routes, never stored, never arbitrary URLs).
+   */
+  const NAV_KEYS = ['home', 'movies', 'tv', 'anime', 'collections', 'my-list'];
+  const NAV_LABEL_MAX = 32;
+  const NAV_DEFAULTS = {
+    items: [
+      { key: 'home', label: 'Home', visible: true },
+      { key: 'movies', label: 'Movies', visible: true },
+      { key: 'tv', label: 'TV Shows', visible: true },
+      { key: 'anime', label: 'Anime', visible: true },
+      { key: 'collections', label: 'Collections', visible: true },
+      { key: 'my-list', label: 'My List', visible: true },
+    ],
+    searchVisible: true,
+  };
+  const NAV_ROUTE_LABEL = {
+    home: '/',
+    movies: '/movies',
+    tv: '/tv',
+    anime: '/anime',
+    collections: 'Collections menu',
+    'my-list': '/mylist',
+  };
+
+  let navServer = null; // last saved config from GET (null until loaded)
+  let navDraft = null; // staged edits { items, searchVisible }
+  let navGen = 0; // stale-guard generation for loads/saves
+  let navSaving = false;
+
+  function navDefaults() {
+    return JSON.parse(JSON.stringify(NAV_DEFAULTS));
+  }
+
+  function navClone(v) {
+    try { return JSON.parse(JSON.stringify(v)); }
+    catch { return navDefaults(); }
+  }
+
+  function navRouteLabel(key) {
+    return NAV_ROUTE_LABEL[key] || '—';
+  }
+
+  // Client-side first pass (mirrors validateNavigationBody server-side; the
+  // server re-validates everything — a failed save is never shown as ok).
+  // Returns an error string, or null when the draft is saveable.
+  function navValidateDraft(draft) {
+    if (!draft || typeof draft !== 'object') return 'Navigation data is missing.';
+    if (!Array.isArray(draft.items) || draft.items.length !== NAV_KEYS.length) {
+      return 'Navigation must contain exactly six items.';
+    }
+    const seen = new Set();
+    for (const it of draft.items) {
+      if (!it || typeof it !== 'object') return 'Each navigation item must define key, label and visibility.';
+      const key = String(it.key == null ? '' : it.key).trim().toLowerCase();
+      if (NAV_KEYS.indexOf(key) < 0) return 'Unknown navigation key: ' + String(it.key == null ? '?' : it.key).slice(0, 32);
+      if (seen.has(key)) return 'Duplicate navigation item: ' + key;
+      seen.add(key);
+      const label = typeof it.label === 'string' ? it.label.trim() : '';
+      if (!label) return 'Label must not be empty (' + key + ').';
+      if (label.length > NAV_LABEL_MAX) return 'Label must be at most ' + NAV_LABEL_MAX + ' characters (' + key + ').';
+    }
+    for (const k of NAV_KEYS) {
+      if (!seen.has(k)) return 'Missing navigation item: ' + k + ' (hide with Hide, never by removal).';
+    }
+    return null;
+  }
+
+  function navStableJson(v) {
+    const d = (v && typeof v === 'object') ? v : { items: [], searchVisible: true };
+    return JSON.stringify({
+      items: (Array.isArray(d.items) ? d.items : []).map((it) => ({
+        key: it.key,
+        label: String(it.label == null ? '' : it.label).trim(),
+        visible: it.visible !== false,
+      })),
+      searchVisible: d.searchVisible !== false,
+    });
+  }
+
+  function navIsDirty() {
+    if (!navServer || !navDraft) return false;
+    return navStableJson(navDraft) !== navStableJson(navServer);
+  }
+
+  // Lenient shaping for GET responses (mirrors the server sanitizer):
+  // recognized keys keep server order, missing keys append in canonical
+  // order, invalid labels fall back to defaults. Never throws.
+  function normalizeNavServer(cfg) {
+    const out = navDefaults();
+    try {
+      const list = cfg && Array.isArray(cfg.items) ? cfg.items : [];
+      const byKey = {};
+      list.forEach((it) => {
+        if (!it || typeof it !== 'object') return;
+        const k = String(it.key == null ? '' : it.key).trim().toLowerCase();
+        if (NAV_KEYS.indexOf(k) < 0 || byKey[k]) return;
+        byKey[k] = it;
+      });
+      const order = [];
+      list.forEach((it) => {
+        if (!it || typeof it !== 'object') return;
+        const k = String(it.key == null ? '' : it.key).trim().toLowerCase();
+        if (NAV_KEYS.indexOf(k) >= 0 && order.indexOf(k) < 0) order.push(k);
+      });
+      NAV_KEYS.forEach((k) => { if (order.indexOf(k) < 0) order.push(k); });
+      out.items = order.map((k) => {
+        const src = byKey[k];
+        let label = NAV_DEFAULTS.items[NAV_KEYS.indexOf(k)].label;
+        if (src && typeof src.label === 'string' && src.label.trim() && src.label.trim().length <= NAV_LABEL_MAX) {
+          label = src.label.trim();
+        }
+        return { key: k, label, visible: src ? src.visible !== false : true };
+      });
+      if (cfg && typeof cfg.searchVisible === 'boolean') out.searchVisible = cfg.searchVisible;
+    } catch { /* defaults stand */ }
+    return out;
+  }
+
+  async function loadNavigation() {
+    const host = $('nav-list');
+    if (!host) return;
+    const myGen = ++navGen;
+    stateBox(host, 'loading', 'Loading navigation…');
+    const sp = $('nav-search-panel');
+    if (sp) sp.innerHTML = '';
+    const pv = $('nav-preview');
+    if (pv) pv.innerHTML = '';
+    navServer = null;
+    navDraft = null;
+    updateNavChrome();
+    try {
+      const cfg = await api(API.navigation);
+      if (myGen !== navGen) return; // stale: a newer load owns the view
+      navServer = normalizeNavServer(cfg);
+      navDraft = navClone(navServer);
+      if (myGen !== navGen) return;
+      renderNavigation();
+    } catch (e) {
+      if (myGen !== navGen) return;
+      host.innerHTML = '';
+      const box = stateBox(host, 'error', 'Navigation failed to load', (e && e.message) || String(e));
+      const retry = el('button', 'btn btn-secondary btn-sm', 'Retry');
+      retry.type = 'button';
+      retry.addEventListener('click', loadNavigation);
+      box.appendChild(retry);
+      notice('err', 'Navigation failed to load: ' + ((e && e.message) || e));
+    }
+  }
+
+  function navMove(idx, dir) {
+    if (!navDraft || navSaving) return;
+    const j = idx + dir;
+    if (idx < 0 || j < 0 || idx >= navDraft.items.length || j >= navDraft.items.length) return;
+    const tmp = navDraft.items[idx];
+    navDraft.items[idx] = navDraft.items[j];
+    navDraft.items[j] = tmp;
+    renderNavigation();
+  }
+
+  function navToggle(idx) {
+    if (!navDraft || navSaving) return;
+    const it = navDraft.items[idx];
+    if (!it) return;
+    it.visible = it.visible === false ? true : false;
+    renderNavigation();
+  }
+
+  function navRow(it, idx) {
+    const card = el('div', 'data-row nav-row');
+    const grip = el('span', 'nav-grip', '⋮⋮');
+    grip.setAttribute('aria-hidden', 'true');
+    grip.title = 'Display position ' + (idx + 1) + ' of ' + navDraft.items.length;
+    card.appendChild(grip);
+    const main = el('div', 'nav-row-main');
+    const head = el('div', 'row-top');
+    head.appendChild(el('span', 'row-mono nav-key', it.key));
+    const route = el('span', 'badge', navRouteLabel(it.key));
+    route.title = it.key === 'collections'
+      ? 'Opens the existing collections dropdown menu (no single URL)'
+      : 'Public route: ' + navRouteLabel(it.key);
+    head.appendChild(route);
+    head.appendChild(statusBadge(it));
+    main.appendChild(head);
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'input nav-label-input';
+    input.value = typeof it.label === 'string' ? it.label : '';
+    input.maxLength = NAV_LABEL_MAX;
+    input.setAttribute('aria-label', 'Label for ' + it.key);
+    input.autocomplete = 'off';
+    input.addEventListener('input', () => {
+      it.label = input.value;
+      const bad = !String(input.value || '').trim() || String(input.value || '').trim().length > NAV_LABEL_MAX;
+      input.classList.toggle('is-invalid', bad);
+      renderNavPreview();
+      updateNavChrome();
+    });
+    main.appendChild(fieldRow('Label (display only — key stays "' + it.key + '")', input));
+    card.appendChild(main);
+    const side = el('div', 'nav-row-side');
+    side.appendChild(rowButtons([
+      ['↑', '', () => navMove(idx, -1), 'Move up', idx === 0 || navSaving],
+      ['↓', '', () => navMove(idx, 1), 'Move down', idx === navDraft.items.length - 1 || navSaving],
+      [it.visible === false ? 'Show' : 'Hide', it.visible === false ? 'go' : '', () => navToggle(idx), it.visible === false ? 'Show in the public navbar' : 'Hide from the public navbar'],
+    ]));
+    card.appendChild(side);
+    return card;
+  }
+
+  function renderNavSearch() {
+    const host = $('nav-search-panel');
+    if (!host || !navDraft) return;
+    host.innerHTML = '';
+    const on = navDraft.searchVisible !== false;
+    const card = el('div', 'data-row nav-search-row');
+    const main = el('div', 'nav-row-main');
+    const head = el('div', 'row-top');
+    head.appendChild(el('span', 'row-title', 'Header search box'));
+    head.appendChild(el('span', 'badge ' + (on ? 'badge-live' : 'badge-hidden'), on ? 'Visible' : 'Hidden'));
+    main.appendChild(head);
+    main.appendChild(el('p', 'row-meta', 'The search box in the public header (suggestions + /search page). Search itself is unchanged — this only controls whether the box is shown.'));
+    card.appendChild(main);
+    const side = el('div', 'nav-row-side');
+    side.appendChild(rowButtons([
+      [on ? 'Hide search' : 'Show search', on ? '' : 'go', () => { navDraft.searchVisible = !on; renderNavigation(); }, on ? 'Hide the header search box' : 'Show the header search box'],
+    ]));
+    card.appendChild(side);
+    host.appendChild(card);
+  }
+
+  function renderNavPreview() {
+    const host = $('nav-preview');
+    if (!host || !navDraft) return;
+    host.innerHTML = '';
+    const bar = el('div', 'nav-preview-bar');
+    bar.appendChild(el('span', 'nav-preview-logo', 'Greybox'));
+    const shown = navDraft.items.filter((it) => it && it.visible !== false);
+    shown.forEach((it) => {
+      const label = (typeof it.label === 'string' && it.label.trim()) ? it.label.trim() : it.key;
+      bar.appendChild(el('span', 'nav-preview-item', label));
+    });
+    if (navDraft.searchVisible !== false) bar.appendChild(el('span', 'nav-preview-search', 'Search'));
+    if (!shown.length) bar.appendChild(el('span', 'muted text-sm', 'All items hidden — the navbar would show only the logo.'));
+    host.appendChild(bar);
+  }
+
+  function renderNavigation() {
+    const host = $('nav-list');
+    if (!host || !navDraft) return;
+    host.innerHTML = '';
+    navDraft.items.forEach((it, idx) => {
+      host.appendChild(navRow(it, idx));
+    });
+    renderNavSearch();
+    renderNavPreview();
+    updateNavChrome();
+  }
+
+  function updateNavChrome() {
+    const dirty = navIsDirty();
+    const badge = $('nav-dirty');
+    if (badge) badge.classList.toggle('hidden', !dirty);
+    const save = $('nav-save');
+    if (save) save.disabled = !dirty || navSaving || !navDraft;
+    const discard = $('nav-discard');
+    if (discard) discard.disabled = !dirty || navSaving || !navDraft;
+    const reset = $('nav-reset');
+    if (reset) reset.disabled = navSaving || !navDraft;
+  }
+
+  async function saveNavigation() {
+    if (navSaving || !navDraft) return;
+    const err = navValidateDraft(navDraft);
+    if (err) {
+      notice('err', err);
+      renderNavigation();
+      return;
+    }
+    const myGen = ++navGen;
+    navSaving = true;
+    updateNavChrome();
+    const saveBtn = $('nav-save');
+    const prevLabel = saveBtn ? saveBtn.textContent : '';
+    if (saveBtn) { saveBtn.textContent = 'Saving…'; saveBtn.disabled = true; }
+    try {
+      const payload = {
+        items: navDraft.items.map((it) => ({ key: it.key, label: String(it.label == null ? '' : it.label).trim(), visible: it.visible !== false })),
+        searchVisible: navDraft.searchVisible !== false,
+      };
+      await api(API.navigation, { method: 'PUT', body: payload });
+      // Never trust the 200 alone: read the row back before showing success.
+      const readBack = await api(API.navigation);
+      if (myGen !== navGen) return; // stale: a newer load/save owns the view
+      const shaped = normalizeNavServer(readBack);
+      if (navStableJson(shaped) !== navStableJson(payload)) {
+        notice('err', 'Save reported success, but a fresh read-back differs — not showing success. Refresh and retry.');
+      } else {
+        notice('ok', 'Navigation saved. The public navbar updates within ~a minute.');
+      }
+      navServer = shaped;
+      navDraft = navClone(shaped);
+      renderNavigation();
+    } catch (e) {
+      if (myGen !== navGen) return;
+      notice('err', 'Navigation save failed: ' + ((e && e.message) || e));
+    } finally {
+      navSaving = false;
+      if (myGen === navGen) {
+        if (saveBtn && saveBtn.isConnected) saveBtn.textContent = prevLabel || 'Save Changes';
+        updateNavChrome();
+      }
+    }
+  }
+
+  function discardNavigation() {
+    if (!navServer || navSaving) return;
+    if (!navIsDirty()) return;
+    navDraft = navClone(navServer);
+    renderNavigation();
+    notice('ok', 'Unsaved navigation changes discarded.');
+  }
+
+  function resetNavigation() {
+    if (!navDraft || navSaving) return;
+    navDraft = navDefaults();
+    renderNavigation();
+  }
+
   /* ================= GREYBOX PICKS (read view over existing overrides) ================= */
   async function loadPicks() {
     const host = $('picks-list');
@@ -5169,6 +5510,14 @@
     if (brNew) brNew.addEventListener('click', openBlockPicker);
     const br = $('blocked-refresh');
     if (br) br.addEventListener('click', loadBlocked);
+    const nvSave = $('nav-save');
+    if (nvSave) nvSave.addEventListener('click', saveNavigation);
+    const nvDiscard = $('nav-discard');
+    if (nvDiscard) nvDiscard.addEventListener('click', discardNavigation);
+    const nvReset = $('nav-reset');
+    if (nvReset) nvReset.addEventListener('click', resetNavigation);
+    const nvRefresh = $('nav-refresh');
+    if (nvRefresh) nvRefresh.addEventListener('click', loadNavigation);
     const dr = $('dash-refresh');
     if (dr) dr.addEventListener('click', loadDashboard);
     const hr = $('heroes-refresh');
@@ -5325,6 +5674,9 @@
       ovDisplayLabel, ovEffective, stableOverrideJson, ovRowHasFields,
       blockedKey, isBlockedCached, blockedDisplayLabel, filteredBlocked,
       openBlockPicker, openBlockConfirm, readBlockedRow,
+      navDefaults, navValidateDraft, navStableJson, navRouteLabel,
+      normalizeNavServer, loadNavigation, renderNavigation, navIsDirty,
+      NAV_LABEL_MAX,
       slugifyTag, tagCounts, stableTagJson, tagMemberKey,
       fetchGenres, genreName, GENRE_CACHE,
       PICK_BADGE, isGreyboxPick, validPickTarget,

@@ -115,9 +115,12 @@ t('5b workspace section with header, actions, filters, count, list',
   /id="blocked-list"/.test(adminHtml));
 t('5c header copy states permanence + media:id identity',
   /Permanently exclude specific movies/.test(adminHtml) && /media:TMDB ID/.test(adminHtml));
+// Navigation V1 promotes Navigation to a live workspace (its Soon badge is
+// intentionally gone) — the guard below still pins every REMAINING Soon
+// entry so no unrelated module is silently scaffolded or un-scaffolded.
 t('5d other Soon items untouched (still scaffolded)',
-  /data-soon="Activity"/.test(adminHtml) && /data-soon="Navigation"/.test(adminHtml) &&
-  /data-soon="Branding"/.test(adminHtml));
+  /data-soon="Activity"/.test(adminHtml) && !/data-soon="Navigation"/.test(adminHtml) &&
+  /data-view="navigation"/.test(adminHtml) && /data-soon="Branding"/.test(adminHtml));
 t('5e admin logic: full block/unblock workspace (list/search/confirm/unblock)',
   /function loadBlocked\(\)/.test(adminSrc) && /function renderBlocked\(\)/.test(adminSrc) &&
   /function openBlockPicker\(\)/.test(adminSrc) && /function openBlockConfirm\(/.test(adminSrc) &&

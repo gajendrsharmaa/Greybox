@@ -11,6 +11,8 @@
  * decide what to do when the DB binding is missing (see getDb).
  */
 
+import { sanitizeNavigation } from './validate.js';
+
 /** D1 binding (wrangler.toml `[[d1_databases]] binding = "DB"`), or null. */
 export function getDb(env) {
   return (env && env.DB) || null;
@@ -605,6 +607,30 @@ export async function deleteBlocked(db, media, tmdbId) {
     .bind(media, tmdbId)
     .run();
   return changesOf(out) > 0;
+}
+
+/* ---------------- public navigation (Navigation workspace) ----------------
+ *
+ * The public navbar configuration lives in ONE settings row (key
+ * 'navigation'), mirroring 'home_hero' / 'collection_heroes' — no new
+ * table for a fixed six-item menu. Stored shape:
+ *   { items: [{ key, label, visible }...6 in display order], searchVisible }
+ * Stable identity is the item KEY (never the label); array order IS the
+ * display order; routes are derived from the key (controlled known routes
+ * only — never stored, never arbitrary URLs). Read-side shaping reuses the
+ * lenient sanitizeNavigation() from validate.js (unknown keys dropped,
+ * missing keys filled from defaults, invalid labels fall back) so a corrupt
+ * row renders as the default navbar, never a broken page.
+ */
+
+/** Full navigation config (hidden items included with flags, routes attached). */
+export async function readNavigation(db) {
+  const raw = await readSetting(db, 'navigation');
+  try {
+    return sanitizeNavigation(raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null);
+  } catch {
+    return sanitizeNavigation(null);
+  }
 }
 
 /** Raw setting value (parsed JSON) by key, or null when absent/unparseable. */
