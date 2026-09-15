@@ -132,12 +132,12 @@
 
 .gx-shelf-viewport::before {
   left: 0;
-  background: linear-gradient(to right, rgba(7, 7, 12, 0.65), transparent);
+  background: linear-gradient(to right, rgba(27, 30, 35, 0.7), transparent);
 }
 
 .gx-shelf-viewport::after {
   right: 0;
-  background: linear-gradient(to left, rgba(7, 7, 12, 0.65), transparent);
+  background: linear-gradient(to left, rgba(27, 30, 35, 0.7), transparent);
 }
 
 .gx-shelf-viewport[data-overflow="true"]:not([data-at-start="true"])::before { opacity: 1; }
@@ -155,10 +155,10 @@
   justify-content: center;
   border-radius: 999px;
   color: var(--gx-text);
-  background: rgba(12, 12, 18, 0.72);
+  background: rgba(44, 49, 58, 0.72);
   border: 1px solid var(--gx-border-strong);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(14px) saturate(1.2);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
   box-shadow: var(--gx-shadow-soft);
   cursor: pointer;
   opacity: 0;
@@ -256,12 +256,12 @@
   font-size: 0.7rem;
   font-weight: 700;
   color: var(--gx-text);
-  background: rgba(8, 8, 13, 0.68);
+  background: rgba(35, 39, 46, 0.68);
   border: 1px solid var(--gx-border-faint);
   border-radius: 999px;
   padding: 0.12rem 0.5rem;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
 }
 
 .gx-card-rating .gx-star { color: var(--gx-accent-strong); }
@@ -278,12 +278,12 @@
   font-weight: 700;
   letter-spacing: 0.04em;
   color: var(--gx-accent-strong);
-  background: rgba(10, 10, 14, 0.66);
+  background: rgba(35, 39, 46, 0.66);
   border: 1px solid var(--gx-accent-border);
   border-radius: 999px;
   padding: 0.14rem 0.55rem;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
 }
 
 /* Custom-tag badges stack below the override badge (never over it):
@@ -316,12 +316,12 @@
   font-size: 0.95rem;
   line-height: 1;
   color: var(--gx-text-dim);
-  background: rgba(8, 8, 13, 0.62);
+  background: rgba(35, 39, 46, 0.62);
   border: 1px solid var(--gx-border-faint);
   border-radius: 999px;
   cursor: pointer;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
   transition: color var(--gx-transition), border-color var(--gx-transition), background var(--gx-transition);
 }
 

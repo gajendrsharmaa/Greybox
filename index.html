@@ -7,7 +7,7 @@
 <meta name="description" content="Browse movies & TV legally. TMDB metadata + trailers + watch providers. Cloudflare Pages ready." />
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
-tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a12' } } } }
+tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#1b1e23' } } } }
 </script>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 <script src="https://cdn.plyr.io/3.7.8/plyr.polyfilled.js"></script>
@@ -172,7 +172,7 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
      All historic IDs preserved (js/app.js + js/pages.js + js/components.js depend on them). -->
 <div id="modal" class="fixed inset-0 z-50 hidden">
   <div id="modal-bg" class="absolute inset-0 bg-black/80"></div>
-  <div class="gx-detail absolute inset-x-0 top-[4vh] mx-auto max-w-4xl bg-[#14141f] rounded-2xl overflow-hidden border border-white/10 max-h-[92vh] overflow-y-auto">
+  <div class="gx-detail absolute inset-x-0 top-[4vh] mx-auto max-w-4xl bg-[#23272e] rounded-2xl overflow-hidden border border-white/10 max-h-[92vh] overflow-y-auto">
     <div class="gx-detail-hero relative">
       <img id="m-backdrop" class="gx-detail-backdrop w-full h-64 md:h-96 object-cover" alt="" />
       <div class="gx-detail-shade" aria-hidden="true"></div>
@@ -255,7 +255,7 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#0a0a
 <!-- SETTINGS MODAL -->
 <div id="settings" class="fixed inset-0 z-50 hidden">
   <div class="absolute inset-0 bg-black/70" data-close-settings></div>
-  <div class="absolute inset-x-0 top-[10vh] mx-auto max-w-lg bg-[#14141f] rounded-2xl p-6 border border-white/10">
+  <div class="absolute inset-x-0 top-[10vh] mx-auto max-w-lg bg-[#23272e] rounded-2xl p-6 border border-white/10">
     <h2 class="text-xl font-bold">Settings</h2>
     <p class="text-sm text-zinc-400 mt-2">The site calls <code>/api/tmdb/*</code>, proxied by a Cloudflare Pages Function — the API key lives only in the server env var, never in this code. Visitors need nothing. The field below is a <b>local-dev override only</b> (stored in your browser, never committed).</p>
     <label class="text-xs text-zinc-400">Dev override — TMDB Read Access Token (leave empty in production)</label>

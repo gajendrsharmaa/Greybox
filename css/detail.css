@@ -4,14 +4,44 @@
  * (css/hero.css). No red, no neon, no emoji, no new color system, no trailer
  * lifecycle here (hero.js untouched). Vanilla CSS, no library. */
 
-/* ---------------- panel ---------------- */
+/* ---------------- panel (wider than the old max-w-4xl) ---------------- */
 
 .gx-detail {
   background:
-    radial-gradient(60% 30% at 50% 0%, rgba(208, 162, 79, 0.05), transparent 70%),
-    var(--gx-bg-1, #14141f);
+    radial-gradient(60% 30% at 50% 0%, rgba(255, 255, 255, 0.06), transparent 70%),
+    linear-gradient(170deg, #2e333b 0%, var(--gx-bg-1, #23272e) 55%, #20242a 100%);
   border-color: var(--gx-border-faint);
   box-shadow: var(--gx-shadow-pop);
+  backdrop-filter: blur(20px) saturate(1.2);
+  -webkit-backdrop-filter: blur(20px) saturate(1.2);
+}
+
+/* A little wider than before (56rem -> ~62rem) while staying inside the viewport. */
+#modal .gx-detail {
+  width: min(62rem, calc(100vw - 2rem));
+  max-width: 62rem;
+}
+
+/* ---------------- modal open animation (pop up from the bottom) ---------------- */
+
+@keyframes gx-detail-rise {
+  from { opacity: 0; transform: translateY(56px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes gx-modal-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+#modal:not(.hidden) #modal-bg {
+  animation: gx-modal-fade 0.3s ease-out both;
+}
+
+#modal:not(.hidden) .gx-detail {
+  animation: gx-detail-rise 0.48s cubic-bezier(0.22, 1, 0.36, 1) both;
+  transform-origin: 50% 100%;
+  will-change: transform, opacity;
 }
 
 /* ---------------- cinematic header ---------------- */
@@ -38,8 +68,8 @@
   z-index: 1;
   pointer-events: none;
   background:
-    linear-gradient(to bottom, rgba(7, 7, 12, 0.5), transparent 22%),
-    linear-gradient(to top, #14141f 2%, rgba(20, 20, 31, 0.88) 30%, rgba(20, 20, 31, 0.35) 62%, transparent 88%);
+    linear-gradient(to bottom, rgba(27, 30, 35, 0.5), transparent 22%),
+    linear-gradient(to top, #23272e 2%, rgba(35, 39, 46, 0.88) 30%, rgba(35, 39, 46, 0.35) 62%, transparent 88%);
 }
 
 .gx-detail-head {
@@ -102,6 +132,8 @@
 }
 
 .gx-detail-poster {
+  grid-column: 1;
+  grid-row: 1;
   width: 100%;
   aspect-ratio: 2/3;
   object-fit: cover;
@@ -115,14 +147,83 @@
 
 .gx-detail-poster.hidden { display: none; }
 
-.gx-detail-main { min-width: 0; }
+.gx-detail-main { min-width: 0; grid-column: 2; grid-row: 1; }
 
-/* Full overview belongs here (unlike the hero): readable measure, scannable. */
+/* BUG FIX: when the poster is hidden (no artwork), the grid must collapse to a
+ * single full-width column. Otherwise .gx-detail-main falls into the narrow
+ * 176px track and every word wraps — the squeezed column in the report.
+ * Covered three ways: explicit JS class (.is-no-poster, primary), plus :has()
+ * fallbacks for the `.hidden` class and the inline `display:none` style that
+ * setDetailArtwork() uses. */
+.gx-detail-body.is-no-poster,
+.gx-detail-body:has(.gx-detail-poster.hidden),
+.gx-detail-body:has(.gx-detail-poster[style*="none"]) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.gx-detail-body.is-no-poster .gx-detail-main,
+.gx-detail-body:has(.gx-detail-poster.hidden) .gx-detail-main,
+.gx-detail-body:has(.gx-detail-poster[style*="none"]) .gx-detail-main {
+  grid-column: 1;
+}
+
+/* Synopsis: professional long-form reading type. Inter-first system stack
+ * (matches the app shell), comfortable size + generous leading, soft
+ * off-white for sustained reading, natural wrapping. */
 .gx-detail-overview {
-  line-height: 1.65;
-  max-width: 44rem;
+  font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 0.975rem;
+  font-weight: 400;
+  line-height: 1.75;
+  letter-spacing: 0.002em;
+  color: #d7d7df;
+  max-width: 65ch;
   overflow-wrap: break-word;
-  white-space: pre-wrap;
+  word-break: normal;
+  white-space: pre-line;
+}
+
+/* Collapsed state: 4 readable lines, then a native ellipsis. Expanded state
+ * removes the clamp and shows the full synopsis. */
+.gx-detail-overview.is-clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: normal;
+}
+
+.gx-overview-toggle {
+  margin-top: 0.5rem;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--gx-accent-strong);
+}
+
+.gx-overview-toggle:hover {
+  color: #fff;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.gx-overview-toggle:focus-visible {
+  outline: 2px solid var(--gx-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* "Where to watch legally" is removed from the detail card entirely. The
+ * markup stays in index.html (admin/tests reference the IDs) but never
+ * paints — including the interim "Finding where to watch…" loader. */
+#m-providers,
+#m-providers-head {
+  display: none !important;
 }
 
 /* ---------------- quiet sub-sections (cast / providers / episodes keep
@@ -145,4 +246,6 @@
 
 @media (prefers-reduced-motion: reduce) {
   .gx-detail-badge { transition: none; }
+  #modal:not(.hidden) #modal-bg,
+  #modal:not(.hidden) .gx-detail { animation: none; }
 }

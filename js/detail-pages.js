@@ -145,6 +145,121 @@
     if (w) w.classList.add('hidden');
   }
 
+  // Poster layout sync (fixes the squeezed-overview bug): when #m-poster is
+  // hidden the body collapses to one full-width column via .is-no-poster.
+  // Purely presentational; safe to no-op in headless/stub DOMs.
+  function syncPosterLayout() {
+    try {
+      if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return;
+      const body = document.querySelector('.gx-detail-body');
+      if (!body || !body.classList) return;
+      const poster = $('m-poster');
+      let hidden = true;
+      try {
+        if (poster) {
+          const byClass = poster.classList && typeof poster.classList.contains === 'function'
+            ? poster.classList.contains('hidden') : false;
+          const byStyle = poster.style && typeof poster.style.display === 'string'
+            ? poster.style.display === 'none' : false;
+          hidden = !!(byClass || byStyle);
+        }
+      } catch (e) { hidden = true; }
+      try {
+        if (hidden) body.classList.add('is-no-poster');
+        else body.classList.remove('is-no-poster');
+      } catch (e) { /* decorative only */ }
+    } catch (e) { /* presentation must never break render */ }
+  }
+
+  // Synopsis clamp + Read more. Long overviews start at 4 lines with a native
+  // ellipsis; the toggle expands to full text and back. Short/empty/hidden
+  // overviews render plain with no toggle. Defensive: stub DOMs (tests) only
+  // get a classList mark, never a display change.
+  function setupOverviewReadMore() {
+    try {
+      const ov = $('m-overview');
+      if (!ov) return;
+      let hidden = false;
+      try { hidden = !!(ov.style && ov.style.display === 'none'); } catch (e) { hidden = false; }
+      let text = '';
+      try { text = ov.textContent || ''; } catch (e) { text = ''; }
+      let existing = null;
+      try {
+        if (typeof document !== 'undefined' && typeof document.getElementById === 'function') {
+          existing = document.getElementById('m-overview-toggle');
+        }
+      } catch (e) { existing = null; }
+      const dropExisting = () => {
+        try { if (existing && existing.parentNode && typeof existing.parentNode.removeChild === 'function') existing.parentNode.removeChild(existing); } catch (e) { /* noop */ }
+      };
+      if (hidden || !text || !text.trim()) {
+        try { if (ov.classList) ov.classList.remove('is-clamped'); } catch (e) { /* noop */ }
+        dropExisting();
+        return;
+      }
+      // ~4 lines at a 65ch measure. Below this the full text fits unclamped.
+      const CLAMP_CHARS = 260;
+      if (text.trim().length < CLAMP_CHARS) {
+        try { if (ov.classList) ov.classList.remove('is-clamped'); } catch (e) { /* noop */ }
+        dropExisting();
+        return;
+      }
+      // Headless/stub DOM (no createElement): mark clamped, touch nothing else
+      // so display-based assertions stay green.
+      if (typeof document === 'undefined' || typeof document.createElement !== 'function') {
+        try { if (ov.classList) ov.classList.add('is-clamped'); } catch (e) { /* noop */ }
+        return;
+      }
+      // Fresh toggle per title so listeners never accumulate across renders.
+      dropExisting();
+      try { if (ov.classList) ov.classList.add('is-clamped'); } catch (e) { /* noop */ }
+      let toggle = null;
+      try {
+        toggle = document.createElement('button');
+        toggle.id = 'm-overview-toggle';
+        toggle.type = 'button';
+        toggle.className = 'gx-overview-toggle';
+        toggle.textContent = 'Read more';
+        toggle.setAttribute('aria-expanded', 'false');
+        const btn = toggle;
+        btn.addEventListener('click', () => {
+          try {
+            const el = (typeof document.getElementById === 'function') ? document.getElementById('m-overview') : null;
+            if (!el || !el.classList) return;
+            let isClamped = false;
+            try { isClamped = el.classList.contains('is-clamped'); } catch (e) { isClamped = false; }
+            if (isClamped) {
+              try { el.classList.remove('is-clamped'); } catch (e) { /* noop */ }
+              btn.textContent = 'Show less';
+              try { btn.setAttribute('aria-expanded', 'true'); } catch (e) { /* noop */ }
+            } else {
+              try { el.classList.add('is-clamped'); } catch (e) { /* noop */ }
+              btn.textContent = 'Read more';
+              try { btn.setAttribute('aria-expanded', 'false'); } catch (e) { /* noop */ }
+            }
+          } catch (e) { /* toggle must never throw */ }
+        });
+        let host = null;
+        try { host = ov.parentElement || ov.parentNode || null; } catch (e) { host = null; }
+        if (host && typeof host.appendChild === 'function') host.appendChild(toggle);
+      } catch (e) { /* decorative only */ }
+    } catch (e) { /* presentation must never break render */ }
+  }
+
+  function cleanupOverviewReadMore() {
+    try {
+      const ov = $('m-overview');
+      try { if (ov && ov.classList) ov.classList.remove('is-clamped'); } catch (e) { /* noop */ }
+      let toggle = null;
+      try {
+        if (typeof document !== 'undefined' && typeof document.getElementById === 'function') {
+          toggle = document.getElementById('m-overview-toggle');
+        }
+      } catch (e) { toggle = null; }
+      try { if (toggle && toggle.parentNode && typeof toggle.parentNode.removeChild === 'function') toggle.parentNode.removeChild(toggle); } catch (e) { /* noop */ }
+    } catch (e) { /* noop */ }
+  }
+
   function resetPersonShell() {
     // Person pages always render full: undo any display state a previous
     // title render left on the shared shell (artwork + badge + actions are
@@ -162,6 +277,8 @@
         P.renderTitleDetail = function (ctx) {
           const r = orig.apply(this, arguments);
           try { applyTitle(ctx); } catch (e) { /* config must never break render */ }
+          try { syncPosterLayout(); } catch (e) { /* decorative only */ }
+          try { setupOverviewReadMore(); } catch (e) { /* decorative only */ }
           return r;
         };
       }
@@ -189,6 +306,8 @@
         P.renderPerson = function (ctx) {
           const r = orig.apply(this, arguments);
           try { resetPersonShell(); } catch (e) { /* noop */ }
+          try { cleanupOverviewReadMore(); } catch (e) { /* noop */ }
+          try { syncPosterLayout(); } catch (e) { /* noop */ }
           return r;
         };
       }
@@ -211,6 +330,9 @@
       applyTitle: applyTitle,
       episodesCtx: episodesCtx,
       boot: boot,
+      syncPosterLayout: syncPosterLayout,
+      setupOverviewReadMore: setupOverviewReadMore,
+      cleanupOverviewReadMore: cleanupOverviewReadMore,
     };
   } catch (e) { /* noop */ }
 })();

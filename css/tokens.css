@@ -4,24 +4,24 @@
  * of hardcoding new values. No framework, no dependency. */
 
 :root {
-  /* ——— background ——— */
-  --gx-bg-0: #07070c;          /* near-black cinematic base */
-  --gx-bg-1: #0c0c13;          /* page lift for sections */
-  --gx-bg-2: #101016;
+  /* ——— background ——— greyish gradient glass theme (replaces pure black) */
+  --gx-bg-0: #1b1e23;          /* grey-charcoal cinematic base */
+  --gx-bg-1: #23272e;          /* page lift for sections */
+  --gx-bg-2: #2b3038;
 
   /* ——— surfaces ——— */
-  --gx-surface: #13131b;       /* charcoal */
-  --gx-surface-2: #181822;
+  --gx-surface: #262b33;       /* grey charcoal */
+  --gx-surface-2: #2e343d;
 
   /* ——— glass surfaces ——— */
-  --gx-glass: rgba(14, 14, 20, 0.58);
-  --gx-glass-strong: rgba(14, 14, 20, 0.84);
-  --gx-glass-wash: rgba(255, 255, 255, 0.06);
+  --gx-glass: rgba(38, 43, 51, 0.58);
+  --gx-glass-strong: rgba(32, 36, 43, 0.84);
+  --gx-glass-wash: rgba(255, 255, 255, 0.07);
   /* Floating nav panel: background-only translucency (contents stay opaque),
      tuned so hero/ambient light passes through while text stays readable. */
-  --gx-glass-nav: rgba(15, 15, 20, 0.52);
-  --gx-glass-nav-scrolled: rgba(15, 15, 20, 0.68);
-  --gx-glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  --gx-glass-nav: rgba(35, 39, 46, 0.52);
+  --gx-glass-nav-scrolled: rgba(30, 34, 40, 0.68);
+  --gx-glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.09);
 
   /* ——— borders (low-opacity white only) ——— */
   --gx-border: rgba(255, 255, 255, 0.08);
@@ -52,24 +52,33 @@
   --gx-transition: 180ms ease;
 }
 
-/* ——— base ——— */
+/* ——— base ——— greyish gradient glass blurred professional theme */
 html {
   color-scheme: dark;
-  background: var(--gx-bg-0);
+  background: #1b1e23;
 }
 
 body {
-  background: var(--gx-bg-0);
+  /* Layered greyish gradient: soft studio-grey top light melting into
+     charcoal-grey depths. Fixed so shelves glide over one continuous wash. */
+  background:
+    radial-gradient(1100px 520px at 18% -6%, rgba(255, 255, 255, 0.09), transparent 62%),
+    radial-gradient(950px 480px at 84% -2%, rgba(170, 182, 205, 0.1), transparent 62%),
+    radial-gradient(900px 700px at 50% 42%, rgba(255, 255, 255, 0.035), transparent 72%),
+    linear-gradient(165deg, #32373f 0%, #272b32 26%, #1f2329 52%, #1b1e23 78%, #1e2228 100%);
+  background-attachment: fixed;
+  background-color: #1b1e23;
   color: var(--gx-text);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Inter, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   line-height: 1.5;
+  position: relative;
 }
 
-/* Subtle atmospheric light. Static (no animation) so it is cheap and
-   respects prefers-reduced-motion by default. Artwork-derived color
-   comes in a later phase — this stays neutral. */
+/* Glass-blurred atmosphere. Two soft diffused grey blooms + fine grain-like
+   sheen, heavily blurred by large radii. Static (no animation) so it is cheap
+   and respects prefers-reduced-motion by default. */
 body::before {
   content: "";
   position: fixed;
@@ -77,9 +86,13 @@ body::before {
   z-index: -1;
   pointer-events: none;
   background:
-    radial-gradient(58% 38% at 50% -4%, rgba(208, 162, 79, 0.07), transparent 70%),
-    radial-gradient(46% 32% at 88% 6%, rgba(130, 140, 190, 0.055), transparent 70%),
-    radial-gradient(40% 28% at 8% 2%, rgba(255, 255, 255, 0.028), transparent 70%);
+    radial-gradient(58% 38% at 50% -4%, rgba(255, 255, 255, 0.08), transparent 70%),
+    radial-gradient(46% 32% at 88% 6%, rgba(160, 172, 198, 0.1), transparent 70%),
+    radial-gradient(40% 28% at 8% 2%, rgba(255, 255, 255, 0.055), transparent 70%),
+    radial-gradient(70% 50% at 50% 110%, rgba(0, 0, 0, 0.22), transparent 70%),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.025), transparent 30%, transparent 70%, rgba(0, 0, 0, 0.14));
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
 }
 
 ::selection {
@@ -93,11 +106,11 @@ body::before {
   border-radius: 6px;
 }
 
-/* Quiet scrollbars that match the new surfaces */
+/* Quiet scrollbars that match the new grey surfaces */
 ::-webkit-scrollbar { height: 8px; width: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #26262f; border-radius: 8px; border: 2px solid var(--gx-bg-0); }
-::-webkit-scrollbar-thumb:hover { background: #34343f; }
+::-webkit-scrollbar-thumb { background: #3d434d; border-radius: 8px; border: 2px solid var(--gx-bg-0); }
+::-webkit-scrollbar-thumb:hover { background: #4c535e; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

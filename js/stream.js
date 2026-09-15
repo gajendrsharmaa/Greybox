@@ -25,10 +25,11 @@
    *  While base is still "example.com" (or blank) the app shows
    *  "No stream source configured" instead of playing.
    *  Only use sources you own or license.
+   * 'https://embed.vidrift.in',
    * ========================================================== */
   const EMBED = {
     // PUT YOUR OFFICIAL API STREAMING LINK HERE (change this one line):
-    base: 'https://embed.vidrift.in',
+    base: 'https://vidsrc.io', 
     moviePath: '/embed/movie/{tmdb_id}',
     episodePath: '/embed/tv/{tmdb_id}/{season}/{episode}',
   };
