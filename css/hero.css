@@ -7,7 +7,15 @@
 
 .gx-hero {
   position: relative;
-  z-index: 1;
+  /* Paints ABOVE <main> (z-index 1): main::before + the shelf tuck live in
+   * main's stacking context and would otherwise sit over the hero's action
+   * row and swallow its clicks. Visuals are preserved because the blend was
+   * designed solid at the boundary (hero bottom pixel and main::before at
+   * that offset are both var(--gx-bg-0)), and hit-testing falls through the
+   * hero's own transparent layers (see pointer-events rules below) so the
+   * shelves underneath stay clickable. Navbar (40) / modal+player (50) stay
+   * above the hero as before. */
+  z-index: 2;
   /* Hero occupies exactly 75% of the viewport on PC (svh/dvh-safe where
    * supported) and 60% on mobile (see media query below). No min/max clamp
    * so the spec holds on every screen size — the trailer cover math in
@@ -168,11 +176,17 @@ main > section {
   z-index: 1;
 }
 
-/* Reserve full space before art loads: grey glass placeholder, never a broken icon */
+/* Reserve full space before art loads: grey glass placeholder, never a broken icon.
+ * The whole background stack is click-through: with the hero now painting
+ * above <main>, any pointer-events:auto layer here would swallow shelf
+ * clicks in the overlap tuck AND sit between the buttons and nothing — so
+ * every non-interactive hero media layer passes clicks straight through and
+ * only .gx-hero-content buttons (pointer-events:auto) ever capture them. */
 .gx-hero-bg {
   position: absolute;
   inset: 0;
   z-index: 0;
+  pointer-events: none;
   background:
     radial-gradient(70% 50% at 50% 20%, rgba(255, 255, 255, 0.06), transparent 70%),
     radial-gradient(50% 36% at 80% 10%, rgba(170, 182, 205, 0.08), transparent 70%),
@@ -185,6 +199,7 @@ main > section {
   inset: 0;
   width: 100%;
   height: 100%;
+  pointer-events: none;
 }
 
 /* Subtle artwork-derived atmosphere. Static blur — no canvas, no realtime cost. */

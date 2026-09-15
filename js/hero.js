@@ -1286,6 +1286,7 @@
     configureHero: configureHero,
     getPresentation: function () { return sanitizePresentation(presentation); },
     bind: bind,
+    rewire: wireHeroButtons,
     setHero: setHero,
     setLoading: setLoading,
     clearLoading: clearLoading,

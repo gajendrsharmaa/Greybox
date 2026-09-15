@@ -460,7 +460,7 @@
       if (gen !== routeGen) return; // navigated away: a newer route owns the page
       const items = (data && data.results) || [];
       heroItem = items[0] || null;
-      if (heroItem) C.setHero(heroItem);
+      if (heroItem) { C.setHero(heroItem); rewireHeroButtons(); }
       else C.clearHeroLoading();
       hasLoadedList = true;
     } catch (e) {
@@ -489,6 +489,7 @@
         if (item) {
           heroItem = item;
           C.setHero(item);
+          rewireHeroButtons();
           if (cfg.hero.badge) $('hero-badge').textContent = cfg.hero.badge;
         }
       } catch { /* keep grid hero */ }
@@ -1112,6 +1113,16 @@
   // Hero actions (Phase 2): Watch uses the existing Stream behavior for movies
   // (direct embed when configured) and falls back to the detail route;
   // More Info always uses the existing movie/TV detail route. No route changes.
+  // Safety net: re-assert hero.js button wiring after every hero set, so even
+  // if a later script ever clobbered an onclick, the displayed hero's
+  // Watch/Info/List/mute stay live. Idempotent — safe to call any time.
+  function rewireHeroButtons() {
+    try {
+      if (window.GreyboxHero && typeof window.GreyboxHero.rewire === 'function') {
+        window.GreyboxHero.rewire();
+      }
+    } catch { /* hero optional */ }
+  }
   function heroMedia(item) { return item.media_type || ((item.title && !item.first_air_date) ? 'movie' : 'tv'); }
   function watchHeroItem(item) {
     const mt = heroMedia(item);
