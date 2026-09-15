@@ -12,6 +12,11 @@ import { validateMedia, validateTmdbId } from '../../../../lib/validate.js';
 
 const METHODS = 'GET,DELETE,OPTIONS';
 
+function isMissingBlockedTable(e) {
+  const m = String((e && e.message) || e || '').toLowerCase();
+  return m.indexOf('blocked_titles') >= 0 && m.indexOf('no such table') >= 0;
+}
+
 function targetFrom(params) {
   try {
     const rawMedia = params.media ?? params['media'] ?? '';
@@ -39,14 +44,30 @@ export async function onRequest(context) {
     if (!target) return adminJson({ error: 'URL must be /api/admin/blocked/movie|tv/:tmdb_id' }, 400);
 
     if (request.method === 'GET') {
-      const row = await readBlocked(db, target.media, target.id);
-      if (!row) return adminJson({ error: 'Blocked title not found' }, 404);
-      return adminJson(row, 200);
+      try {
+        const row = await readBlocked(db, target.media, target.id);
+        if (!row) return adminJson({ error: 'Blocked title not found' }, 404);
+        return adminJson(row, 200);
+      } catch (e) {
+        if (isMissingBlockedTable(e)) {
+          try { console.error('[admin] admin blocked/:media/:id missing table', e && e.message ? e.message : e); } catch { /* noop */ }
+          return adminJson({ error: 'Blocked titles table is missing. Apply migrations/0004_blocked.sql to the D1 database bound as DB, then redeploy — see README Troubleshooting.' }, 503);
+        }
+        throw e;
+      }
     }
     if (request.method === 'DELETE') {
-      const removed = await deleteBlocked(db, target.media, target.id);
-      if (!removed) return adminJson({ error: 'Blocked title not found' }, 404);
-      return new Response(null, { status: 204, headers: { ...adminCors(METHODS), 'Cache-Control': 'no-store' } });
+      try {
+        const removed = await deleteBlocked(db, target.media, target.id);
+        if (!removed) return adminJson({ error: 'Blocked title not found' }, 404);
+        return new Response(null, { status: 204, headers: { ...adminCors(METHODS), 'Cache-Control': 'no-store' } });
+      } catch (e) {
+        if (isMissingBlockedTable(e)) {
+          try { console.error('[admin] admin blocked/:media/:id missing table on delete', e && e.message ? e.message : e); } catch { /* noop */ }
+          return adminJson({ error: 'Blocked titles table is missing. Apply migrations/0004_blocked.sql to the D1 database bound as DB, then redeploy — see README Troubleshooting.' }, 503);
+        }
+        throw e;
+      }
     }
     return adminJson({ error: 'Method not allowed' }, 405);
   } catch (e) {

@@ -16,6 +16,11 @@ import { validateBlockedBody } from '../../lib/validate.js';
 
 const METHODS = 'GET,POST,OPTIONS';
 
+function isMissingBlockedTable(e) {
+  const m = String((e && e.message) || e || '').toLowerCase();
+  return m.indexOf('blocked_titles') >= 0 && m.indexOf('no such table') >= 0;
+}
+
 export async function onRequest(context) {
   try {
     const { request, env } = context;
@@ -28,12 +33,39 @@ export async function onRequest(context) {
     if (!db) return adminJson({ error: 'Greybox config database (D1 binding DB) is not configured. See README.' }, 503);
 
     if (request.method === 'GET') {
-      return adminJson(await readBlockedTitles(db), 200);
+      try {
+        return adminJson(await readBlockedTitles(db), 200);
+      } catch (e) {
+        if (isMissingBlockedTable(e)) {
+          try { console.error('[admin] admin blocked missing table', e && e.message ? e.message : e); } catch { /* noop */ }
+          return adminJson({ error: 'Blocked titles table is missing. Apply migrations/0004_blocked.sql to the D1 database bound as DB, then redeploy — see README Troubleshooting.' }, 503);
+        }
+        throw e;
+      }
     }
     if (request.method === 'POST') {
-      const body = await readJsonBody(request);
-      const created = await createBlocked(db, validateBlockedBody(body));
-      return adminJson(created, 201);
+      let body;
+      try {
+        body = await readJsonBody(request);
+      } catch (e) {
+        throw e;
+      }
+      let clean;
+      try {
+        clean = validateBlockedBody(body);
+      } catch (e) {
+        throw e;
+      }
+      try {
+        const created = await createBlocked(db, clean);
+        return adminJson(created, 201);
+      } catch (e) {
+        if (isMissingBlockedTable(e)) {
+          try { console.error('[admin] admin blocked missing table on save', e && e.message ? e.message : e); } catch { /* noop */ }
+          return adminJson({ error: 'Blocked titles table is missing. Apply migrations/0004_blocked.sql to the D1 database bound as DB, then redeploy — see README Troubleshooting.' }, 503);
+        }
+        throw e;
+      }
     }
     return adminJson({ error: 'Method not allowed' }, 405);
   } catch (e) {

@@ -17,9 +17,23 @@ export async function onRequest(context) {
     const db = getDb(env);
     if (!db) return json({ error: 'Greybox config database (D1 binding DB) is not configured. See README.' }, 503);
 
-    return json(await readPublicBlocked(db), 200);
+    try {
+      return json(await readPublicBlocked(db), 200);
+    } catch (e) {
+      const m = String((e && e.message) || e || '').toLowerCase();
+      try { console.error('[blocked] public blocked read failed', e && e.message ? e.message : e); } catch { /* noop */ }
+      if (m.indexOf('blocked_titles') >= 0 && m.indexOf('no such table') >= 0) {
+        // No blocklist table yet — no titles are blocked. Return the empty
+        // identity list so public discovery keeps working; Admin writes
+        // already report the actionable 503 above.
+        return json([], 200);
+      }
+      // Never leak SQL/internals to the public site.
+      return json({ error: 'Could not load the blocklist.' }, 500);
+    }
   } catch (e) {
-    return json({ error: e && e.message ? e.message : String(e) }, (e && e.status) || 500);
+    try { console.error('[blocked] public blocked failed', e && e.message ? e.message : e); } catch { /* noop */ }
+    return json({ error: 'Could not load the blocklist.' }, (e && e.status) || 500);
   }
 }
 

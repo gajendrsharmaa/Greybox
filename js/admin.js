@@ -110,9 +110,25 @@
     try {
       const root = $('toast-root');
       if (!root) return;
+      const msg = String(text == null ? '' : text);
+      const cls = 'toast ' + (kind === 'ok' ? 'ok' : 'err');
+      // Deduplicate: an identical toast already on screen (e.g. a retried
+      // Block Title that fails the same way twice) must not stack — the
+      // screenshot showed two identical "Internal error." toasts for one
+      // underlying failure. Refresh the existing toast instead of doubling.
+      const kids = root.children;
+      for (let i = 0; i < kids.length; i++) {
+        const k = kids[i];
+        if (k && k.className === cls && k.textContent === msg) {
+          // Move the existing toast to the end so its lifetime feels fresh,
+          // without creating a visual duplicate.
+          try { root.appendChild(k); } catch { /* noop */ }
+          return;
+        }
+      }
       const t = document.createElement('div');
-      t.className = 'toast ' + (kind === 'ok' ? 'ok' : 'err');
-      t.textContent = String(text == null ? '' : text);
+      t.className = cls;
+      t.textContent = msg;
       root.appendChild(t);
       while (root.children.length > 4) root.removeChild(root.firstChild);
       setTimeout(() => { try { if (t.isConnected) t.remove(); } catch { /* noop */ } }, kind === 'ok' ? 5000 : 8000);
@@ -120,13 +136,24 @@
   }
 
   let noticeTimer = 0;
+  let lastNoticeKey = '';
+  let lastNoticeAt = 0;
   function notice(kind, text) {
     const n = $('admin-notice');
-    if (!n) { toast(kind, text); return; }
+    const msg = String(text == null ? '' : text);
+    // Deduplicate rapid identical notices (same kind+text within 1.5s):
+    // without this, a single failed Block click could surface as a banner
+    // plus two stacked toasts. The banner still refreshes; the toast does not double.
+    const key = kind + '|' + msg;
+    const now = (typeof Date.now === 'function') ? Date.now() : 0;
+    const dup = (key === lastNoticeKey) && (now - lastNoticeAt < 1500);
+    lastNoticeKey = key;
+    lastNoticeAt = now;
+    if (!n) { if (!dup) toast(kind, msg); return; }
     n.classList.remove('hidden');
     n.className = 'notice ' + (kind === 'ok' ? 'ok' : 'err');
-    n.textContent = text;
-    toast(kind, text);
+    n.textContent = msg;
+    if (!dup) toast(kind, msg);
     if (noticeTimer) clearTimeout(noticeTimer);
     if (kind === 'ok') noticeTimer = setTimeout(() => n.classList.add('hidden'), 6000);
   }

@@ -395,12 +395,17 @@ verifies both and shows whichever identities exist — so a bare ID like
 media type). Already-blocked results show BLOCKED + Unblock instead of a
 duplicate action. Unblock uses the shared confirmation dialog, DELETEs the
 D1 row, verifies a read-back 404, and re-renders without a reload.
-Troubleshooting: `Blocked titles failed to load: Internal error` means the
+Troubleshooting: `Blocked titles table is missing … Apply
+migrations/0004_blocked.sql` (HTTP 503 on list, block, or unblock) means the
 D1 `blocked_titles` table is missing — the backend is correct, the
 migration was never applied. Apply `migrations/0004_blocked.sql` (local:
 `npx wrangler d1 execute greybox-db --local --file=migrations/0004_blocked.sql`;
 production: the same command with `--remote`, then rebind `DB` and
-redeploy) and the list loads with no code change.
+redeploy) and the list loads with no code change. The public
+`GET /api/config/blocked` stays on an empty blocklist while the table is
+missing so discovery keeps working; Admin writes report the actionable 503
+instead of a generic `Internal error` (the real D1 `no such table:
+blocked_titles` error is logged server-side only).
 Public filtering is central, not scattered: the browser loads the
 identity-only `GET /api/config/blocked` once at boot and every
 TMDB-derived surface filters through the `isBlockedContent()` seam in
