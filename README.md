@@ -163,9 +163,23 @@ the current hero artwork reused as a heavily blurred/scaled/darkened layer
 plus a translucent glass gradient fading to the base color — no hardcoded
 color, updates on every hero change, stays behind the trailer/text/navbar.
 Limitation (platform-imposed): YouTube does not offer a fully
-brand-free player — a watermark/"Watch on YouTube" affordance can still
-exist inside the video frame; what is guaranteed is no visible playback
-controls over the hero.
+ brand-free player — a watermark/"Watch on YouTube" affordance can still
+ exist inside the video frame; what is guaranteed is no visible playback
+ controls over the hero.
+
+Hero title artwork (`js/hero.js` + `css/hero.css`): the big hero title is
+ the title's official TMDB logo artwork whenever a usable one exists, and
+ the normal text title otherwise — never both at once. Selection is from
+ TMDB's `/images` logos (English preferred, then language-neutral, then
+ other languages; highest community-rated wins), fetched once per
+ `media_type + TMDB ID` through the existing `/api/tmdb/*` proxy (which
+ forwards `include_image_language`) and cached for the page lifetime; logo
+ data already carried by the hero item is reused instead of refetched. The
+ artwork keeps its aspect ratio inside desktop/mobile max caps (never
+ stretched, cropped, or boxed) with a cinematic drop shadow, and every hero
+ change/loading/error state clears the previous logo first so stale artwork
+ can never linger. Admin Heroes → Title/logo can force `Text title` or a
+ `Custom logo URL` instead of the automatic TMDB logo.
 
 Custom editorial tags (`tags` + `tag_members` — Admin → Tags, offline
 fallback `js/tags.config.js`):

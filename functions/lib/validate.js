@@ -815,7 +815,10 @@ export function validateHeroItem(v) {
 function validateArtwork(raw) {
   const v = isObj(raw) ? raw : {};
   const backdrop = v.backdrop === 'custom' ? 'custom' : 'auto';
-  const logo = v.logo === 'tmdb' ? 'tmdb' : (v.logo === 'custom' ? 'custom' : 'text');
+  // Title artwork is automatic by default: only an explicit `text` keeps the
+  // text-only title; a missing/older/unknown value tries the TMDB logo with
+  // the text title as the fallback (mirrors js/hero.js sanitizePresentation).
+  const logo = v.logo === 'custom' ? 'custom' : (v.logo === 'text' ? 'text' : 'tmdb');
   const out = {
     backdrop,
     backdropUrl: validateHttpUrl(v.backdropUrl, 'artwork.backdropUrl'),

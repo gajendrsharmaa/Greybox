@@ -18,7 +18,7 @@ const ALLOWED = /^(trending|movie|tv|search|genre|discover|person|collection|wat
 const FWD_PARAMS = [
   'language', 'page', 'query', 'region', 'watch_region', 'include_adult',
   'sort_by', 'with_genres', 'with_original_language', 'with_watch_providers',
-  'primary_release_year', 'first_air_date_year',
+  'primary_release_year', 'first_air_date_year', 'include_image_language',
 ];
 
 function json(res, status, obj) {

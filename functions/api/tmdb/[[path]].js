@@ -31,8 +31,9 @@ export async function onRequest(context) {
     if (!allowed.test(tmdbPath)) return json({ error: 'Blocked path: ' + tmdbPath }, 403);
 
   const target = new URL(`https://api.themoviedb.org/3/${tmdbPath}`);
-  // forward safe query params only
-  const fwd = ['language', 'page', 'query', 'region', 'watch_region', 'include_adult', 'sort_by', 'with_genres', 'with_original_language', 'with_watch_providers', 'primary_release_year', 'first_air_date_year'];
+  // forward safe query params only (include_image_language lets the hero
+  // title-logo request ask for English + language-neutral logos)
+  const fwd = ['language', 'page', 'query', 'region', 'watch_region', 'include_adult', 'sort_by', 'with_genres', 'with_original_language', 'with_watch_providers', 'primary_release_year', 'first_air_date_year', 'include_image_language'];
   for (const k of fwd) {
     const v = url.searchParams.get(k);
     if (v !== null) target.searchParams.set(k, v);

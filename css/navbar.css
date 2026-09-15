@@ -1,90 +1,115 @@
 /* Greybox Phase 1 — floating glass navbar system.
- * Desktop: translucent pill bar, pill active state, integrated search.
- * Mobile: compact bar + accessible drawer (no shrunken desktop row).
+ * Layout: transparent logo (left) + glass pill cluster (right),
+ * matching the 7Movies-style reference: logo floats bare over the hero,
+ * nav links + search live inside a single high-transparency pill.
  * All route/search/collections IDs are preserved — styling only. */
 
 .gx-header {
   /* Floating overlay: removed from document flow so it never reserves a
      header band or pushes the hero down — the hero starts at the viewport
-     top and extends behind this panel. Stays pinned while scrolling (same
-     as the old sticky behavior) via fixed positioning.
+     top and extends behind this panel. Stays pinned while scrolling via
+     fixed positioning.
      z-index 40 sits above the hero (z 1) but deliberately below the
      modal/player overlays (z 50), so popups still cover the nav. */
   position: fixed;
-  top: 12px;
+  top: 14px;
   left: 0;
   right: 0;
   z-index: 40;
   padding: 0;
-  /* Transparent wrapper: no static black wash behind the panel, so the
-     hero/trailer + ambient atmosphere stays visible around and through
-     the glass. Readability over bright hero tops still holds via the
-     hero's own top scrim (see css/hero.css .gx-hero-shade). */
+  /* Fully transparent wrapper: no wash behind anything, so the hero
+     poster/trailer stays maximally visible. Readability comes from the
+     hero's own top scrim (see css/hero.css .gx-hero-shade) + logo
+     text-shadow + the pill's own glass. */
   background: transparent;
 }
 
 .gx-header-inner {
   max-width: var(--gx-max);
   margin: 0 auto;
-  padding: 0 16px;
+  padding: 0 20px;
   min-width: 0;
 }
 
-/* ——— floating bar ———
- * Premium dark-glass panel: ONLY the background is translucent (rgba), so
- * nav text/icons/search stay fully opaque while hero/ambient light shows
- * through the blur behind them. Never `opacity:` on this element. */
+/* ——— transparent bar shell ———
+ * The bar itself is now invisible: just a flex row that pushes the bare
+ * logo left and the glass pill right. No background / border / blur here,
+ * so the hero shows straight through between them. */
 .gx-bar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: space-between;
+  gap: 16px;
   min-width: 0;
   max-width: 100%;
-  padding: 8px 10px;
-  border-radius: var(--gx-radius-bar);
-  background: var(--gx-glass-nav);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: var(--gx-shadow-soft), var(--gx-glass-highlight);
-  backdrop-filter: blur(18px) saturate(1.2);
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* ——— right-side glass pill (nav + divider + search) ———
+ * Single high-transparency capsule. ONLY the background is translucent
+ * (rgba), so buttons/text stay fully opaque while the hero shows through
+ * the blur behind them. Never `opacity:` on this element. */
+.gx-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex: none;
+  max-width: 100%;
+  padding: 5px 6px;
+  border-radius: var(--gx-radius-pill);
+  background: rgba(16, 16, 22, 0.42);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
   transition: background var(--gx-transition), border-color var(--gx-transition), box-shadow var(--gx-transition);
 }
 
-.gx-header.is-scrolled .gx-bar {
-  background: var(--gx-glass-nav-scrolled);
+.gx-header.is-scrolled .gx-bar-right {
+  background: rgba(14, 14, 20, 0.62);
   border-color: var(--gx-border-strong);
-  box-shadow: var(--gx-shadow-bar), var(--gx-glass-highlight);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.07);
 }
 
-/* Graceful fallback where backdrop-filter is unavailable: a near-solid
- * surface keeps the navbar readable instead of plain translucent wash. */
+/* Graceful fallback where backdrop-filter is unavailable */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .gx-bar { background: rgba(18, 18, 26, 0.94); }
-  .gx-header.is-scrolled .gx-bar { background: rgba(18, 18, 26, 0.97); }
+  .gx-bar-right { background: rgba(18, 18, 26, 0.88); }
+  .gx-header.is-scrolled .gx-bar-right { background: rgba(18, 18, 26, 0.94); }
   .gx-mobile,
   .collections-menu,
   #search-results { background: rgba(18, 18, 26, 0.97); }
 }
 
-/* ——— logo ——— */
+/* ——— logo — bare, fully transparent ——— */
 .gx-logo {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   flex: none;
-  padding: 6px 8px;
-  font-size: 19px;
+  padding: 8px 4px;
+  font-size: 21px;
   font-weight: 800;
   letter-spacing: -0.02em;
   color: var(--gx-text);
   text-decoration: none;
   white-space: nowrap;
+  background: transparent;
+  border: 0;
+  /* Keeps the bare logo readable directly over bright hero art */
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.65), 0 1px 3px rgba(0, 0, 0, 0.8);
 }
 
 .gx-logo-mark {
   width: 26px;
   height: 26px;
   flex: none;
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.6));
 }
 
 .gx-logo-accent {
@@ -92,48 +117,50 @@
   font-weight: 800;
 }
 
-/* ——— desktop nav ——— */
+/* ——— desktop nav (inside the pill) ——— */
 .gx-nav {
   display: none;
   align-items: center;
   gap: 2px;
   min-width: 0;
+  background: transparent;
 }
 
 @media (min-width: 860px) {
   .gx-nav { display: inline-flex; }
 }
 
-/* Pill nav buttons — replaces the old red underline. */
+/* Pill nav buttons — active is a light capsule like the reference */
 .nav-btn {
   appearance: none;
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--gx-radius-pill);
-  color: var(--gx-text-dim);
+  color: #c9c9d3;
   font-size: 13.5px;
   font-weight: 500;
   letter-spacing: 0.01em;
-  padding: 8px 13px;
+  padding: 8px 16px;
   white-space: nowrap;
   cursor: pointer;
   transition: background var(--gx-transition), color var(--gx-transition), border-color var(--gx-transition);
 }
 
 .nav-btn:hover {
-  color: var(--gx-text);
-  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .nav-btn.active {
-  color: var(--gx-text);
-  background: rgba(255, 255, 255, 0.09);
-  border-color: var(--gx-border);
-  font-weight: 600;
+  color: #0b0b10;
+  background: #f4f3ee;
+  border-color: transparent;
+  font-weight: 700;
   text-decoration: none;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
 }
 
-/* My List count — restrained amber, not red */
+/* My List count — restrained amber, adapts inside light active pill */
 #mylist-count {
   display: inline-block;
   margin-left: 6px;
@@ -147,56 +174,79 @@
   border: 1px solid var(--gx-accent-border);
 }
 
+.nav-btn.active #mylist-count {
+  color: #0b0b10;
+  background: rgba(0, 0, 0, 0.1);
+  border-color: rgba(0, 0, 0, 0.12);
+}
+
 #mylist-count.hidden { display: none; }
 
-/* ——— search (integrated, not a separate box) ——— */
+/* Divider between nav links and search icon, like the reference */
+.gx-nav-divider {
+  display: none;
+  flex: none;
+  width: 1px;
+  height: 22px;
+  margin: 0 6px;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+@media (min-width: 860px) {
+  .gx-nav-divider { display: block; }
+}
+
+/* ——— search (icon-style input fused into the pill) ——— */
 .gx-search {
   position: relative;
   flex: 1 1 auto;
   min-width: 0;
-  max-width: 340px;
-  margin-left: auto;
+  width: 132px;
+  max-width: 180px;
+  margin-left: 0;
 }
 
 .gx-search-icon {
   position: absolute;
-  left: 12px;
+  left: 10px;
   top: 50%;
   transform: translateY(-50%);
   width: 15px;
   height: 15px;
-  color: var(--gx-text-faint);
+  color: #c9c9d3;
   pointer-events: none;
 }
 
 #search {
   width: 100%;
   min-width: 0;
-  background: rgba(255, 255, 255, 0.055);
-  border: 1px solid var(--gx-border);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--gx-radius-pill);
   color: var(--gx-text);
   font-size: 13.5px;
-  padding: 8px 14px 8px 34px;
+  padding: 8px 10px 8px 32px;
   outline: none;
-  transition: background var(--gx-transition), border-color var(--gx-transition), box-shadow var(--gx-transition);
+  transition: background var(--gx-transition), border-color var(--gx-transition), box-shadow var(--gx-transition), width var(--gx-transition);
 }
 
-#search::placeholder { color: var(--gx-text-faint); }
+#search::placeholder { color: #8e8e99; }
 
-#search:hover { background: rgba(255, 255, 255, 0.075); }
+#search:hover { background: rgba(255, 255, 255, 0.07); }
 
 #search:focus {
-  background: rgba(255, 255, 255, 0.085);
-  border-color: var(--gx-accent-border);
-  box-shadow: 0 0 0 3px rgba(208, 162, 79, 0.13);
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.16);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.06);
 }
 
 #search-results {
   position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
+  top: calc(100% + 12px);
   right: 0;
+  left: auto;
+  width: 320px;
+  max-width: calc(100vw - 40px);
   z-index: 50;
   max-height: 60vh;
   overflow-y: auto;
@@ -211,25 +261,24 @@
 
 #search-results.hidden { display: none; }
 
-/* ——— hamburger ——— */
+/* ——— hamburger (fused into the pill, icon-only) ——— */
 .gx-menu-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: none;
-  width: 38px;
-  height: 38px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid var(--gx-border);
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: transparent;
+  border: 0;
   color: var(--gx-text);
   cursor: pointer;
-  transition: background var(--gx-transition), border-color var(--gx-transition);
+  transition: background var(--gx-transition);
 }
 
 .gx-menu-btn:hover {
   background: rgba(255, 255, 255, 0.1);
-  border-color: var(--gx-border-strong);
 }
 
 .gx-menu-btn svg { width: 18px; height: 18px; }
@@ -245,6 +294,8 @@
 /* ——— mobile drawer ——— */
 .gx-mobile {
   margin-top: 8px;
+  margin-left: auto;
+  max-width: 320px;
   padding: 8px;
   border-radius: var(--gx-radius-bar);
   background: var(--gx-glass-strong);
@@ -276,6 +327,12 @@
   font-size: 14px;
   padding: 10px 12px;
   width: 100%;
+  color: var(--gx-text-dim);
+}
+
+.gx-mobile-nav .nav-btn.active {
+  color: #0b0b10;
+  background: #f4f3ee;
 }
 
 #collections-btn-mobile {
@@ -330,16 +387,39 @@
   box-shadow: none;
 }
 
-/* Tight screens: keep the bar to one compact row, no horizontal scroll */
+/* Tight screens: keep the pill compact, search shrinks, logo stays bare */
+@media (max-width: 859px) {
+  .gx-header-inner { padding: 0 12px; }
+  .gx-bar-right {
+    flex: 1 1 auto;
+    justify-content: flex-end;
+    min-width: 0;
+  }
+  .gx-search {
+    flex: 1 1 auto;
+    width: auto;
+    max-width: none;
+  }
+  #search-results {
+    position: fixed;
+    top: 70px;
+    left: 12px;
+    right: 12px;
+    width: auto;
+    max-width: none;
+  }
+}
+
 @media (max-width: 420px) {
+  .gx-header { top: 10px; }
   .gx-header-inner { padding: 0 10px; }
-  .gx-bar { gap: 8px; padding: 7px 8px; }
-  .gx-logo { font-size: 17px; padding: 6px 4px; }
-  .gx-search { max-width: none; }
-  #search { font-size: 13px; padding: 7px 10px 7px 32px; }
+  .gx-bar { gap: 10px; }
+  .gx-logo { font-size: 18px; padding: 8px 2px; }
+  .gx-bar-right { padding: 4px 5px; }
+  #search { font-size: 13px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .gx-bar, .nav-btn, .gx-menu-btn, #search { transition: none; }
+  .gx-bar-right, .nav-btn, .gx-menu-btn, #search { transition: none; }
   .gx-mobile.open { animation: none; }
 }

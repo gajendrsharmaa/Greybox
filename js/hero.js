@@ -18,12 +18,14 @@
  * trailer_key). No hardcoding, no new backend, no token handling
  * (trailer_key arrives server-shaped through /api/*).
  *
- * Presentation (artwork/trailer/logo) arrives per hero via setHero(item,
- * presentation) or configureHero(presentation) — both sanitized here, so a
- * hand-edited or older config can never break rendering; unknown values
- * fall back to the pre-Part-2 behavior (TMDB art, text title, 7s delayed
- * auto trailer). Admin writes the config through /api/admin/*; the public
- * page only ever reads it.
+  * Presentation (artwork/trailer/logo) arrives per hero via setHero(item,
+  * presentation) or configureHero(presentation) — both sanitized here, so a
+  * hand-edited or older config can never break rendering. The title layer is
+  * automatic by default: the hero shows the title's official TMDB logo
+  * artwork when a usable one exists and falls back to the normal text title
+  * otherwise (explicit `text` keeps text-only, `custom` uses a custom URL).
+  * Unknown values fall back to the automatic behavior. Admin writes the
+  * config through /api/admin/*; the public page only ever reads it.
  *
  * Lifecycle: poster → (valid key + visible + tab visible) → iframe buffers
  * invisibly while the delay runs → YouTube API confirms PLAYING →
@@ -50,13 +52,19 @@
 
   function defaultPresentation() {
     return {
-      artwork: { backdrop: 'auto', backdropUrl: '', logo: 'text', logoUrl: '' },
+      // Title artwork is automatic: try the official TMDB logo for the hero
+      // item, fall back to the text title when none is usable. Explicit
+      // `text` keeps text-only; `custom` uses `logoUrl`.
+      artwork: { backdrop: 'auto', backdropUrl: '', logo: 'tmdb', logoUrl: '' },
       trailer: { source: 'auto', key: '', activation: 'delayed', delaySec: 7, muted: true, loop: true },
     };
   }
 
   // Sanitize anything the config layer hands over (admin-saved, hand-edited,
-  // or older rows). Unknown values fall back to pre-Part-2 behavior.
+  // or older rows). The logo default is automatic (`tmdb`): only an explicit
+  // `text` keeps the text-only title and only a `custom` with a valid URL
+  // uses a custom logo — a missing/older/unknown value tries TMDB artwork
+  // with the text title as the fallback, never a broken state.
   function sanitizePresentation(p) {
     var out = defaultPresentation();
     try {
@@ -66,7 +74,7 @@
       out.artwork.backdrop = a.backdrop === 'custom' ? 'custom' : 'auto';
       out.artwork.backdropUrl = (typeof a.backdropUrl === 'string' && /^https?:\/\//i.test(a.backdropUrl.trim())) ? a.backdropUrl.trim().slice(0, 500) : '';
       if (out.artwork.backdrop === 'custom' && !out.artwork.backdropUrl) out.artwork.backdrop = 'auto';
-      out.artwork.logo = a.logo === 'tmdb' ? 'tmdb' : (a.logo === 'custom' ? 'custom' : 'text');
+      out.artwork.logo = a.logo === 'custom' ? 'custom' : (a.logo === 'text' ? 'text' : 'tmdb');
       out.artwork.logoUrl = (typeof a.logoUrl === 'string' && /^https?:\/\//i.test(a.logoUrl.trim())) ? a.logoUrl.trim().slice(0, 500) : '';
       if (out.artwork.logo === 'custom' && !out.artwork.logoUrl) out.artwork.logo = 'text';
       out.trailer.source = t.source === 'custom' ? 'custom' : (t.source === 'off' ? 'off' : 'auto');
@@ -320,7 +328,7 @@
     restoreBackdrop();
   }
 
-  function reset() { stopTrailer(); }
+  function reset() { stopTrailer(); clearLogo(); }
 
   function isHeroVisible() {
     try {
@@ -389,7 +397,7 @@
     try {
       var title = $('hero-title');
       var logo = $('hero-logo');
-      if (logo) { try { logo.removeAttribute('src'); } catch (e) { /* noop */ } logo.classList.add('hidden'); }
+      if (logo) { try { logo.onerror = null; } catch (e) { /* noop */ } try { logo.removeAttribute('src'); } catch (e2) { /* noop */ } logo.classList.add('hidden'); }
       if (title) title.classList.remove('has-logo');
     } catch (e) { /* noop */ }
   }
@@ -413,46 +421,101 @@
     } catch (e) { clearLogo(); }
   }
 
+  // Best-logo selection over a TMDB `/images` payload (`{ logos: [...] }`)
+  // or a bare logos array. Pure: '' when nothing is usable, otherwise the
+  // full image URL. Ranking: English logos first, then language-neutral
+  // (`iso_639_1: null` — usually textless/official art), then every other
+  // language; within a rank the community's highest-rated logo wins
+  // (`vote_average`, ties broken by `vote_count`, first-seen keeps the rest
+  // stable). Paths are validated so a hostile payload can never escape the
+  // TMDB image host.
   function pickLogoUrl(data) {
     try {
-      var logos = (data && Array.isArray(data.logos)) ? data.logos : [];
+      var logos = (data && Array.isArray(data.logos)) ? data.logos : (Array.isArray(data) ? data : []);
       if (!logos.length) return '';
-      var en = null, any = null;
+      var best = '', bestRank = 99, bestVote = -1, bestCount = -1;
       for (var i = 0; i < logos.length; i++) {
         var l = logos[i];
         if (!l || typeof l.file_path !== 'string' || !l.file_path) continue;
-        if (!any) any = l.file_path;
-        if (l.iso_639_1 === 'en') { en = l.file_path; break; }
+        var fp = l.file_path;
+        if (fp.indexOf('..') >= 0 || !/^\/[A-Za-z0-9/_\-.]+$/.test(fp)) continue;
+        var lang = (l.iso_639_1 == null) ? '' : String(l.iso_639_1);
+        var rank = (lang === 'en') ? 0 : (lang === '' ? 1 : 2);
+        var vote = Number(l.vote_average);
+        if (!isFinite(vote) || vote < 0) vote = 0;
+        var count = Number(l.vote_count);
+        if (!isFinite(count) || count < 0) count = 0;
+        if (rank < bestRank || (rank === bestRank && (vote > bestVote || (vote === bestVote && count > bestCount)))) {
+          best = fp; bestRank = rank; bestVote = vote; bestCount = count;
+        }
       }
-      var picked = en || any || '';
-      if (!picked || picked.indexOf('..') >= 0 || !/^\/[A-Za-z0-9/_\-.]+$/.test(picked)) return '';
-      return 'https://image.tmdb.org/t/p/w500' + picked;
+      if (!best) return '';
+      return 'https://image.tmdb.org/t/p/w500' + best;
     } catch (e) { return ''; }
+  }
+
+  // Logo data already carried by the hero item (detail bundles) — reuse it
+  // instead of fetching `/images` again. Accepts the shapes the Greybox
+  // pipeline may attach over time: a full `logo_url`/`logoUrl`, a TMDB
+  // `logo_path`/`logoPath`, or a `logos` / `images.logos` array (ranked via
+  // pickLogoUrl). Pure: '' when the item carries nothing usable.
+  function itemLogoUrl(item) {
+    try {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return '';
+      var u = item.logo_url != null ? item.logo_url : item.logoUrl;
+      if (typeof u === 'string' && u.trim() && /^https?:\/\//i.test(u.trim())) return u.trim().slice(0, 500);
+      var p = item.logo_path != null ? item.logo_path : item.logoPath;
+      if (typeof p === 'string' && p) {
+        var t = p.trim();
+        if (/^https?:\/\//i.test(t)) return t.slice(0, 500);
+        if (t.indexOf('..') < 0 && /^\/[A-Za-z0-9/_\-.]+$/.test(t)) return 'https://image.tmdb.org/t/p/w500' + t;
+      }
+      if (Array.isArray(item.logos)) return pickLogoUrl(item.logos);
+      if (item.images && typeof item.images === 'object' && Array.isArray(item.images.logos)) {
+        return pickLogoUrl(item.images.logos);
+      }
+    } catch (e) { /* fall through to '' */ }
+    return '';
   }
 
   function paintLogo(item, myGen, expectedIdentity) {
     var art = (presentation.artwork) || {};
     if (art.logo === 'custom' && typeof art.logoUrl === 'string' && /^https?:\/\//i.test(art.logoUrl.trim())) {
+      clearLogo();
       applyLogo(art.logoUrl.trim(), myGen, expectedIdentity);
       return;
     }
-    if (art.logo !== 'tmdb') { clearLogo(); return; }
-    // TMDB logo via the existing server-side proxy (secret stays
-    // server-side). Cached per identity; guarded like all hero async work.
+    // Explicit text-only title: never a logo, never a fetch.
+    if (art.logo === 'text') { clearLogo(); return; }
+    // Automatic (default): official TMDB logo artwork when a usable one
+    // exists, the existing text title otherwise. Fetches through the
+    // existing server-side proxy (secret stays server-side); anything the
+    // item already carries is reused so the same data is never requested
+    // twice. Cached per media identity; guarded like all hero async work.
     var mt = mediaOf(item);
     var id = 0;
     try { id = parseInt(String(item && item.id), 10) || 0; } catch (e) { id = 0; }
     var identity = mt + ':' + id;
     if (!id) { clearLogo(); return; }
+    // Drop any previous hero's logo synchronously: the text title (always in
+    // the DOM) covers the gap, so a slow response can never leave stale
+    // artwork over the new title.
+    clearLogo();
+    var carried = itemLogoUrl(item);
+    if (carried) {
+      logoCache[identity] = carried;
+      applyLogo(carried, myGen, expectedIdentity);
+      return;
+    }
     if (Object.prototype.hasOwnProperty.call(logoCache, identity)) {
       if (logoCache[identity]) applyLogo(logoCache[identity], myGen, expectedIdentity);
-      else clearLogo();
+      // else: known to have no usable logo — text title already showing.
       return;
     }
     var url = '/api/tmdb/' + mt + '/' + id + '/images?language=en-US&include_image_language=en,null';
     var p;
     try { p = fetch(url, { headers: { accept: 'application/json' } }); }
-    catch (e) { logoCache[identity] = ''; clearLogo(); return; }
+    catch (e) { logoCache[identity] = ''; return; }
     p.then(function (r) {
       if (!r.ok) throw new Error('logo fetch failed');
       return r.json();
@@ -460,10 +523,11 @@
       var picked = pickLogoUrl(d);
       logoCache[identity] = picked;
       if (picked) applyLogo(picked, myGen, expectedIdentity);
-      else clearLogo();
+      // else: no usable logo — text title already showing, nothing to do.
     }, function () {
       logoCache[identity] = '';
-      if (myGen === gen && (expectedIdentity == null || currentIdentity === expectedIdentity)) clearLogo();
+      // Text title already showing; the guards inside applyLogo/clearLogo
+      // still protect the current hero, so nothing else is needed here.
     });
   }
 
@@ -837,7 +901,7 @@
     stopTrailer();
     // Per-hero presentation travels with the item (routes/collections can
     // never leak config into each other). Bare calls keep the configured
-    // default. Sanitized: unknown values → pre-Part-2 behavior.
+    // default. Sanitized: unknown logo values → automatic TMDB artwork.
     if (pres !== undefined) presentation = sanitizePresentation(pres);
     current = item;
     // Capture this item's identity synchronously with its text: every async
@@ -856,6 +920,7 @@
       stopTrailer();
       current = null;
       currentIdentity = null;
+      clearLogo(); // loading copy must be visible, never hidden behind a stale logo
       if (hero) { hero.classList.add('hero-loading'); hero.classList.remove('is-ready'); }
       hidePageAmbient();
       var badge = $('hero-badge');
@@ -880,6 +945,7 @@
     stopTrailer();
     current = null;
     currentIdentity = null;
+    clearLogo(); // error copy must be visible, never hidden behind a stale logo
     // Error text must never sit over another item's artwork: drop the still
     // back to the dark placeholder (existing valid cinematic state).
     try {
@@ -1128,6 +1194,7 @@
     toggleMute: toggleMute,
     embedUrl: embedUrl,
     metaHTML: metaHTML,
+    pickLogoUrl: pickLogoUrl,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = window.GreyboxHero;

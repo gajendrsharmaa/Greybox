@@ -4828,7 +4828,7 @@
       artwork: {
         backdrop: a.backdrop === 'custom' ? 'custom' : 'auto',
         backdropUrl: typeof a.backdropUrl === 'string' ? a.backdropUrl.trim() : '',
-        logo: a.logo === 'tmdb' ? 'tmdb' : (a.logo === 'custom' ? 'custom' : 'text'),
+        logo: a.logo === 'custom' ? 'custom' : (a.logo === 'text' ? 'text' : 'tmdb'),
         logoUrl: typeof a.logoUrl === 'string' ? a.logoUrl.trim() : '',
       },
       trailer: {
@@ -5074,7 +5074,7 @@
     wrap.style.cssText = 'display:grid;gap:.7rem';
     wrap.appendChild(fieldRow('Backdrop', selectInput(prefix + '-backdrop', [['auto', 'Automatic (TMDB)'], ['custom', 'Custom URL']], a.backdrop === 'custom' ? 'custom' : 'auto')));
     wrap.appendChild(fieldRow('Custom backdrop URL (https://…)', textInput(prefix + '-backdropUrl', a.backdropUrl || '', 'https://…')));
-    wrap.appendChild(fieldRow('Title / logo', selectInput(prefix + '-logo', [['text', 'Text title (fallback)'], ['tmdb', 'TMDB logo (automatic)'], ['custom', 'Custom logo URL']], a.logo === 'tmdb' ? 'tmdb' : (a.logo === 'custom' ? 'custom' : 'text'))));
+    wrap.appendChild(fieldRow('Title / logo', selectInput(prefix + '-logo', [['text', 'Text title (fallback)'], ['tmdb', 'TMDB logo (automatic)'], ['custom', 'Custom logo URL']], a.logo === 'custom' ? 'custom' : (a.logo === 'text' ? 'text' : 'tmdb'))));
     wrap.appendChild(fieldRow('Custom logo URL (https://…)', textInput(prefix + '-logoUrl', a.logoUrl || '', 'https://…')));
     return wrap;
   }
@@ -5084,7 +5084,7 @@
     const backdrop = v(prefix + '-backdrop') === 'custom' ? 'custom' : 'auto';
     const backdropUrl = String(v(prefix + '-backdropUrl') || '').trim();
     const logoRaw = v(prefix + '-logo');
-    const logo = logoRaw === 'tmdb' ? 'tmdb' : (logoRaw === 'custom' ? 'custom' : 'text');
+    const logo = logoRaw === 'custom' ? 'custom' : (logoRaw === 'text' ? 'text' : 'tmdb');
     const logoUrl = String(v(prefix + '-logoUrl') || '').trim();
     if (backdrop === 'custom') {
       if (!backdropUrl) throw { message: 'Custom backdrop URL is required.' };
