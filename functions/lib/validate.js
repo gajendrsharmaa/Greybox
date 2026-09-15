@@ -838,7 +838,7 @@ function validateTrailer(raw) {
     source,
     key: '',
     activation,
-    delaySec: v.delaySec === undefined || v.delaySec === null ? 7 : reqInt(v.delaySec, 'trailer.delaySec', { min: 0, max: 120 }),
+    delaySec: v.delaySec === undefined || v.delaySec === null ? 4 : reqInt(v.delaySec, 'trailer.delaySec', { min: 0, max: 120 }),
     muted: v.muted === undefined ? true : reqBool(v.muted, 'trailer.muted'),
     loop: v.loop === undefined ? true : reqBool(v.loop, 'trailer.loop'),
   };

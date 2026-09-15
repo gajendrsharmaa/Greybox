@@ -259,8 +259,8 @@ t('18a Detail Pages still independent (flags + applier untouched)',
 t('18b playback order documented (blocked -> detail -> playback)',
   /blocked filtering/i.test(adminSrc) && /detail presentation/i.test(adminSrc) &&
   /then playback/i.test(adminSrc));
-t('19a hero trailer untouched (7s activation, layers, ambient, fade)',
-  /TRAILER_DELAY_MS = 7000/.test(heroSrc) && /delaySec: 7/.test(heroSrc) &&
+t('19a hero trailer untouched (4s activation, layers, ambient, fade)',
+  /TRAILER_DELAY_MS = 4000/.test(heroSrc) && /delaySec: 4/.test(heroSrc) &&
   /hero-ambient/.test(heroSrc) && /page-ambient/.test(heroSrc) &&
   /is-visible/.test(heroSrc));
 t('19b hero Watch follows mode; trailer path has no mode branch',

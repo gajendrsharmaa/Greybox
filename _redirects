@@ -7,8 +7,10 @@
 /movies/* /index.html 200
 /tv /index.html 200
 /tv/* /index.html 200
+/movie /index.html 200
 /movie/* /index.html 200
 /search /index.html 200
+/person /index.html 200
 /person/* /index.html 200
 /collection /index.html 200
 /collection/* /index.html 200

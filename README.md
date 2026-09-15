@@ -552,7 +552,7 @@ fallback `js/playback.config.js`).
   `max-age=60`.
 - Order stays: blocked filtering → detail presentation → playback. This
   workspace can never render blocked titles or override Detail Pages
-  visibility. Hero trailers (YouTube background video, 7-second activation)
+  visibility. Hero trailers (YouTube background video, 4-second activation)
   are unaffected; only the hero Watch action follows the mode.
 - Admin workflow is staged like Navigation/Detail Pages: mode cards edit a
   local draft (Unsaved-changes badge + Save/Discard, confirm-guarded
@@ -733,7 +733,7 @@ Admin Playback workspace (/admin → Playback)
   panel states exactly this with hostname-only diagnostics.
 - **Preserved**: HLS quality rules (2+ heights → Auto + heights, Safari
   native-managed), Plyr controls, resume (localStorage), cleanup + stale
-  guards (`playerGen`/`routeGen`/`modalGen`), hero 7-second trailer
+  guards (`playerGen`/`routeGen`/`modalGen`), hero 4-second trailer
   activation and visuals, Blocked → Detail → Playback order.
 - **Automated checks**: `node tests/playback.test.cjs` (102 assertions).
 

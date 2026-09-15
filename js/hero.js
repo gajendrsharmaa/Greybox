@@ -43,8 +43,8 @@
 (function () {
   'use strict';
 
-  /* The 7-second delay stays exactly 7000ms (single configurable value). */
-  var TRAILER_DELAY_MS = 7000;
+  /* The 4-second delay stays exactly 4000ms (single configurable value). */
+  var TRAILER_DELAY_MS = 4000;
   /* Outer bound from buffering start: no usable playback by then → poster. */
   var TRAILER_READY_TIMEOUT_MS = 15000;
 
@@ -56,7 +56,7 @@
       // item, fall back to the text title when none is usable. Explicit
       // `text` keeps text-only; `custom` uses `logoUrl`.
       artwork: { backdrop: 'auto', backdropUrl: '', logo: 'tmdb', logoUrl: '' },
-      trailer: { source: 'auto', key: '', activation: 'delayed', delaySec: 7, muted: true, loop: true },
+      trailer: { source: 'auto', key: '', activation: 'delayed', delaySec: 4, muted: true, loop: true },
     };
   }
 
@@ -82,7 +82,7 @@
       if (out.trailer.source === 'custom' && !out.trailer.key) out.trailer.source = 'auto';
       out.trailer.activation = t.activation === 'immediate' ? 'immediate' : (t.activation === 'wait-once' ? 'wait-once' : 'delayed');
       var ds = parseInt(t.delaySec, 10);
-      out.trailer.delaySec = (isFinite(ds) && ds >= 0 && ds <= 120) ? ds : 7;
+      out.trailer.delaySec = (isFinite(ds) && ds >= 0 && ds <= 120) ? ds : 4;
       out.trailer.muted = t.muted !== false;
       out.trailer.loop = t.loop !== false;
     } catch (e) { /* fall back to defaults on anything unexpected */ }
@@ -116,7 +116,7 @@
     if (t.activation === 'immediate') return 0;
     if (t.activation === 'wait-once' && identity && (waitStarted[identity] || waitDone[identity])) return 0;
     var ds = parseInt(t.delaySec, 10);
-    if (!isFinite(ds) || ds < 0) ds = 7;
+    if (!isFinite(ds) || ds < 0) ds = 4;
     if (ds > 120) ds = 120;
     return ds * 1000;
   }
@@ -1019,7 +1019,7 @@
     // source is configured; TV goes to detail (episode selection lives there).
     // Anything unplayable falls back to the detail route.
     // Playback V1: hero Watch follows the configured mode (trailer visuals,
-    // 7-second activation, layers, ambient, fade untouched — only this movie
+    // 4-second activation, layers, ambient, fade untouched — only this movie
     // Watch action resolves through the mode-aware catalog resolver).
     try {
       var mt = mediaOf(item);

@@ -961,7 +961,7 @@
     const pres = heroPresentationOf(hero);
     if (pres.trailer.source === 'off') bits.push('trailer off');
     else if (pres.trailer.source === 'custom') bits.push('trailer ' + (pres.trailer.key || 'custom'));
-    else if (pres.trailer.activation !== 'delayed' || pres.trailer.delaySec !== 7) {
+    else if (pres.trailer.activation !== 'delayed' || pres.trailer.delaySec !== 4) {
       bits.push('trailer ' + pres.trailer.activation + ' ' + pres.trailer.delaySec + 's');
     }
     if (pres.artwork.backdrop === 'custom') bits.push('custom backdrop');
@@ -4827,7 +4827,7 @@
     if (!host) return;
     host.innerHTML = '';
     const card = el('div', 'data-row');
-    card.appendChild(el('p', 'row-meta', 'Order is always: blocked filtering, then detail presentation, then playback — this workspace can never render blocked titles or override Detail Pages visibility. Hero trailers (YouTube background video, 7-second activation) are unaffected by the mode; only the hero Watch action follows it. Public config is cached ~60s and falls back to auto when unreachable.'));
+    card.appendChild(el('p', 'row-meta', 'Order is always: blocked filtering, then detail presentation, then playback — this workspace can never render blocked titles or override Detail Pages visibility. Hero trailers (YouTube background video, 4-second activation) are unaffected by the mode; only the hero Watch action follows it. Public config is cached ~60s and falls back to auto when unreachable.'));
     host.appendChild(card);
   }
 
@@ -4983,7 +4983,7 @@
     const a = (h.artwork && typeof h.artwork === 'object') ? h.artwork : {};
     const t = (h.trailer && typeof h.trailer === 'object') ? h.trailer : {};
     let delay = parseInt(t.delaySec, 10);
-    if (!Number.isInteger(delay) || delay < 0) delay = 7;
+    if (!Number.isInteger(delay) || delay < 0) delay = 4;
     if (delay > 120) delay = 120;
     return {
       artwork: {
@@ -5271,7 +5271,7 @@
     wrap.appendChild(fieldRow('Activation', selectInput(prefix + '-activation',
       [['delayed', 'Delayed — wait N seconds every time'], ['immediate', 'Immediate — start at once'], ['wait-once', 'Wait once — delay only the first time']],
       t.activation === 'immediate' ? 'immediate' : (t.activation === 'wait-once' ? 'wait-once' : 'delayed'))));
-    wrap.appendChild(fieldRow('Delay (seconds, 0–120)', numInput(prefix + '-delay', (t.delaySec != null ? t.delaySec : 7), '7')));
+    wrap.appendChild(fieldRow('Delay (seconds, 0–120)', numInput(prefix + '-delay', (t.delaySec != null ? t.delaySec : 4), '4')));
     wrap.appendChild(checkInput(prefix + '-muted', t.muted !== false, 'Muted autoplay (required by most browsers)'));
     wrap.appendChild(checkInput(prefix + '-loop', t.loop !== false, 'Loop trailer'));
     wrap.appendChild(el('p', 'muted text-sm', 'Autoplay is never guaranteed: browsers may block it, in which case the hero keeps its still image. Only YouTube sources are supported.'));

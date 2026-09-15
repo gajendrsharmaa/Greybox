@@ -11,7 +11,7 @@
  * text fallback (never both, never a broken icon), en+null language request,
  * proxy forwarding of include_image_language (Cloudflare + Vercel),
  * server/admin sanitizer parity, cinematic CSS rules (aspect preserved, caps,
- * mobile tuning), markup presence, 7-second trailer timing untouched, and
+ * mobile tuning), markup presence, 4-second trailer timing, and
  * stream.js / playback logic untouched.
  */
 'use strict';
@@ -115,8 +115,8 @@ t('H23 logo hidden state + text screen-reader state exist (never both visible)',
   /\.gx-hero-title\.has-logo\s*\{[^}]*clip:\s*rect\(0 0 0 0\)/s.test(heroCss));
 
 /* ---- 5. untouched systems ---- */
-t('H24 7-second poster trailer timing is untouched',
-  /var TRAILER_DELAY_MS = 7000;/.test(heroSrc) && /delaySec: 7/.test(heroSrc));
+t('H24 4-second poster trailer timing',
+  /var TRAILER_DELAY_MS = 4000;/.test(heroSrc) && /delaySec: 4/.test(heroSrc));
 t('H25 stream.js carries no logo logic (playback/provider code untouched)',
   !/logo/i.test(streamSrc));
 t('H26 README documents the hero title-logo behavior',
@@ -191,7 +191,7 @@ async function behavioral() {
     const { Hero } = loadHero(() => Promise.reject(new Error('offline')));
     t('H27 hero module loads with the logo surface',
       !!Hero && typeof Hero.setHero === 'function' && typeof Hero.pickLogoUrl === 'function' &&
-      Hero.TRAILER_DELAY_MS === 7000);
+      Hero.TRAILER_DELAY_MS === 4000);
   } catch (e) {
     t('H27 hero module loads with the logo surface', false, String((e && e.message) || e));
   }
