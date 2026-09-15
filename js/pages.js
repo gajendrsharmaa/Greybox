@@ -223,6 +223,18 @@
     if (host) host.innerHTML = '';
   }
 
+  // Homepage list-shell section (the <section class="mt-8"> wrapping
+  // #list-head/#grid/#pager). Hiding only its children leaves its mt-8
+  // margin behind as an empty strip above the first shelf — so discover
+  // mode hides the whole shell instead.
+  function listShellSection() {
+    try {
+      const g = $('grid');
+      if (g && g.closest) return g.closest('section');
+    } catch (e) { /* headless */ }
+    return null;
+  }
+
   // Phase 5.5 unified homepage discovery surface. On the homepage (page 1)
   // ALL content renders as config-driven shelves through renderHomeSections —
   // the legacy grid/tabs/pager presentation for Trending/Movies/TV/Top Rated
@@ -235,6 +247,8 @@
         const el = $(id);
         if (el) el.classList.toggle('hidden', !!on);
       }
+      const shell = listShellSection();
+      if (shell) shell.classList.toggle('gx-shell-hidden', !!on);
       if (on) clearCollectionMore();
     } catch (e) { /* chrome optional in headless use */ }
   }
@@ -283,6 +297,11 @@
       if (grid) grid.classList.remove('hidden');
       const pager = $('pager');
       if (pager) pager.classList.toggle('hidden', !!on);
+      // Leaving discover mode: the list shell itself must come back —
+      // setHomeDiscoverMode(true) hides the whole <section> to kill its
+      // mt-8 gap, so every non-home surface restores it here.
+      const shell = listShellSection();
+      if (shell) shell.classList.remove('gx-shell-hidden');
       // Phase 5.4 pagination mount lives after the grid; other pages must
       // never inherit its skeletons/retry UI.
       clearCollectionMore();

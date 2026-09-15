@@ -817,7 +817,13 @@
       startListenPoll(myGen);
     };
     frame.onerror = function () { if (myGen === gen) failTrailer(); };
-    try { frame.src = embedUrl(key); } catch (e) { failTrailer(); return; }
+    try {
+      // Muted autoplay needs the autoplay permission on the element itself,
+      // not just the URL param — set explicitly so a stripped markup
+      // attribute can never silently break fullscreen trailer playback.
+      try { frame.setAttribute('allow', 'autoplay; encrypted-media; picture-in-picture'); } catch (e) { /* noop */ }
+      frame.src = embedUrl(key);
+    } catch (e) { failTrailer(); return; }
     cancelReadyTimer();
     readyTimer = setTimeout(function () {
       if (myGen !== gen || playerGen !== gen) return;
@@ -872,6 +878,16 @@
       cancelListenPoll();
       if (d.event === 'onReady') {
         dbg('player ready');
+        // Kick muted autoplay explicitly: some browsers gate the
+        // ?autoplay=1 hint until the JS bridge commands playback. Mute
+        // first (autoplay-muted is allowed), then play — both guarded by
+        // generation so a stale Ready can never start a newer hero.
+        try {
+          if (playerGen === gen && (phase === 'delay' || phase === 'playing')) {
+            sendCommand('mute');
+            sendCommand('playVideo');
+          }
+        } catch (e) { /* readiness timeout still bounds us */ }
       } else if (d.event === 'onStateChange') {
         onPlayerState(Number(d.info));
       } else if (d.event === 'infoDelivery' || d.event === 'info') {
@@ -924,7 +940,6 @@
   function setHero(item, pres) {
     if (!item) return null;
     stopTrailer();
-    try { wireHeroButtons(); } catch (e) { /* buttons static — re-wire is best-effort */ }
     // Per-hero presentation travels with the item (routes/collections can
     // never leak config into each other). Bare calls keep the configured
     // default. Sanitized: unknown logo values → automatic TMDB artwork.
@@ -934,6 +949,10 @@
     // artwork/trailer completion below must still match it before painting.
     currentIdentity = cacheKey(item);
     setText(item);
+    // Re-wire AFTER current is set so Watch/Info/List closures (and the
+    // app.js actions bound via bind()) always see the displayed identity —
+    // a stale wire can never leave dead buttons on a fresh hero.
+    try { wireHeroButtons(); } catch (e) { /* buttons static — re-wire is best-effort */ }
     loadBackdrop(item, gen, currentIdentity);
     beginSequence();
     try { window.dispatchEvent(new CustomEvent('greybox:hero', { detail: { id: item.id } })); } catch (e) { /* noop */ }
@@ -1099,16 +1118,32 @@
   var bound = false;
 
   /* Button wiring is idempotent (onclick assignment, never addEventListener):
-   * every bind() call re-wires, so order between this module's auto-bind and
-   * app.js's real-actions bind can never leave dead buttons. Global listeners
-   * (message/observer/visibility) still attach exactly once via `bound`. */
+   * every bind() + setHero() call re-wires, so order between this module's
+   * auto-bind and app.js's real-actions bind can never leave dead buttons.
+   * Global listeners (message/observer/visibility) still attach exactly once
+   * via `bound`. Buttons are also force-enabled here (disabled=false,
+   * pointer-events auto) so no stale attribute or overlay rule can make
+   * them look live but swallow clicks. */
+  function enableBtn(el) {
+    try {
+      el.type = 'button';
+      el.disabled = false;
+      el.removeAttribute('disabled');
+      el.tabIndex = 0;
+      if (el.style) {
+        el.style.pointerEvents = 'auto';
+        el.style.cursor = 'pointer';
+      }
+    } catch (e) { /* decorative hardening only */ }
+  }
   function wireHeroButtons() {
     try {
       var p = $('hero-play');
       if (p) {
-        try { p.type = 'button'; } catch (e) { /* noop */ }
+        enableBtn(p);
         p.onclick = function (ev) {
           try { if (ev && ev.preventDefault) ev.preventDefault(); } catch (e) { /* noop */ }
+          try { if (ev && ev.stopPropagation) ev.stopPropagation(); } catch (e2) { /* noop */ }
           if (current) { (actions.onWatch || defaultWatch)(current); }
         };
       }
@@ -1116,9 +1151,10 @@
     try {
       var inf = $('hero-info');
       if (inf) {
-        try { inf.type = 'button'; } catch (e) { /* noop */ }
+        enableBtn(inf);
         inf.onclick = function (ev) {
           try { if (ev && ev.preventDefault) ev.preventDefault(); } catch (e) { /* noop */ }
+          try { if (ev && ev.stopPropagation) ev.stopPropagation(); } catch (e2) { /* noop */ }
           if (current) { (actions.onInfo || defaultInfo)(current); }
         };
       }
@@ -1126,9 +1162,10 @@
     try {
       var lb = $('hero-list');
       if (lb) {
-        try { lb.type = 'button'; } catch (e) { /* noop */ }
+        enableBtn(lb);
         lb.onclick = function (ev) {
           try { if (ev && ev.preventDefault) ev.preventDefault(); } catch (e) { /* noop */ }
+          try { if (ev && ev.stopPropagation) ev.stopPropagation(); } catch (e2) { /* noop */ }
           if (!current) return;
           var added = false;
           try {
@@ -1147,7 +1184,7 @@
     try {
       var tb = $('hero-trailer-btn');
       if (tb) {
-        try { tb.type = 'button'; } catch (e) { /* noop */ }
+        enableBtn(tb);
         tb.onclick = function (ev) {
           try { if (ev && ev.preventDefault) ev.preventDefault(); } catch (e) { /* noop */ }
           try { if (ev && ev.stopPropagation) ev.stopPropagation(); } catch (e2) { /* noop */ }
