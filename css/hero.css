@@ -8,9 +8,11 @@
 .gx-hero {
   position: relative;
   z-index: 1;
-  height: 90vh;
-  min-height: 640px;
-  max-height: 980px;
+  /* 75% of the viewport on PC (svh-safe where supported). */
+  height: 75vh;
+  height: 75svh;
+  min-height: 520px;
+  max-height: 840px;
   overflow: hidden;
   background: transparent;
   isolation: isolate;
@@ -32,9 +34,9 @@ body { position: relative; }
   top: 0;
   left: 0;
   right: 0;
-  height: 124vh;
-  max-height: 1280px;
-  min-height: 720px;
+  height: 100vh;
+  max-height: 1120px;
+  min-height: 620px;
   overflow: hidden;
   z-index: 0;
   pointer-events: none;
@@ -95,9 +97,9 @@ main::before {
   position: relative;
   z-index: 0;
   width: 100vw;
-  height: 480px;
-  margin-top: -280px;
-  margin-bottom: -200px;
+  height: 380px;
+  margin-top: -220px;
+  margin-bottom: -160px;
   margin-left: calc(-50vw + 50%);
   background: linear-gradient(to bottom,
     rgba(27, 30, 35, 0) 0%,
@@ -111,23 +113,26 @@ main::before {
   pointer-events: none;
 }
 
-/* Content overlap: pull the homepage shelves up over the hero's bottom fade
- * to kill the gap between the hero buttons and the first shelf (e.g.
- * "Popular Movies"). The value accounts for two same-direction margins it
- * collapses with — the empty discover-mode grid section's mt-8 (32px) above
- * and the first shelf's own margin-top (32px) below — so the NET overlap is
- * ~136px: buttons sit 185px above the hero bottom, leaving ~49px of
- * breathing room, and the shelf head stays over the dark part of the fade
- * where text stays readable. The hero bottom is already ~solid base at this
- * height, so titles/cards stay readable while sitting close to the hero.
- * Scoped to non-empty #home-sections so list/collection pages (where it's
- * cleared) are unaffected. #notice / #collection-head stay above if ever
- * visible. */
+/* Content overlap: small tuck of the first shelf over the hero's bottom
+ * fade (no black void). Kept deliberately shallow so the overlap NEVER
+ * reaches the hero actions: buttons sit ~120px above the hero bottom while
+ * the shelves overlap only ~40px net, leaving ~80px of breathing room.
+ * Combined with the pointer-events pass-through below, hero buttons stay
+ * clickable even on font/zoom variation. */
 #home-sections:not(:empty) {
   position: relative;
   z-index: 1;
-  margin-top: -200px;
+  margin-top: -60px;
   padding-bottom: 8px;
+  /* Empty gutter above the first shelf must not swallow hero clicks:
+   * only real shelf content is interactive, transparent gaps pass through. */
+  pointer-events: none;
+}
+
+#home-sections:not(:empty) .gx-shelf,
+#home-sections:not(:empty) a,
+#home-sections:not(:empty) button {
+  pointer-events: auto;
 }
 
 #notice,
@@ -209,6 +214,7 @@ main > section {
 .gx-hero-shade {
   position: absolute;
   inset: 0;
+  pointer-events: none;
   background:
     linear-gradient(to top,
       var(--gx-bg-0) 0%,
@@ -227,6 +233,7 @@ main > section {
 .gx-hero-vignette {
   position: absolute;
   inset: 0;
+  pointer-events: none;
   background: radial-gradient(120% 95% at 50% 42%, transparent 52%, rgba(22, 25, 30, 0.55) 100%);
   /* Keep the vignette off the bottom blend zone: it paints above the
    * shade, so without this it would re-darken the solid terminus and
@@ -244,6 +251,7 @@ main > section {
   overflow: hidden;
   opacity: 0;
   transition: opacity 1200ms ease;
+  pointer-events: none;
   /* Same poster-blend feather as the still: video dissolves toward the
    * bottom edge so trailers blend into the background identically — eased
    * to fully transparent AT 100% so the video never ends in a line. */
@@ -263,16 +271,15 @@ main > section {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: max(100%, 177.78vh);
-  height: max(100%, 56.25vw);
   border: 0;
-  /* Background-video overscan: controls=0 only *requests* a chromeless
-   * player — YouTube still paints edge chrome (top title bar on start,
-   * playlist prev/next from loop mode, endscreen edges). Scaling the cover
-   * fit ~30% beyond the hero pushes ALL of that outside the visible area
-   * (.gx-hero-trailer and .gx-hero are both overflow:hidden), so no playback
-   * controls can ever show regardless of transient player states. The
-   * Greybox mute button lives outside this iframe and is unaffected. */
+  /* True fullscreen cover for a 75vh hero (full-bleed width):
+   * width covers max(hero width, hero-height * 16/9 = 75vh * 16/9),
+   * height covers max(hero height, hero-width * 9/16 = 56.25vw).
+   * The extra scale(1.3) overscan pushes residual YouTube edge chrome
+   * (title bar, loop-playlist affordances, endscreen edges) outside the
+   * visible hero. Greybox mute button lives outside this iframe. */
+  width: max(100%, 133.34vh);
+  height: max(100%, 56.25vw);
   transform: translate(-50%, -50%) scale(1.3);
   pointer-events: none; /* our own mute control; clicks never reach YouTube */
 }
@@ -288,11 +295,19 @@ main > section {
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  /* Lifted clear of the bottom blend strip (which paints over the
-   * hero's lower edge): buttons/text sit above the solid terminus so the
-   * continuation gradient never dims them. */
-  padding-bottom: 185px;
+  /* Buttons sit ~120px above the hero bottom: clear of the tall bottom
+   * blend AND clear of the shallow -60px shelf tuck above, so actions are
+   * never covered. */
+  padding-bottom: 120px;
   min-width: 0;
+  /* Content box itself never swallows clicks meant for shelves below —
+   * only real controls are interactive. */
+  pointer-events: none;
+}
+
+.gx-hero-content a,
+.gx-hero-content button {
+  pointer-events: auto;
 }
 
 .gx-hero-kicker {
@@ -363,6 +378,9 @@ main > section {
   flex-wrap: wrap;
   gap: 10px;
   align-items: center;
+  position: relative;
+  z-index: 3;
+  pointer-events: auto;
 }
 
 .gx-btn {
@@ -374,6 +392,9 @@ main > section {
   padding: 12px 26px;
   cursor: pointer;
   white-space: nowrap;
+  pointer-events: auto;
+  position: relative;
+  z-index: 3;
   transition: background var(--gx-transition), border-color var(--gx-transition), transform var(--gx-transition);
 }
 
@@ -412,6 +433,8 @@ main > section {
  * same position — never two controls at once. */
 .gx-trailer-btn {
   position: relative;
+  z-index: 3;
+  pointer-events: auto;
   flex: none;
   width: 42px;
   height: 42px;
@@ -470,26 +493,26 @@ main > section {
 
 @keyframes gx-spin { to { transform: rotate(360deg); } }
 
-/* Mobile composition (not a shrunk desktop) */
+/* Mobile composition (not a shrunk desktop) — 60% of the screen. */
 @media (max-width: 640px) {
   .gx-hero {
-    height: 88vh;
-    min-height: 580px;
-    max-height: 860px;
+    height: 60vh;
+    height: 60svh;
+    min-height: 420px;
+    max-height: 640px;
   }
 
   .gx-hero-img { object-position: center 15%; }
 
-  .gx-hero-content { padding-bottom: 52px; }
+  .gx-hero-content { padding-bottom: 56px; }
 
   /* Shorter continuation on small screens — same blend (solid across the
-   * hero edge, melt-out below), no layout gap. Content overlap is small
-   * here because mobile hero buttons sit low (padding-bottom: 52px):
-   * pulling rows up too far would cover them. */
+   * hero edge, melt-out below), no layout gap. Overlap stays shallow so
+   * low-sitting mobile buttons (56px up) are never covered. */
   main::before {
-    height: 340px;
-    margin-top: -190px;
-    margin-bottom: -150px;
+    height: 300px;
+    margin-top: -160px;
+    margin-bottom: -140px;
     background: linear-gradient(to bottom,
       rgba(27, 30, 35, 0) 0%,
       rgba(27, 30, 35, 0.32) 17%,
@@ -501,12 +524,19 @@ main > section {
       rgba(27, 30, 35, 0) 100%);
   }
 
-  /* Mobile overlap: same collapsing stack as desktop (empty section mt-8 +
-   * first-shelf margin), so -80px nets ~-48px of overlap — the shelf tucks
-   * just under the hero with ~36px clearance below the low-sitting mobile
-   * buttons (padding-bottom: 52px), never covering them. */
+  /* Mobile tuck: ~30px overlap leaves ~26px clearance below the buttons.
+   * Pointer-events pass-through (base rule above) keeps buttons clickable. */
   #home-sections:not(:empty) {
-    margin-top: -80px;
+    margin-top: -30px;
+  }
+
+  /* Mobile cover for a 60vh hero: width covers max(hero width,
+   * 60vh * 16/9 = 106.67vh) so portrait phones get a true fullscreen
+   * fill without the old 177vh over-zoom. */
+  .gx-hero-trailer iframe {
+    width: max(100%, 106.67vh);
+    width: max(100%, 106.67svh);
+    height: max(100%, 56.25vw);
   }
 
   /* Title artwork stays proportional on small screens: slightly tighter
@@ -521,12 +551,13 @@ main > section {
   .gx-btn { padding: 11px 20px; font-size: 13.5px; }
   .gx-btn-ghost { padding: 11px 10px; }
 
-  /* Ambient still covers the taller mobile hero + bleed, never wider than
+  /* Ambient still covers the 60vh mobile hero + bleed, never wider than
    * the viewport (no horizontal scroll from the overscanned image). */
   .gx-page-ambient {
-    height: 116vh;
-    min-height: 640px;
-    max-height: 1080px;
+    height: 80vh;
+    height: 80svh;
+    min-height: 520px;
+    max-height: 840px;
   }
 
   .gx-page-ambient-img { filter: blur(70px) saturate(1.3) brightness(0.7); }

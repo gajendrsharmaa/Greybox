@@ -924,6 +924,7 @@
   function setHero(item, pres) {
     if (!item) return null;
     stopTrailer();
+    try { wireHeroButtons(); } catch (e) { /* buttons static — re-wire is best-effort */ }
     // Per-hero presentation travels with the item (routes/collections can
     // never leak config into each other). Bare calls keep the configured
     // default. Sanitized: unknown logo values → automatic TMDB artwork.
@@ -1097,30 +1098,70 @@
 
   var bound = false;
 
+  /* Button wiring is idempotent (onclick assignment, never addEventListener):
+   * every bind() call re-wires, so order between this module's auto-bind and
+   * app.js's real-actions bind can never leave dead buttons. Global listeners
+   * (message/observer/visibility) still attach exactly once via `bound`. */
+  function wireHeroButtons() {
+    try {
+      var p = $('hero-play');
+      if (p) {
+        try { p.type = 'button'; } catch (e) { /* noop */ }
+        p.onclick = function (ev) {
+          try { if (ev && ev.preventDefault) ev.preventDefault(); } catch (e) { /* noop */ }
+          if (current) { (actions.onWatch || defaultWatch)(current); }
+        };
+      }
+    } catch (e) { /* noop */ }
+    try {
+      var inf = $('hero-info');
+      if (inf) {
+        try { inf.type = 'button'; } catch (e) { /* noop */ }
+        inf.onclick = function (ev) {
+          try { if (ev && ev.preventDefault) ev.preventDefault(); } catch (e) { /* noop */ }
+          if (current) { (actions.onInfo || defaultInfo)(current); }
+        };
+      }
+    } catch (e) { /* noop */ }
+    try {
+      var lb = $('hero-list');
+      if (lb) {
+        try { lb.type = 'button'; } catch (e) { /* noop */ }
+        lb.onclick = function (ev) {
+          try { if (ev && ev.preventDefault) ev.preventDefault(); } catch (e) { /* noop */ }
+          if (!current) return;
+          var added = false;
+          try {
+            if (typeof actions.onToggleList === 'function') added = !!actions.onToggleList(current);
+            else if (window.GreyboxData && typeof window.GreyboxData.toggleMyListItem === 'function') {
+              added = !!window.GreyboxData.toggleMyListItem(
+                Object.assign({}, current, { media_type: mediaOf(current) })
+              );
+            }
+          } catch (e) { added = false; }
+          refreshListLabel();
+          void added;
+        };
+      }
+    } catch (e) { /* noop */ }
+    try {
+      var tb = $('hero-trailer-btn');
+      if (tb) {
+        try { tb.type = 'button'; } catch (e) { /* noop */ }
+        tb.onclick = function (ev) {
+          try { if (ev && ev.preventDefault) ev.preventDefault(); } catch (e) { /* noop */ }
+          try { if (ev && ev.stopPropagation) ev.stopPropagation(); } catch (e2) { /* noop */ }
+          controlActivate();
+        };
+      }
+    } catch (e) { /* noop */ }
+  }
+
   function bind(next) {
     if (next && typeof next === 'object') actions = next;
-    if (bound) return; // idempotent: app.js re-binds with real actions, one listener set only
+    wireHeroButtons();
+    if (bound) return; // global listeners below attach exactly once
     bound = true;
-    function on(el, fn) {
-      try { if (el) el.addEventListener('click', fn); } catch (e) { /* noop */ }
-    }
-    on($('hero-play'), function () { if (current) { (actions.onWatch || defaultWatch)(current); } });
-    on($('hero-info'), function () { if (current) { (actions.onInfo || defaultInfo)(current); } });
-    on($('hero-list'), function () {
-      if (!current) return;
-      var added = false;
-      try {
-        if (typeof actions.onToggleList === 'function') added = !!actions.onToggleList(current);
-        else if (window.GreyboxData && typeof window.GreyboxData.toggleMyListItem === 'function') {
-          added = !!window.GreyboxData.toggleMyListItem(
-            Object.assign({}, current, { media_type: mediaOf(current) })
-          );
-        }
-      } catch (e) { added = false; }
-      refreshListLabel();
-      void added;
-    });
-    on($('hero-trailer-btn'), controlActivate);
     // Single global player-message listener (source-validated per event).
     try { window.addEventListener('message', onPlayerMessage); } catch (e) { /* noop */ }
     // Navigation invalidates any pending trailer — never play across routes.
