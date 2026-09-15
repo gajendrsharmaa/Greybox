@@ -76,20 +76,21 @@ main, footer { position: relative; z-index: 1; }
 
 /* Bottom blend continuation: a tall full-bleed dissolve strip at the top of
  * <main> that sits OVER the hero's bottom edge (negative margin pulls it
- * up) and eases from transparent → solid base color. The strip is TALLER
- * than its overlap, so the fade visibly CONTINUES past the hero boundary
- * ~100px into the content area instead of stopping at it — poster melts
- * into the page with no hard line. Full-bleed (100vw breakout) so the
- * blend spans edge-to-edge even though <main> itself is a centered max-width
- * column. Harmless on non-hero routes: transparent→base over a base
- * background is invisible. */
+ * up) and eases from transparent → solid base color. The strip exactly
+ * overlaps the hero (height == overlap) so it adds NO layout gap — it only
+ * paints the fade. Content is pulled up separately via #home-sections
+ * overlap below, so rows sit over the fade like Netflix instead of
+ * leaving a black void. Full-bleed (100vw breakout) so the blend spans
+ * edge-to-edge even though <main> itself is a centered max-width column.
+ * Harmless on non-hero routes: transparent→base over a base background
+ * is invisible. */
 main::before {
   content: "";
   display: block;
   position: relative;
   z-index: 0;
   width: 100vw;
-  height: 380px;
+  height: 280px;
   margin-top: -280px;
   margin-bottom: 0;
   margin-left: calc(-50vw + 50%);
@@ -101,6 +102,30 @@ main::before {
     rgba(7, 7, 12, 0.9) 82%,
     var(--gx-bg-0) 100%);
   pointer-events: none;
+}
+
+/* Content overlap: pull the homepage shelves up over the hero's bottom fade
+ * to kill the wide black void between the hero buttons and "Popular Movies".
+ * The hero bottom is already ~solid base at this height, so titles/cards
+ * stay readable while sitting closer to the hero. Scoped to non-empty
+ * #home-sections so list/collection pages (where it's cleared) are
+ * unaffected. #notice / #collection-head stay above if ever visible. */
+#home-sections:not(:empty) {
+  position: relative;
+  z-index: 1;
+  margin-top: -135px;
+  padding-bottom: 8px;
+}
+
+#notice,
+#collection-head {
+  position: relative;
+  z-index: 2;
+}
+
+main > section {
+  position: relative;
+  z-index: 1;
 }
 
 /* Reserve full space before art loads: dark placeholder, never a broken icon */
@@ -440,10 +465,16 @@ main::before {
 
   .gx-hero-content { padding-bottom: 52px; }
 
-  /* Shorter continuation on small screens — same blend + tail, less overlap */
+  /* Shorter continuation on small screens — same blend, no layout gap.
+   * Content overlap is small here because mobile hero buttons sit low
+   * (padding-bottom: 52px): pulling rows up too far would cover them. */
   main::before {
-    height: 260px;
+    height: 190px;
     margin-top: -190px;
+  }
+
+  #home-sections:not(:empty) {
+    margin-top: -32px;
   }
 
   /* Title artwork stays proportional on small screens: slightly tighter
