@@ -112,15 +112,21 @@ main::before {
 }
 
 /* Content overlap: pull the homepage shelves up over the hero's bottom fade
- * to kill the wide black void between the hero buttons and "Popular Movies".
- * The hero bottom is already ~solid base at this height, so titles/cards
- * stay readable while sitting closer to the hero. Scoped to non-empty
- * #home-sections so list/collection pages (where it's cleared) are
- * unaffected. #notice / #collection-head stay above if ever visible. */
+ * to kill the gap between the hero buttons and the first shelf (e.g.
+ * "Popular Movies"). The value accounts for two same-direction margins it
+ * collapses with — the empty discover-mode grid section's mt-8 (32px) above
+ * and the first shelf's own margin-top (32px) below — so the NET overlap is
+ * ~136px: buttons sit 185px above the hero bottom, leaving ~49px of
+ * breathing room, and the shelf head stays over the dark part of the fade
+ * where text stays readable. The hero bottom is already ~solid base at this
+ * height, so titles/cards stay readable while sitting close to the hero.
+ * Scoped to non-empty #home-sections so list/collection pages (where it's
+ * cleared) are unaffected. #notice / #collection-head stay above if ever
+ * visible. */
 #home-sections:not(:empty) {
   position: relative;
   z-index: 1;
-  margin-top: -135px;
+  margin-top: -200px;
   padding-bottom: 8px;
 }
 
@@ -495,8 +501,12 @@ main > section {
       rgba(27, 30, 35, 0) 100%);
   }
 
+  /* Mobile overlap: same collapsing stack as desktop (empty section mt-8 +
+   * first-shelf margin), so -80px nets ~-48px of overlap — the shelf tucks
+   * just under the hero with ~36px clearance below the low-sitting mobile
+   * buttons (padding-bottom: 52px), never covering them. */
   #home-sections:not(:empty) {
-    margin-top: -32px;
+    margin-top: -80px;
   }
 
   /* Title artwork stays proportional on small screens: slightly tighter
