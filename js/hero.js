@@ -213,12 +213,37 @@
     // and onPlayerState() conceals the endscreen on natural end. fs=0 keeps
     // the fullscreen affordance out; disablekb=1 (+ tabindex -1 in markup)
     // keeps keyboard focus from ever driving the player.
+    var originParam = '';
+    try {
+      var locOrigin = (window.location && window.location.origin) || '';
+      if (/^https?:\/\//i.test(locOrigin)) originParam = '&origin=' + encodeURIComponent(locOrigin);
+    } catch (e) { originParam = ''; }
     var url = 'https://www.youtube.com/embed/' + key +
       '?autoplay=1&controls=0&fs=0&rel=0&playsinline=1' +
       (mutedParam ? '&mute=1' : '') +
       (loopParam ? '&loop=1&playlist=' + key : '') +
-      '&modestbranding=1&iv_load_policy=3&disablekb=1&enablejsapi=1';
+      '&modestbranding=1&iv_load_policy=3&disablekb=1&enablejsapi=1' + originParam;
     return url;
+  }
+
+  /* Post a command to the current trailer player (YouTube IFrame API via
+   * postMessage). Generation-guarded: a stale iframe can never receive
+   * commands meant for the current hero. Returns true when posted. */
+  function playerWindow() {
+    try {
+      var f = $('hero-trailer');
+      return (f && f.contentWindow) ? f.contentWindow : null;
+    } catch (e) { return null; }
+  }
+
+  function sendCommand(func, args) {
+    try {
+      if (playerGen !== gen) return false;
+      var w = playerWindow();
+      if (!w) return false;
+      w.postMessage(JSON.stringify({ event: 'command', func: func, args: args || [] }), '*');
+      return true;
+    } catch (e) { return false; }
   }
 
   function cancelDelay() {
@@ -971,9 +996,20 @@
     var frame = $('hero-trailer');
     var btn = $('hero-trailer-btn');
     if (!frame || !frame.src || !btn || btn.classList.contains('hidden')) return;
+    if (playerGen !== gen || !playerWindow()) return; // stale/gone player: never fake a toggle
     try {
-      var func = muted ? 'unMute' : 'mute';
-      frame.contentWindow.postMessage(JSON.stringify({ event: 'command', func: func, args: [] }), '*');
+      if (muted) {
+        // Unmuting a muted-autoplay chromeless player takes three commands:
+        // setVolume restores an audible level (autoplay-muted players often
+        // sit at volume 0, where unMute alone stays silent), unMute clears
+        // the mute flag, and playVideo keeps the scenery running in case the
+        // player paused around the audio switch.
+        sendCommand('setVolume', [100]);
+        sendCommand('unMute');
+        sendCommand('playVideo');
+      } else {
+        sendCommand('mute');
+      }
       // Audio is never remembered: a fresh trailer always starts muted.
       muted = !muted;
       paintControl();

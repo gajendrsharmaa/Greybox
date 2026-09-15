@@ -319,6 +319,67 @@ export async function deleteOverride(db, media, tmdbId) {
  * relied upon), then the tag row.
  */
 
+/* Self-healing tags schema (migration 0003 safety net).
+ *
+ * Why this exists: remote D1 databases that were created before
+ * 0003_tags.sql existed — or were set up by manually executing only
+ * 0001/0002 — have no `tags`/`tag_members` tables. Every tags query then
+ * throws "no such table", the admin API maps it to a generic 500
+ * ("Internal error."), and the Tags workspace fails on BOTH list and
+ * create with no actionable message. Rather than leaving the feature
+ * broken until someone runs wrangler against the remote DB, the tags
+ * entry points below heal on failure: when an operation fails ONLY
+ * because the tags tables are missing, they create the exact 0003 schema
+ * (IF NOT EXISTS — a strict no-op when the migration was applied
+ * normally) and retry the operation once. Healthy databases pay nothing
+ * (no extra statements on success); any other error still propagates
+ * untouched, so real failures keep their behavior.
+ */
+
+const TAGS_SCHEMA_SQL = [
+  `CREATE TABLE IF NOT EXISTS tags (
+  slug TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  visible INTEGER NOT NULL DEFAULT 1 CHECK (visible IN (0, 1)),
+  badge INTEGER NOT NULL DEFAULT 0 CHECK (badge IN (0, 1)),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)`,
+  'CREATE INDEX IF NOT EXISTS idx_tags_order ON tags (sort_order ASC, slug ASC)',
+  `CREATE TABLE IF NOT EXISTS tag_members (
+  tag_slug TEXT NOT NULL REFERENCES tags(slug) ON DELETE CASCADE,
+  media TEXT NOT NULL CHECK (media IN ('movie', 'tv')),
+  tmdb_id INTEGER NOT NULL CHECK (tmdb_id > 0),
+  position INTEGER NOT NULL DEFAULT 0 CHECK (position >= 0),
+  PRIMARY KEY (tag_slug, media, tmdb_id)
+)`,
+  'CREATE INDEX IF NOT EXISTS idx_tag_members_tag ON tag_members (tag_slug ASC, position ASC)',
+];
+
+function isMissingTagsTableError(e) {
+  const msg = String((e && e.message) || e || '').toLowerCase();
+  if (msg.indexOf('no such table') < 0) return false;
+  return msg.indexOf('tags') >= 0 || msg.indexOf('tag_members') >= 0;
+}
+
+async function ensureTagsSchema(db) {
+  for (const sql of TAGS_SCHEMA_SQL) {
+    await db.prepare(sql).run();
+  }
+}
+
+async function withTagsSchema(db, fn) {
+  try {
+    return await fn();
+  } catch (e) {
+    if (!isMissingTagsTableError(e)) throw e;
+    await ensureTagsSchema(db);
+    return await fn();
+  }
+}
+
 function rowToTagSummary(r, counts) {
   const c = (counts && counts[r.slug]) || { n: 0, movies: 0, tv: 0 };
   return {
@@ -356,81 +417,89 @@ async function tagMemberCounts(db) {
 
 /** All tags in display order, each with member counts (no member lists). */
 export async function readTags(db) {
-  const { results } = await db
-    .prepare(
-      'SELECT slug, name, description, visible, badge ' +
-        'FROM tags ORDER BY sort_order ASC, slug ASC',
-    )
-    .all();
-  const counts = await tagMemberCounts(db);
-  return (results || []).map((r) => rowToTagSummary(r, counts));
+  return withTagsSchema(db, async () => {
+    const { results } = await db
+      .prepare(
+        'SELECT slug, name, description, visible, badge ' +
+          'FROM tags ORDER BY sort_order ASC, slug ASC',
+      )
+      .all();
+    const counts = await tagMemberCounts(db);
+    return (results || []).map((r) => rowToTagSummary(r, counts));
+  });
 }
 
 /** Ordered members [{ media, id }] for one tag slug (position order). */
 export async function readTagMembers(db, slug) {
   const s = String(slug || '').trim().toLowerCase();
   if (!s) return [];
-  const { results } = await db
-    .prepare(
-      'SELECT media, tmdb_id AS id FROM tag_members ' +
-        'WHERE tag_slug = ? ORDER BY position ASC, media ASC, tmdb_id ASC',
-    )
-    .bind(s)
-    .all();
-  return (results || [])
-    .filter((r) => (r.media === 'movie' || r.media === 'tv') && Number.isInteger(r.id) && r.id > 0)
-    .map((r) => ({ media: r.media, id: r.id }));
+  return withTagsSchema(db, async () => {
+    const { results } = await db
+      .prepare(
+        'SELECT media, tmdb_id AS id FROM tag_members ' +
+          'WHERE tag_slug = ? ORDER BY position ASC, media ASC, tmdb_id ASC',
+      )
+      .bind(s)
+      .all();
+    return (results || [])
+      .filter((r) => (r.media === 'movie' || r.media === 'tv') && Number.isInteger(r.id) && r.id > 0)
+      .map((r) => ({ media: r.media, id: r.id }));
+  });
 }
 
 /** Single tag with ordered members, or null when missing. */
 export async function readTag(db, slug) {
   const s = String(slug || '').trim().toLowerCase();
   if (!s) return null;
-  const row = await db
-    .prepare('SELECT slug, name, description, visible, badge FROM tags WHERE slug = ?')
-    .bind(s)
-    .first();
-  if (!row) return null;
-  return {
-    slug: row.slug,
-    name: row.name,
-    description: row.description || '',
-    visible: asBool(row.visible, true),
-    badge: asBool(row.badge, false),
-    members: await readTagMembers(db, s),
-  };
+  return withTagsSchema(db, async () => {
+    const row = await db
+      .prepare('SELECT slug, name, description, visible, badge FROM tags WHERE slug = ?')
+      .bind(s)
+      .first();
+    if (!row) return null;
+    return {
+      slug: row.slug,
+      name: row.name,
+      description: row.description || '',
+      visible: asBool(row.visible, true),
+      badge: asBool(row.badge, false),
+      members: await readTagMembers(db, s),
+    };
+  });
 }
 
 /** Public tag list: visible tags with ordered members, in display order.
  *  Two queries total (tags + all members) regardless of tag count. */
 export async function readPublicTags(db) {
-  const { results } = await db
-    .prepare(
-      'SELECT slug, name, description, badge FROM tags ' +
-        'WHERE visible = 1 ORDER BY sort_order ASC, slug ASC',
-    )
-    .all();
-  const tags = results || [];
-  if (!tags.length) return [];
-  const { results: mrows } = await db
-    .prepare(
-      'SELECT tag_slug, media, tmdb_id AS id FROM tag_members ' +
-        'ORDER BY tag_slug ASC, position ASC, media ASC, tmdb_id ASC',
-    )
-    .all();
-  const bySlug = {};
-  for (const r of mrows || []) {
-    if (r.media !== 'movie' && r.media !== 'tv') continue;
-    if (!Number.isInteger(r.id) || r.id < 1) continue;
-    (bySlug[r.tag_slug] = bySlug[r.tag_slug] || []).push({ media: r.media, id: r.id });
-  }
-  return tags.map((t) => ({
-    slug: t.slug,
-    name: t.name,
-    description: t.description || '',
-    badge: asBool(t.badge, false),
-    members: bySlug[t.slug] || [],
-  }));
+  return withTagsSchema(db, async () => {
+    const { results } = await db
+      .prepare(
+        'SELECT slug, name, description, badge FROM tags ' +
+          'WHERE visible = 1 ORDER BY sort_order ASC, slug ASC',
+      )
+      .all();
+    const tags = results || [];
+    if (!tags.length) return [];
+    const { results: mrows } = await db
+      .prepare(
+        'SELECT tag_slug, media, tmdb_id AS id FROM tag_members ' +
+          'ORDER BY tag_slug ASC, position ASC, media ASC, tmdb_id ASC',
+      )
+      .all();
+    const bySlug = {};
+    for (const r of mrows || []) {
+      if (r.media !== 'movie' && r.media !== 'tv') continue;
+      if (!Number.isInteger(r.id) || r.id < 1) continue;
+      (bySlug[r.tag_slug] = bySlug[r.tag_slug] || []).push({ media: r.media, id: r.id });
+    }
+    return tags.map((t) => ({
+      slug: t.slug,
+      name: t.name,
+      description: t.description || '',
+      badge: asBool(t.badge, false),
+      members: bySlug[t.slug] || [],
+    }));
+  });
 }
 
 // Write the member list for a tag: explicit positions 0..n-1 (gapless),
@@ -452,45 +521,51 @@ async function writeTagMembers(db, slug, members) {
 
 /** Insert a validated tag ({ slug, name, description, visible, badge, members?, sort_order? }). Throws { status: 409 } on duplicate slug. */
 export async function createTag(db, t) {
-  const existing = await readTag(db, t.slug);
-  if (existing) throw { status: 409, message: 'Tag already exists: ' + t.slug };
-  const order = t.sort_order != null ? t.sort_order : await nextSortOrder(db, 'tags');
-  await db
-    .prepare(
-      'INSERT INTO tags (slug, name, description, visible, badge, sort_order) ' +
-        'VALUES (?, ?, ?, ?, ?, ?)',
-    )
-    .bind(t.slug, t.name, t.description || '', t.visible ? 1 : 0, t.badge ? 1 : 0, order)
-    .run();
-  await writeTagMembers(db, t.slug, t.members);
-  return readTag(db, t.slug);
+  return withTagsSchema(db, async () => {
+    const existing = await readTag(db, t.slug);
+    if (existing) throw { status: 409, message: 'Tag already exists: ' + t.slug };
+    const order = t.sort_order != null ? t.sort_order : await nextSortOrder(db, 'tags');
+    await db
+      .prepare(
+        'INSERT INTO tags (slug, name, description, visible, badge, sort_order) ' +
+          'VALUES (?, ?, ?, ?, ?, ?)',
+      )
+      .bind(t.slug, t.name, t.description || '', t.visible ? 1 : 0, t.badge ? 1 : 0, order)
+      .run();
+    await writeTagMembers(db, t.slug, t.members);
+    return readTag(db, t.slug);
+  });
 }
 
 /** Full-update a tag by slug (fields + ordered members replaced). Returns the stored row, or null if missing. */
 export async function updateTag(db, slug, t) {
-  const existing = await readTag(db, slug);
-  if (!existing) return null;
-  let order = t.sort_order;
-  if (order == null) {
-    const cur = await db.prepare('SELECT sort_order AS n FROM tags WHERE slug = ?').bind(slug).first();
-    order = (cur && Number.isFinite(cur.n)) ? cur.n : 0;
-  }
-  await db
-    .prepare(
-      'UPDATE tags SET name = ?, description = ?, visible = ?, badge = ?, ' +
-        'sort_order = ?, updated_at = CURRENT_TIMESTAMP WHERE slug = ?',
-    )
-    .bind(t.name, t.description || '', t.visible ? 1 : 0, t.badge ? 1 : 0, order, slug)
-    .run();
-  await writeTagMembers(db, slug, t.members);
-  return readTag(db, slug);
+  return withTagsSchema(db, async () => {
+    const existing = await readTag(db, slug);
+    if (!existing) return null;
+    let order = t.sort_order;
+    if (order == null) {
+      const cur = await db.prepare('SELECT sort_order AS n FROM tags WHERE slug = ?').bind(slug).first();
+      order = (cur && Number.isFinite(cur.n)) ? cur.n : 0;
+    }
+    await db
+      .prepare(
+        'UPDATE tags SET name = ?, description = ?, visible = ?, badge = ?, ' +
+          'sort_order = ?, updated_at = CURRENT_TIMESTAMP WHERE slug = ?',
+      )
+      .bind(t.name, t.description || '', t.visible ? 1 : 0, t.badge ? 1 : 0, order, slug)
+      .run();
+    await writeTagMembers(db, slug, t.members);
+    return readTag(db, slug);
+  });
 }
 
 /** Delete a tag and its memberships. Returns true when a tag row was removed. */
 export async function deleteTag(db, slug) {
-  await db.prepare('DELETE FROM tag_members WHERE tag_slug = ?').bind(slug).run();
-  const out = await db.prepare('DELETE FROM tags WHERE slug = ?').bind(slug).run();
-  return changesOf(out) > 0;
+  return withTagsSchema(db, async () => {
+    await db.prepare('DELETE FROM tag_members WHERE tag_slug = ?').bind(slug).run();
+    const out = await db.prepare('DELETE FROM tags WHERE slug = ?').bind(slug).run();
+    return changesOf(out) > 0;
+  });
 }
 
 /** Where a tag slug is referenced as a content source: home section ids +
@@ -499,27 +574,29 @@ export async function deleteTag(db, slug) {
 export async function findTagUsage(db, slug) {
   const s = String(slug || '').trim().toLowerCase();
   if (!s) return { sections: [], collections: [] };
-  // Slug charset [a-z0-9-] is LIKE-safe (no % or _ possible).
-  const typePat = '%"type":"tag"%';
-  const tagPat = '%"tag":"' + s + '"%';
-  const sec = await db
-    .prepare(
-      'SELECT id, title FROM home_sections ' +
-        'WHERE source_json LIKE ? AND source_json LIKE ? ORDER BY sort_order ASC, id ASC',
-    )
-    .bind(typePat, tagPat)
-    .all();
-  const col = await db
-    .prepare(
-      'SELECT slug, title FROM collections ' +
-        'WHERE source_json LIKE ? AND source_json LIKE ? ORDER BY sort_order ASC, slug ASC',
-    )
-    .bind(typePat, tagPat)
-    .all();
-  return {
-    sections: (sec.results || []).map((r) => ({ id: r.id, title: r.title })),
-    collections: (col.results || []).map((r) => ({ slug: r.slug, title: r.title })),
-  };
+  return withTagsSchema(db, async () => {
+    // Slug charset [a-z0-9-] is LIKE-safe (no % or _ possible).
+    const typePat = '%"type":"tag"%';
+    const tagPat = '%"tag":"' + s + '"%';
+    const sec = await db
+      .prepare(
+        'SELECT id, title FROM home_sections ' +
+          'WHERE source_json LIKE ? AND source_json LIKE ? ORDER BY sort_order ASC, id ASC',
+      )
+      .bind(typePat, tagPat)
+      .all();
+    const col = await db
+      .prepare(
+        'SELECT slug, title FROM collections ' +
+          'WHERE source_json LIKE ? AND source_json LIKE ? ORDER BY sort_order ASC, slug ASC',
+      )
+      .bind(typePat, tagPat)
+      .all();
+    return {
+      sections: (sec.results || []).map((r) => ({ id: r.id, title: r.title })),
+      collections: (col.results || []).map((r) => ({ slug: r.slug, title: r.title })),
+    };
+  });
 }
 
 /* ---------------- permanent blocklist (Blocked Titles workspace) ----------------
