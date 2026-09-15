@@ -144,8 +144,8 @@ t('9e admin token still memory-only (no persistence added)',
 t('10a public /api/config/navigation route exists', fs.existsSync(path.join(ROOT, 'functions/api/config/navigation.js')));
 t('10b public route serves shaped config with items + searchVisible + routes',
   /readNavigation\(db\)/.test(publicRoute));
-t('10c public route is open GET with short cache (no auth, ~60s propagation)',
-  !/requireAdmin/.test(publicRoute) && /request\.method !== 'GET'/.test(publicRoute) && /max-age=60/.test(publicRoute));
+t('10c public route is open GET with no-store (no auth, immediate propagation)',
+  !/requireAdmin/.test(publicRoute) && /request\.method !== 'GET'/.test(publicRoute) && /no-store/.test(publicRoute));
 t('10d db exposes readNavigation through the settings row (no new table)',
   /export async function readNavigation\(db\)/.test(dbSrc) &&
   /readSetting\(db, 'navigation'\)/.test(dbSrc) &&
@@ -519,9 +519,9 @@ async function esmTests() {
     r = await publicMod.onRequest({ request: req('http://x/api/config/navigation'), env: { DB: db } });
     const pub = r.status === 200 ? await r.json() : null;
     const cache = r.headers ? r.headers.get('Cache-Control') : '';
-    t('E22 (10,12) public config reflects the save (open, short cache)',
+    t('E22 (10,12) public config reflects the save (open, no-store for immediate apply)',
       r.status === 200 && !!pub && pub.items[0].key === 'my-list' && pub.items[0].label === 'Watchlist' &&
-      /max-age=60/.test(cache || ''));
+      /no-store/.test(cache || ''));
     t('E23 (13) hidden item still present server-side with visible:false (frontend hides it)',
       !!pub && pub.items.find((i) => i.key === 'movies').visible === false);
     t('E24 (14) public order follows the saved order',

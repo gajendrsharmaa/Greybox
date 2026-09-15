@@ -276,14 +276,14 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#1b1e
       <div class="text-lg font-black tracking-tight text-zinc-100">Grey<span style="color:var(--gx-accent)">box</span></div>
       <p class="mt-2">Metadata & images by TMDB. Trailers via YouTube.</p>
     </div>
-    <nav aria-label="Browse">
+    <nav aria-label="Browse" id="footer-browse">
       <h3 class="text-sm font-bold text-zinc-200">Browse</h3>
-      <a href="/" class="block mt-2 hover:text-white">Home</a>
-      <a href="/movies" class="block mt-2 hover:text-white">Movies</a>
-      <a href="/tv" class="block mt-2 hover:text-white">TV Shows</a>
-      <a href="/anime" class="block mt-2 hover:text-white">Anime</a>
-      <a href="/search" class="block mt-2 hover:text-white">Search</a>
-      <a href="/mylist" class="block mt-2 hover:text-white">My List</a>
+      <a href="/" data-footnav="home" class="block mt-2 hover:text-white">Home</a>
+      <a href="/movies" data-footnav="movies" class="block mt-2 hover:text-white">Movies</a>
+      <a href="/tv" data-footnav="tv" class="block mt-2 hover:text-white">TV Shows</a>
+      <a href="/anime" data-footnav="anime" class="block mt-2 hover:text-white">Anime</a>
+      <a href="/search" data-footnav="search" class="block mt-2 hover:text-white">Search</a>
+      <a href="/mylist" data-footnav="my-list" class="block mt-2 hover:text-white">My List</a>
     </nav>
     <nav aria-label="Collections" id="footer-collections-section">
       <h3 class="text-sm font-bold text-zinc-200">Collections</h3>
@@ -314,7 +314,7 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#1b1e
 <script src="/js/navigation.config.js?v=1"></script>
 <script src="/js/detail-pages.config.js?v=1"></script>
 <script src="/js/playback.config.js?v=1"></script>
-<script src="/js/data.js?v=5"></script>
+<script src="/js/data.js?v=6"></script>
 <script src="/js/components.js?v=1"></script>
 <script src="/js/pages.js?v=1"></script>
 <script src="/js/detail-pages.js?v=1"></script>
@@ -322,7 +322,7 @@ tailwind.config = { darkMode: 'class', theme: { extend: { colors: { base: '#1b1e
 <script src="/js/app.js?v=9"></script>
 <script src="/js/greybox-test-source.js?v=1"></script>
 <script src="/js/collections-nav.js?v=1"></script>
-<script src="/js/navigation.js?v=1"></script>
+<script src="/js/navigation.js?v=2"></script>
 <script src="/js/navbar.js?v=1"></script>
 <script src="/js/shelves.js?v=1"></script>
 </body>

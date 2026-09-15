@@ -4341,7 +4341,7 @@
       if (navStableJson(shaped) !== navStableJson(payload)) {
         notice('err', 'Save reported success, but a fresh read-back differs — not showing success. Refresh and retry.');
       } else {
-        notice('ok', 'Navigation saved. The public navbar updates within ~a minute.');
+        notice('ok', 'Navigation saved. The public navbar updates immediately — hard-refresh the site to verify.');
       }
       navServer = shaped;
       navDraft = navClone(shaped);

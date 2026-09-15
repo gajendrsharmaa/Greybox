@@ -49,7 +49,11 @@
   function fetchJsonTimeout(url, ms) {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), ms);
-    return fetch(url, { signal: ctrl.signal, headers: { accept: 'application/json' } })
+    // Greybox-owned config (navigation, collections, …) must reflect Admin
+    // saves immediately: bypass the browser HTTP cache on every boot fetch
+    // (server also sends no-store for navigation; this covers edge + browser
+    // for all config without relying on header propagation).
+    return fetch(url, { signal: ctrl.signal, headers: { accept: 'application/json' }, cache: 'no-store' })
       .then((r) => {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.json();

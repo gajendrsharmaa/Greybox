@@ -1,15 +1,18 @@
 /* Greybox public navigation applier — config-driven navbar (Navigation V1).
  *
  * Source of truth: window.GreyboxData.getNavigationConfig() (D1 via
- * /api/config/navigation once preloaded, else js/navigation.config.js).
- * This file only RENDERS that config into the existing navbar:
+ * /api/config/navigation once preloaded with cache:no-store, else
+ * js/navigation.config.js).
+ * This file only RENDERS that config into the existing navbar + footer:
  *   - labels: the leading text of each nav button (badges, counts, icons
  *     and data-nav wiring are never touched)
  *   - order: DOM order of the desktop + mobile nav entries follows config
  *     order (existing buttons are moved, never rebuilt — all app.js /
  *     router listeners stay attached)
  *   - visibility: hidden entries get hidden (recoverable in Admin — the
- *     nodes stay in the DOM; only their display changes)
+ *     nodes stay in the DOM; only their display changes). Footer Browse
+ *     links mirror the same visibility/labels so a hidden entry disappears
+ *     everywhere, not just the header.
  *   - header search: the separate searchVisible flag toggles .gx-search
  *
  * No admin logic here, no fetching here, no routing changes here. My List
@@ -97,6 +100,42 @@
     return entry;
   }
 
+  // Footer Browse links mirror the navbar config (same keys, same labels,
+  // same visibility). The footer has no Collections entry and keeps its
+  // Search link always (searchVisible only controls the header box).
+  function applyFooter(cfg) {
+    var host = null;
+    try { host = $('footer-browse'); } catch (e) { host = null; }
+    if (!host) {
+      try { host = document.querySelector('nav[aria-label="Browse"]'); } catch (e) { host = null; }
+    }
+    if (!host || !cfg || !Array.isArray(cfg.items)) return;
+    try {
+      var byKey = {};
+      cfg.items.forEach(function (it) { if (it && it.key) byKey[it.key] = it; });
+      var links = host.querySelectorAll ? host.querySelectorAll('[data-footnav]') : [];
+      for (var i = 0; i < links.length; i++) {
+        var a = links[i];
+        var key = null;
+        try { key = a.getAttribute('data-footnav'); } catch (e) { key = null; }
+        if (!key || !byKey[key]) continue; // Search + unknown: always shown
+        var it = byKey[key];
+        try { if (typeof it.label === 'string' && it.label.trim()) a.textContent = it.label.trim(); } catch (e) { /* label optional */ }
+        showEl(a, it.visible !== false);
+      }
+      // Footer order follows config order (footer-only Search stays last).
+      try {
+        var ordered = [];
+        cfg.items.forEach(function (it) {
+          if (!it || !it.key) return;
+          var el = host.querySelector ? host.querySelector('[data-footnav="' + it.key + '"]') : null;
+          if (el) ordered.push(el);
+        });
+        ordered.forEach(function (el) { try { host.appendChild(el); } catch (e) { /* order optional */ } });
+      } catch (e) { /* order optional */ }
+    } catch (e) { /* footer optional */ }
+  }
+
   function applyConfig(cfg) {
     if (!cfg || !Array.isArray(cfg.items) || !cfg.items.length) return false;
     var desktopParent = null;
@@ -133,6 +172,7 @@
       var boxes = document.querySelectorAll('.gx-search');
       for (var i = 0; i < boxes.length; i++) showEl(boxes[i], searchVisible);
     } catch (e) { /* search optional */ }
+    applyFooter(cfg);
     return true;
   }
 
@@ -159,13 +199,28 @@
     } catch (e) { /* noop */ }
   }
 
+  // SPA route renders never rebuild the navbar, but re-apply here so a
+  // hidden entry can never reappear after in-app navigation or a late
+  // collections menu render (the collections render() captured before this
+  // file loads bypasses the refresh wrapper — the Router hook covers it).
+  function watchRoutes() {
+    try {
+      if (window.Router && typeof window.Router.onChange === 'function' && !watchRoutes.__done) {
+        watchRoutes.__done = true;
+        window.Router.onChange(function () { try { apply(); } catch (e) { /* noop */ } });
+      }
+    } catch (e) { /* router optional */ }
+  }
+
   function boot() {
     wrapCollectionsRefresh();
     apply(); // immediate paint from local fallback (works offline / pre-D1)
+    watchRoutes();
     try {
       if (window.GreyboxData && typeof window.GreyboxData.preloadGreyboxConfig === 'function') {
         window.GreyboxData.preloadGreyboxConfig().then(function () {
           wrapCollectionsRefresh();
+          watchRoutes();
           apply();
         });
       }

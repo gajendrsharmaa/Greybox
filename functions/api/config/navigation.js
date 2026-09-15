@@ -4,8 +4,8 @@
  * visibility only — no TMDB data here). All six items with their visible
  * flags, in display order, plus controlled routes — the browser filters by
  * `visible` (same pattern as collections: the list endpoint returns hidden
- * rows too and renderers decide). Short cache on purpose:
- * navigation edits show up within ~a minute.
+ * rows too and renderers decide). No caching on purpose:
+ * navigation edits apply immediately after an Admin save.
  */
 import { getDb, readNavigation } from '../../lib/db.js';
 
@@ -38,9 +38,9 @@ function json(o, s = 200) {
     headers: {
       'content-type': 'application/json',
       'Access-Control-Allow-Origin': '*',
-      // Deliberately short + no edge-cache write (unlike TMDB-backed routes):
-      // navigation edits must become visible quickly for verification.
-      'Cache-Control': s === 200 ? 'public, max-age=60' : 'no-store',
+      // Tiny config, edits must verify immediately: never cache at the edge
+      // or in the browser (unlike TMDB-backed routes which cache for 10 min).
+      'Cache-Control': 'no-store',
     },
   });
 }
