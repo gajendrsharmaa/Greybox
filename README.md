@@ -384,9 +384,23 @@ backdrop paths, year, timestamps) for the workspace cards — zero per-row
 TMDB fetches. Workflow is search-first: + Block Title → TMDB search
 (existing server-side proxy, stale-guarded) → select → confirmation
 (poster, title, year, media, TMDB ID) → Block Title (201 + read-back
-verification). Already-blocked results show BLOCKED + Unblock instead of a
+verification). The picker carries a media-type selector ([ All ] [
+Movies ] [ TV Shows ]) that scopes the real TMDB request (Movies →
+`/search/movie`, TV Shows → `/search/tv`, All → `/search/multi`) plus a
+search-mode selector ([ Title ] [ TMDB ID ]): Title searches by name,
+while TMDB ID resolves the numeric ID against the real detail endpoints
+(Movies verifies `/movie/{id}`, TV Shows verifies `/tv/{id}`, All
+verifies both and shows whichever identities exist — so a bare ID like
+`95897` is never mis-searched as title text and never assigned the wrong
+media type). Already-blocked results show BLOCKED + Unblock instead of a
 duplicate action. Unblock uses the shared confirmation dialog, DELETEs the
 D1 row, verifies a read-back 404, and re-renders without a reload.
+Troubleshooting: `Blocked titles failed to load: Internal error` means the
+D1 `blocked_titles` table is missing — the backend is correct, the
+migration was never applied. Apply `migrations/0004_blocked.sql` (local:
+`npx wrangler d1 execute greybox-db --local --file=migrations/0004_blocked.sql`;
+production: the same command with `--remote`, then rebind `DB` and
+redeploy) and the list loads with no code change.
 Public filtering is central, not scattered: the browser loads the
 identity-only `GET /api/config/blocked` once at boot and every
 TMDB-derived surface filters through the `isBlockedContent()` seam in

@@ -3510,6 +3510,8 @@
    */
   let blockedCache = []; // stored rows [{ media, tmdb_id, title, poster_path, backdrop_path, year, created_at, ... }]
   let blockedSearchGen = 0; // stale-guard generation for picker TMDB searches
+  let blockedSearchType = 'all'; // picker media scope: 'all' | 'movie' | 'tv' (drives the real TMDB endpoint)
+  let blockedSearchMode = 'title'; // picker input mode: 'title' (search by name) | 'id' (resolve a numeric TMDB ID)
 
   // Canonical identity key. Title/poster text NEVER participates: matching is
   // media + TMDB ID only, so "movie:123" and "tv:123" stay independent.
@@ -3679,7 +3681,11 @@
   }
 
   // + Block Title → TMDB search picker (drawer). Identity comes from the
-  // search result (media + TMDB ID) — the operator never types an ID by hand.
+  // verified result (media + TMDB ID): Title mode searches by name, TMDB ID
+  // mode resolves the numeric ID against the real detail endpoints. The
+  // media-type selector scopes the actual TMDB request (Movies →
+  // /search/movie or /movie/{id}, TV Shows → /search/tv or /tv/{id},
+  // All → multi search or both ID endpoints).
   // Already-blocked results show BLOCKED + Unblock instead of a duplicate
   // Block action (the server also enforces uniqueness with 409).
   function openBlockPicker() {
@@ -3687,24 +3693,99 @@
     const wrap = el('div', '');
     wrap.style.cssText = 'display:grid;gap:.8rem';
     wrap.appendChild(el('p', 'muted text-sm', 'Search TMDB through the existing server-side proxy (no key in the browser). Movies + TV only. Select a result to review it before blocking.'));
+
+    const typeBtns = {};
+    const modeBtns = {};
+    let q = null;
+    let hint = null;
+
+    const paintSeg = (btns, active) => {
+      Object.keys(btns).forEach((k) => {
+        const on = k === active;
+        btns[k].classList.toggle('btn-primary', on);
+        btns[k].classList.toggle('btn-secondary', !on);
+        btns[k].setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+    };
+
+    function syncBlockedHint() {
+      if (!q || !hint) return;
+      if (blockedSearchMode === 'id') {
+        q.type = 'text';
+        q.placeholder = blockedSearchType === 'tv' ? 'e.g. 1399' : (blockedSearchType === 'movie' ? 'e.g. 550' : 'e.g. 550 or 1399');
+        hint.textContent = blockedSearchType === 'all'
+          ? 'ID mode: the number is verified against both /movie/{id} and /tv/{id} — pick the right result.'
+          : (blockedSearchType === 'movie'
+            ? 'ID mode: the number is verified as /movie/{id}.'
+            : 'ID mode: the number is verified as /tv/{id}.');
+      } else {
+        q.type = 'search';
+        q.placeholder = blockedSearchType === 'tv' ? 'Breaking Bad' : 'Fight Club';
+        hint.textContent = blockedSearchType === 'all'
+          ? 'Title mode: multi search across movies and TV.'
+          : (blockedSearchType === 'movie' ? 'Title mode: movies only (/search/movie).' : 'Title mode: TV shows only (/search/tv).');
+      }
+    }
+
+    // Media-type selector: [ All ] [ Movies ] [ TV Shows ].
+    const typeRow = el('div', 'seg-row');
+    typeRow.setAttribute('role', 'group');
+    typeRow.setAttribute('aria-label', 'Media type');
+    typeRow.appendChild(el('span', 'seg-label', 'Type:'));
+    [['all', 'All'], ['movie', 'Movies'], ['tv', 'TV Shows']].forEach((opt) => {
+      const val = opt[0];
+      const b = el('button', 'btn btn-sm ' + (blockedSearchType === val ? 'btn-primary' : 'btn-secondary'), opt[1]);
+      b.type = 'button';
+      b.setAttribute('aria-pressed', blockedSearchType === val ? 'true' : 'false');
+      b.addEventListener('click', () => { blockedSearchType = val; paintSeg(typeBtns, val); syncBlockedHint(); });
+      typeBtns[val] = b;
+      typeRow.appendChild(b);
+    });
+    wrap.appendChild(typeRow);
+
+    // Search-mode selector: [ Title ] [ TMDB ID ]. A numeric ID is only
+    // ever resolved as an ID when ID mode is active — never as a title
+    // search (a bare "95897" matches no titles via /search/multi).
+    const modeRow = el('div', 'seg-row');
+    modeRow.setAttribute('role', 'group');
+    modeRow.setAttribute('aria-label', 'Search mode');
+    modeRow.appendChild(el('span', 'seg-label', 'Search by:'));
+    [['title', 'Title'], ['id', 'TMDB ID']].forEach((opt) => {
+      const val = opt[0];
+      const b = el('button', 'btn btn-sm ' + (blockedSearchMode === val ? 'btn-primary' : 'btn-secondary'), opt[1]);
+      b.type = 'button';
+      b.setAttribute('aria-pressed', blockedSearchMode === val ? 'true' : 'false');
+      b.addEventListener('click', () => { blockedSearchMode = val; paintSeg(modeBtns, val); syncBlockedHint(); });
+      modeBtns[val] = b;
+      modeRow.appendChild(b);
+    });
+    wrap.appendChild(modeRow);
+
     const qRow = el('div', '');
     qRow.style.cssText = 'display:flex;gap:.5rem';
-    const q = document.createElement('input');
+    q = document.createElement('input');
     q.id = 'blocked-tmdb-q';
-    q.type = 'search';
+    q.type = blockedSearchMode === 'id' ? 'text' : 'search';
     q.placeholder = 'Fight Club';
     q.className = 'input';
     q.autocomplete = 'off';
+    q.setAttribute('aria-label', blockedSearchMode === 'id' ? 'TMDB ID' : 'Title to search');
     qRow.appendChild(q);
     const go = el('button', 'btn btn-primary btn-sm', 'Search');
     go.type = 'button';
     go.addEventListener('click', runBlockedSearch);
     qRow.appendChild(go);
     wrap.appendChild(qRow);
+    hint = el('p', 'muted text-sm', '');
+    hint.id = 'blocked-tmdb-hint';
+    wrap.appendChild(hint);
+    syncBlockedHint();
     const host = el('div', '');
     host.id = 'blocked-tmdb-results';
     host.style.cssText = 'display:grid;gap:.5rem';
-    host.appendChild(el('p', 'muted text-sm', 'Type a movie or TV title above, then Search.'));
+    host.appendChild(el('p', 'muted text-sm', blockedSearchMode === 'id'
+      ? 'Enter a numeric TMDB ID above, then Search.'
+      : 'Type a movie or TV title above, then Search.'));
     wrap.appendChild(host);
     q.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runBlockedSearch(); } });
     openDrawer({
@@ -3719,33 +3800,86 @@
   async function runBlockedSearch() {
     const host = $('blocked-tmdb-results');
     const qEl = $('blocked-tmdb-q');
-    const query = qEl ? String(qEl.value || '').trim() : '';
-    if (!query) { if (host) host.innerHTML = '<p class="muted text-sm">Type a title first.</p>'; return; }
-    if (query.length > 120) { if (host) host.innerHTML = '<p class="muted text-sm">Query must be at most 120 characters.</p>'; return; }
+    const raw = qEl ? String(qEl.value || '').trim() : '';
+    const mode = blockedSearchMode === 'id' ? 'id' : 'title';
+    const scope = blockedSearchType === 'tv' ? 'tv' : (blockedSearchType === 'movie' ? 'movie' : 'all');
+    if (!raw) {
+      if (host) {
+        host.innerHTML = '';
+        stateBox(host, 'empty', mode === 'id' ? 'Enter a TMDB ID' : 'Type a title first',
+          mode === 'id' ? 'ID mode needs a numeric TMDB ID (e.g. 550).' : 'Type a movie or TV title above, then Search.');
+      }
+      return;
+    }
+    let nid = 0;
+    if (mode === 'id') {
+      if (!/^\d+$/.test(raw)) {
+        if (host) {
+          host.innerHTML = '';
+          stateBox(host, 'empty', 'Not a numeric ID', '"' + raw.slice(0, 32) + '" is not a numeric TMDB ID. Switch to Title to search by name.');
+        }
+        return;
+      }
+      nid = parseInt(raw, 10);
+      if (!Number.isInteger(nid) || nid < 1 || nid > 2147483647) {
+        if (host) {
+          host.innerHTML = '';
+          stateBox(host, 'empty', 'Invalid TMDB ID', 'Enter a positive TMDB ID.');
+        }
+        return;
+      }
+    } else if (raw.length > 120) {
+      if (host) host.innerHTML = '<p class="muted text-sm">Query must be at most 120 characters.</p>';
+      return;
+    }
     const myGen = ++blockedSearchGen;
     if (host) {
       host.innerHTML = '';
-      stateBox(host, 'loading', 'Searching TMDB…');
+      stateBox(host, 'loading', mode === 'id' ? 'Resolving TMDB ID…' : 'Searching TMDB…');
     }
     try {
-      const [tmdbRes, blockedRes] = await Promise.allSettled([
-        tmdbSearchFetch(query),
-        api(API.blocked),
-      ]);
-      if (myGen !== blockedSearchGen) return; // stale: a newer query owns the list
-      if (!isDrawerOpen()) return;
-      if (tmdbRes.status === 'rejected') throw tmdbRes.reason;
-      if (blockedRes.status === 'fulfilled' && Array.isArray(blockedRes.value)) blockedCache = blockedRes.value;
-      const results = normalizeTmdbSearchResults(tmdbRes.value);
-      if (myGen !== blockedSearchGen || !isDrawerOpen()) return;
-      renderBlockedSearchResults(host, results, query);
+      // The blocked list is re-read with every search so Blocked/Unblock
+      // status is current even if another tab changed it.
+      const blockedP = api(API.blocked);
+      let results;
+      if (mode === 'id') {
+        const idLabel = (scope === 'all' ? 'TMDB ID ' : scope + ':') + nid;
+        const [foundRes, blockedRes] = await Promise.allSettled([resolveBlockedId(nid, scope), blockedP]);
+        if (myGen !== blockedSearchGen) return; // stale: a newer query owns the list
+        if (!isDrawerOpen()) return;
+        if (blockedRes.status === 'fulfilled' && Array.isArray(blockedRes.value)) blockedCache = blockedRes.value;
+        if (foundRes.status === 'rejected') {
+          const ferr = foundRes.reason;
+          if (ferr && ferr.status === 404) {
+            if (myGen !== blockedSearchGen || !isDrawerOpen()) return;
+            renderBlockedSearchResults(host, [], idLabel);
+            return;
+          }
+          throw ferr;
+        }
+        results = foundRes.value || [];
+        if (myGen !== blockedSearchGen || !isDrawerOpen()) return;
+        renderBlockedSearchResults(host, results, idLabel);
+      } else {
+        const [tmdbRes, blockedRes] = await Promise.allSettled([
+          tmdbSearchFetch(raw, scope === 'all' ? null : scope),
+          blockedP,
+        ]);
+        if (myGen !== blockedSearchGen) return; // stale: a newer query owns the list
+        if (!isDrawerOpen()) return;
+        if (tmdbRes.status === 'rejected') throw tmdbRes.reason;
+        if (blockedRes.status === 'fulfilled' && Array.isArray(blockedRes.value)) blockedCache = blockedRes.value;
+        results = normalizeTmdbSearchResults(tmdbRes.value, scope === 'all' ? null : scope);
+        if (myGen !== blockedSearchGen || !isDrawerOpen()) return;
+        renderBlockedSearchResults(host, results, raw);
+      }
     } catch (e) {
       if (myGen !== blockedSearchGen || !isDrawerOpen()) return;
       if (host) {
         host.innerHTML = '';
-        stateBox(host, 'error', 'Search failed', (e && e.message) || String(e));
+        stateBox(host, 'error', mode === 'id' ? 'Lookup failed' : 'Search failed', (e && e.message) || String(e));
       }
-      notice('err', 'TMDB search failed: ' + ((e && e.message) || e));
+      notice('err', (mode === 'id' ? 'TMDB lookup failed: ' : 'TMDB search failed: ') + ((e && e.message) || e));
     }
   }
 
@@ -5464,18 +5598,27 @@
     return TMDB_IMG + posterPath;
   }
 
-  function normalizeTmdbSearchResults(raw) {
+  // Normalize raw TMDB search rows into picker cards
+  // ({ media, id, title, year, vote, poster, overview }). /search/multi tags
+  // every row with media_type, but /search/movie and /search/tv return rows
+  // WITHOUT media_type (every result shares the endpoint type) — the caller
+  // passes that endpoint type as fallbackMedia so type-scoped searches keep
+  // their results instead of filtering everything out as "no matches".
+  // Single-arg callers (multi search) behave exactly as before.
+  function normalizeTmdbSearchResults(raw, fallbackMedia) {
     const list = raw && Array.isArray(raw.results) ? raw.results : [];
+    const fb = fallbackMedia === 'tv' ? 'tv' : (fallbackMedia === 'movie' ? 'movie' : null);
     const out = [];
     for (const r of list) {
-      if (!r || (r.media_type !== 'movie' && r.media_type !== 'tv')) continue;
+      const mt = (r && (r.media_type === 'movie' || r.media_type === 'tv')) ? r.media_type : fb;
+      if (!r || (mt !== 'movie' && mt !== 'tv')) continue;
       const id = parseInt(r.id, 10);
       if (!Number.isInteger(id) || id < 1 || id > 2147483647) continue;
       const title = String(r.title || r.name || '').trim() || 'Untitled';
       const date = String(r.release_date || r.first_air_date || '');
       const vote = Number(r.vote_average);
       out.push({
-        media: r.media_type,
+        media: mt,
         id,
         title: title.slice(0, 200),
         year: date.slice(0, 4),
@@ -5515,11 +5658,18 @@
     return normalizeEpItems(items).filter((it) => !(it.media === t.media && it.id === t.id));
   }
 
-  async function tmdbSearchFetch(query) {
+  // Title search through the existing server-side TMDB proxy (the TMDB
+  // credential never reaches the browser). The media scope picks the real
+  // TMDB endpoint: Movies → /search/movie, TV Shows → /search/tv,
+  // All (or omitted) → /search/multi. Single-arg callers build exactly the
+  // same multi URL as before.
+  async function tmdbSearchFetch(query, media) {
     const q = String(query || '').trim();
     if (!q) throw { status: 400, message: 'Type a title first.' };
     if (q.length > 120) throw { status: 400, message: 'Query must be at most 120 characters.' };
-    const url = '/api/tmdb/search/multi?language=en-US&page=1&include_adult=false&query=' + encodeURIComponent(q);
+    const scope = media === 'tv' ? 'tv' : (media === 'movie' ? 'movie' : 'multi');
+    const path = scope === 'multi' ? 'search/multi' : ('search/' + scope);
+    const url = '/api/tmdb/' + path + '?language=en-US&page=1&include_adult=false&query=' + encodeURIComponent(q);
     let res;
     try {
       res = await fetch(url, { headers: { accept: 'application/json' } });
@@ -5531,6 +5681,65 @@
     try { data = await res.json(); } catch { data = null; }
     if (!res.ok) throw { status: res.status, message: (data && data.error) || ('Search failed (' + res.status + ').') };
     return data;
+  }
+
+  // Direct TMDB ID lookup through the same existing server-side proxy (no
+  // key in the browser). Movies verifies /movie/{id}, TV Shows verifies
+  // /tv/{id}. Returns one normalized picker card
+  // ({ media, id, title, year, vote, poster, overview }) or throws
+  // { status: 404 } when TMDB has no such title, { status: 400 } for a
+  // non-numeric ID, and the proxy error otherwise (never masked as empty).
+  async function tmdbDetailFetch(media, id) {
+    const mt = media === 'tv' ? 'tv' : 'movie';
+    const n = parseInt(String(id == null ? '' : id).trim(), 10);
+    if (!Number.isInteger(n) || n < 1 || n > 2147483647) throw { status: 400, message: 'Enter a numeric TMDB ID.' };
+    const kind = mt === 'tv' ? 'TV show' : 'movie';
+    const url = '/api/tmdb/' + mt + '/' + n + '?language=en-US';
+    let res;
+    try {
+      res = await fetch(url, { headers: { accept: 'application/json' } });
+    } catch (e) {
+      throw { status: 0, message: 'Network error: could not reach the server.' };
+    }
+    if (res.status === 404) throw { status: 404, message: 'No ' + kind + ' found for TMDB ID ' + n + '.' };
+    let data = null;
+    try { data = await res.json(); } catch { data = null; }
+    if (!res.ok) throw { status: res.status, message: (data && data.error) || ('Lookup failed (' + res.status + ').') };
+    if (!data || data.success === false) throw { status: 404, message: 'No ' + kind + ' found for TMDB ID ' + n + '.' };
+    const title = String(data.title || data.name || '').trim() || 'Untitled';
+    const date = String(data.release_date || data.first_air_date || '');
+    const vote = Number(data.vote_average);
+    return {
+      media: mt,
+      id: (Number.isInteger(data.id) && data.id > 0) ? data.id : n,
+      title: title.slice(0, 200),
+      year: date.slice(0, 4),
+      vote: Number.isFinite(vote) ? vote : 0,
+      poster: typeof data.poster_path === 'string' && data.poster_path ? data.poster_path : null,
+      overview: String(data.overview || '').slice(0, 500),
+    };
+  }
+
+  // TMDB ID mode resolution for the Blocked Titles picker (always returns an
+  // array of verified cards). Movies / TV Shows verify the exact endpoint;
+  // All resolves BOTH endpoints and returns whichever identities verify
+  // (0, 1, or 2 cards — e.g. the same numeric ID can exist as a movie AND a
+  // show), so a bare numeric ID is never silently assigned the wrong media
+  // type. A hard failure (network/auth) is never masked as "no match".
+  async function resolveBlockedId(nid, scope) {
+    if (scope === 'movie') return [await tmdbDetailFetch('movie', nid)];
+    if (scope === 'tv') return [await tmdbDetailFetch('tv', nid)];
+    const settled = await Promise.allSettled([tmdbDetailFetch('movie', nid), tmdbDetailFetch('tv', nid)]);
+    const out = [];
+    for (const s of settled) {
+      if (s.status === 'fulfilled' && s.value) out.push(s.value);
+    }
+    if (out.length) return out;
+    const hard = settled.map((s) => s.reason).find((e) => e && e.status !== 404);
+    if (hard) throw hard;
+    const nf = new Error('No movie or TV show found for TMDB ID ' + nid + '.');
+    nf.status = 404;
+    throw nf;
   }
 
   async function setEditorPicksMembership(media, id, want) {

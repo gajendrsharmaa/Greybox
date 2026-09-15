@@ -65,13 +65,43 @@ body { position: relative; }
     linear-gradient(to bottom,
       rgba(7, 7, 12, 0.6) 0%,
       rgba(7, 7, 12, 0.52) 24%,
-      rgba(7, 7, 12, 0.66) 52%,
-      rgba(7, 7, 12, 0.88) 76%,
-      var(--gx-bg-0) 94%);
+      rgba(7, 7, 12, 0.62) 52%,
+      rgba(7, 7, 12, 0.82) 76%,
+      rgba(7, 7, 12, 0.96) 88%,
+      var(--gx-bg-0) 100%);
 }
 
 /* Hero + page content paint above the ambient layer. */
 main, footer { position: relative; z-index: 1; }
+
+/* Bottom blend continuation: a tall full-bleed dissolve strip at the top of
+ * <main> that sits OVER the hero's bottom edge (negative margin pulls it
+ * up) and eases from transparent → solid base color. The strip is TALLER
+ * than its overlap, so the fade visibly CONTINUES past the hero boundary
+ * ~100px into the content area instead of stopping at it — poster melts
+ * into the page with no hard line. Full-bleed (100vw breakout) so the
+ * blend spans edge-to-edge even though <main> itself is a centered max-width
+ * column. Harmless on non-hero routes: transparent→base over a base
+ * background is invisible. */
+main::before {
+  content: "";
+  display: block;
+  position: relative;
+  z-index: 0;
+  width: 100vw;
+  height: 380px;
+  margin-top: -280px;
+  margin-bottom: 0;
+  margin-left: calc(-50vw + 50%);
+  background: linear-gradient(to bottom,
+    rgba(7, 7, 12, 0) 0%,
+    rgba(7, 7, 12, 0.22) 28%,
+    rgba(7, 7, 12, 0.48) 48%,
+    rgba(7, 7, 12, 0.72) 66%,
+    rgba(7, 7, 12, 0.9) 82%,
+    var(--gx-bg-0) 100%);
+  pointer-events: none;
+}
 
 /* Reserve full space before art loads: dark placeholder, never a broken icon */
 .gx-hero-bg {
@@ -106,7 +136,12 @@ main, footer { position: relative; z-index: 1; }
   object-position: center 20%;
   opacity: 0;
   transition: opacity 900ms ease;
-  /* Ken Burns runs only once shown (see .is-ready) */
+  /* Poster-blend feather: the artwork itself dissolves toward the bottom
+   * edge (revealing the shaded base beneath) so there is never a sharp
+   * poster-cut line — combined with the shade + main::before tail, the
+   * poster looks like it is fading/blending into the background. */
+  -webkit-mask-image: linear-gradient(to bottom, black 58%, rgba(0,0,0,0.6) 78%, transparent 98%);
+  mask-image: linear-gradient(to bottom, black 58%, rgba(0,0,0,0.6) 78%, transparent 98%);
 }
 
 .gx-hero.is-ready .gx-hero-ambient { opacity: 0.26; }
@@ -121,16 +156,29 @@ main, footer { position: relative; z-index: 1; }
   to { transform: scale(1.06) translate(-0.6%, 0.6%); }
 }
 
-/* Layered cinematic shading: readable text, navbar-safe top, SOFT bottom
- * fade. The upper ~80% of the trailer stays clear; only the bottom strip
- * behind the title/buttons carries darkness, fading smoothly out by ~17%
- * so no hard boundary or black wall shows. Kept deliberately lighter than
- * the original heavy fade — same purpose, ~25% less aggressive. */
+/* Layered cinematic shading: readable text, navbar-safe top, and a TALL
+ * bottom blend that dissolves the poster into the page background.
+ * The bottom gradient is long (~62% of the hero) with eased multi-stops
+ * (no banding steps) and ends in FULLY OPAQUE var(--gx-bg-0) at the hero's
+ * bottom pixel, so there is no hard poster-vs-background line — the image
+ * melts into the base color. main::before then continues that same dissolve
+ * ~100px past the hero boundary so the fade runs to completion below the
+ * fold instead of stopping at the hero edge. Stays clear above the
+ * title/buttons zone and darkens only toward the bottom edge. */
 .gx-hero-shade {
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(to top, rgba(7, 7, 12, 0.78) 0%, rgba(7, 7, 12, 0.6) 5%, rgba(7, 7, 12, 0.32) 10%, rgba(7, 7, 12, 0.08) 14%, transparent 17%),
+    linear-gradient(to top,
+      var(--gx-bg-0) 0%,
+      rgba(7, 7, 12, 0.98) 8%,
+      rgba(7, 7, 12, 0.9) 16%,
+      rgba(7, 7, 12, 0.72) 26%,
+      rgba(7, 7, 12, 0.5) 36%,
+      rgba(7, 7, 12, 0.3) 45%,
+      rgba(7, 7, 12, 0.13) 54%,
+      rgba(7, 7, 12, 0.04) 59%,
+      transparent 63%),
     linear-gradient(to right, rgba(7, 7, 12, 0.55) 0%, transparent 45%),
     linear-gradient(to bottom, rgba(7, 7, 12, 0.55) 0%, transparent 20%);
 }
@@ -139,6 +187,12 @@ main, footer { position: relative; z-index: 1; }
   position: absolute;
   inset: 0;
   background: radial-gradient(120% 95% at 50% 42%, transparent 52%, rgba(0, 0, 0, 0.6) 100%);
+  /* Keep the vignette off the bottom blend zone: it paints above the
+   * shade, so without this it would re-darken the solid terminus and
+   * redraw a faint line. Fading it out over the bottom 24% leaves the
+   * dissolve pure base color. */
+  -webkit-mask-image: linear-gradient(to top, transparent 0%, black 24%);
+  mask-image: linear-gradient(to top, transparent 0%, black 24%);
 }
 
 /* Trailer sits between still and shade: crossfade, cover-fills the hero and
@@ -149,6 +203,10 @@ main, footer { position: relative; z-index: 1; }
   overflow: hidden;
   opacity: 0;
   transition: opacity 1200ms ease;
+  /* Same poster-blend feather as the still: video dissolves toward the
+   * bottom edge so trailers blend into the background identically. */
+  -webkit-mask-image: linear-gradient(to bottom, black 58%, rgba(0,0,0,0.6) 78%, transparent 98%);
+  mask-image: linear-gradient(to bottom, black 58%, rgba(0,0,0,0.6) 78%, transparent 98%);
 }
 
 .gx-hero-trailer.is-visible { opacity: 1; }
@@ -188,7 +246,10 @@ main, footer { position: relative; z-index: 1; }
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  padding-bottom: 72px;
+  /* Lifted clear of the bottom blend strip (which paints over the
+   * hero's lower edge): buttons/text sit above the solid terminus so the
+   * continuation gradient never dims them. */
+  padding-bottom: 185px;
   min-width: 0;
 }
 
@@ -378,6 +439,12 @@ main, footer { position: relative; z-index: 1; }
   .gx-hero-img { object-position: center 15%; }
 
   .gx-hero-content { padding-bottom: 52px; }
+
+  /* Shorter continuation on small screens — same blend + tail, less overlap */
+  main::before {
+    height: 260px;
+    margin-top: -190px;
+  }
 
   /* Title artwork stays proportional on small screens: slightly tighter
    * caps keep wide logos inside the content column without crowding the

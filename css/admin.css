@@ -273,6 +273,8 @@ textarea.input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; re
 .blocked-card-main { flex: 1; min-width: 0; display: grid; gap: .15rem; }
 .badge-blocked { background: rgba(220,38,38,.12); border-color: rgba(220,38,38,.45); color: #fca5a5; }
 .blocked-pick-row { display: grid; gap: .6rem; }
+.seg-row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+.seg-label { font-size: .72rem; font-weight: 700; letter-spacing: .04em; color: var(--gx-text-dim); margin-right: .1rem; }
 .blocked-confirm { display: flex; gap: .9rem; align-items: flex-start; }
 .blocked-confirm-art { width: 4.5rem; height: 6.6rem; object-fit: cover; border-radius: .55rem; flex: none; background: #1c1c2a; border: 1px solid var(--gx-border-strong); }
 
